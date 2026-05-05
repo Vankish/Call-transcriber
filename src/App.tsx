@@ -786,7 +786,7 @@ function App() {
                 className="modal-input"
                 value={settingsKeyDraft}
                 onChange={(e) => setSettingsKeyDraft(e.target.value)}
-                placeholder="gsk_..."
+                placeholder="Tu API key de Groq"
               />
             </label>
             <div className="modal-actions">
