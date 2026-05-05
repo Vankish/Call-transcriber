@@ -222,6 +222,9 @@
   color: var(--text-h);
   background: transparent;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .candidate-item:hover {
@@ -274,6 +277,9 @@
   margin: 0 0 18px;
   color: var(--text-h);
   font-size: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-tabs {
@@ -421,6 +427,8 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .device-help {
@@ -492,12 +500,27 @@
   font-size: 12px;
   text-transform: uppercase;
   color: #4338ca;
+  flex-shrink: 0;
+}
+
+.history-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 2px;
+  text-align: left;
 }
 
 .speed-bar-group {
   display: flex;
   align-items: center;
   gap: 9px;
+  margin-left: 6px;
 }
 
 .btn-speed {

@@ -1173,7 +1173,7 @@ function App() {
                                   }`}
                                   onClick={() => setSelectedInterviewId(interview.id)}
                                 >
-                                  <span>{interview.sessionName || formatDateTime(interview.createdAt)}</span>
+                                  <span className="history-item-name">{interview.sessionName || formatDateTime(interview.createdAt)}</span>
                                   {(interview.recordingFilePath ?? interview.recordingUrl) && (
                                     <>
                                       <span className="playback-timer">
@@ -1272,8 +1272,7 @@ function App() {
                                   setSelectedTranscriptInterviewId(interview.id)
                                 }
                               >
-                                <span>{interview.sessionName || formatDateTime(interview.createdAt)}</span>
-                                <span className="status-chip">{interview.status}</span>
+                                <span className="history-item-name">{interview.sessionName || formatDateTime(interview.createdAt)}</span>
                               </button>
                               {(interview.recordingUrl ?? interview.recordingFilePath) && (
                                 <button
@@ -1377,8 +1376,7 @@ function App() {
                                 }`}
                                 onClick={() => setSelectedSummaryInterviewId(interview.id)}
                               >
-                                <span>{interview.sessionName || formatDateTime(interview.createdAt)}</span>
-                                <span className="status-chip">{interview.status}</span>
+                                <span className="history-item-name">{interview.sessionName || formatDateTime(interview.createdAt)}</span>
                               </button>
                               {(interview.recordingUrl ?? interview.recordingFilePath) && (
                                 <button
