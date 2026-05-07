@@ -33,6 +33,7 @@ type TranscribeAudioResult = {
 type GenerateSummaryPayload = {
   transcript: string
   instructions: string
+  summaryType: 'resumen' | 'listado'
 }
 
 type GenerateSummaryResult = {
