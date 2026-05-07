@@ -273,13 +273,21 @@
   font-size: 13px;
 }
 
-.candidate-profile h3 {
-  margin: 0 0 18px;
+.candidate-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.candidate-name-row h3 {
+  margin: 0;
   color: var(--text-h);
   font-size: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .profile-tabs {
@@ -696,6 +704,32 @@
 }
 
 /* Summary tab */
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.summary-header .section-label {
+  margin-bottom: 0;
+}
+
+.summary-type-select {
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.summary-type-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .summary-instructions {
   margin-top: 12px;
 }

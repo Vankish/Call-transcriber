@@ -31,6 +31,7 @@ type Interview = {
   summaryInstructions: string
   summaryText: string
   summaryStatus: 'idle' | 'generating' | 'done' | 'error'
+  summaryType: 'resumen' | 'listado'
 }
 
 type AudioDeviceOption = {
@@ -96,6 +97,7 @@ const EMPTY_CANDIDATE_DRAFT = { name: '', email: '', phone: '', process: '' }
 function App() {
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [showNewCandidate, setShowNewCandidate] = useState(false)
+  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE_DRAFT)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<ProfileTab>('entrevistas')
@@ -190,6 +192,7 @@ function App() {
             summaryInstructions: interview.summaryInstructions ?? '',
             summaryText: interview.summaryText ?? '',
             summaryStatus: interview.summaryStatus ?? 'idle',
+            summaryType: interview.summaryType ?? 'resumen',
           })),
         )
       }
@@ -318,6 +321,12 @@ function App() {
     return result.filePath
   }
 
+  const handleCloseCandidateModal = () => {
+    setShowNewCandidate(false)
+    setEditingCandidateId(null)
+    setCandidateDraft(EMPTY_CANDIDATE_DRAFT)
+  }
+
   const handleCreateCandidate = () => {
     if (!candidateDraft.name.trim()) return
     const newCandidate: Candidate = {
@@ -329,8 +338,19 @@ function App() {
     }
     setCandidates((current) => [...current, newCandidate])
     setSelectedCandidateId(newCandidate.id)
-    setCandidateDraft(EMPTY_CANDIDATE_DRAFT)
-    setShowNewCandidate(false)
+    handleCloseCandidateModal()
+  }
+
+  const handleUpdateCandidate = () => {
+    if (!editingCandidateId || !candidateDraft.name.trim()) return
+    setCandidates((current) =>
+      current.map((c) =>
+        c.id === editingCandidateId
+          ? { ...c, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), process: candidateDraft.process.trim() }
+          : c
+      )
+    )
+    handleCloseCandidateModal()
   }
 
   const handleCreateInterview = () => {
@@ -354,6 +374,7 @@ function App() {
       summaryInstructions: '',
       summaryText: '',
       summaryStatus: 'idle',
+      summaryType: 'resumen',
     }
 
     setInterviews((current) => [newInterview, ...current])
@@ -553,6 +574,7 @@ function App() {
       const result = await window.desktopApp.generateSummary({
         transcript: interview.transcriptEdited,
         instructions: interview.summaryInstructions,
+        summaryType: interview.summaryType,
       })
       updateInterview(interviewId, {
         summaryText: result.text,
@@ -839,10 +861,10 @@ function App() {
         </div>
       )}
 
-      {showNewCandidate && (
-        <div className="modal-overlay" onClick={() => setShowNewCandidate(false)}>
+      {(showNewCandidate || editingCandidateId !== null) && (
+        <div className="modal-overlay" onClick={handleCloseCandidateModal}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <h2>Nueva candidata</h2>
+            <h2>{editingCandidateId ? 'Editar candidata' : 'Nueva candidata'}</h2>
             <label className="modal-label">
               Nombre *
               <input
@@ -888,12 +910,12 @@ function App() {
               <button
                 type="button"
                 className="primary-btn"
-                onClick={handleCreateCandidate}
+                onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate}
                 disabled={!candidateDraft.name.trim()}
               >
-                Crear
+                {editingCandidateId ? 'Guardar' : 'Crear'}
               </button>
-              <button type="button" onClick={() => setShowNewCandidate(false)}>
+              <button type="button" onClick={handleCloseCandidateModal}>
                 Cancelar
               </button>
             </div>
@@ -951,7 +973,20 @@ function App() {
           {selectedCandidate ? (
             <div className="candidate-profile">
               <p className="profile-label">Perfil de candidata</p>
-              <h3>{selectedCandidate.name}</h3>
+              <div className="candidate-name-row">
+                <h3>{selectedCandidate.name}</h3>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title="Editar candidata"
+                  onClick={() => {
+                    setCandidateDraft({ name: selectedCandidate.name, email: selectedCandidate.email, phone: selectedCandidate.phone, process: selectedCandidate.process })
+                    setEditingCandidateId(selectedCandidate.id)
+                  }}
+                >
+                  <PencilIcon />
+                </button>
+              </div>
               <div className="profile-tabs">
                 <button
                   type="button"
@@ -1299,6 +1334,18 @@ function App() {
                             <div className="spinner-row">
                               <span className="spinner" />
                               <span>Transcripcion en curso...</span>
+                              <button
+                                type="button"
+                                className="secondary-btn"
+                                style={{ marginLeft: '12px' }}
+                                onClick={() =>
+                                  updateInterview(selectedTranscriptInterview.id, {
+                                    transcriptionStatus: 'pending',
+                                  })
+                                }
+                              >
+                                Cancelar
+                              </button>
                             </div>
                           )}
                           {selectedTranscriptInterview.transcriptionStatus === 'error' && (
@@ -1395,7 +1442,23 @@ function App() {
                     </aside>
 
                     <div className="transcript-editor">
-                      <p className="section-label">Resumen con IA</p>
+                      <div className="summary-header">
+                        <p className="section-label">Resumen con IA</p>
+                        {selectedSummaryInterview && (
+                          <select
+                            className="summary-type-select"
+                            value={selectedSummaryInterview.summaryType}
+                            onChange={(event) =>
+                              updateInterview(selectedSummaryInterview.id, {
+                                summaryType: event.target.value as 'resumen' | 'listado',
+                              })
+                            }
+                          >
+                            <option value="resumen">Resumen explicativo</option>
+                            <option value="listado">Listado por puntos</option>
+                          </select>
+                        )}
+                      </div>
                       {selectedSummaryInterview ? (
                         <>
                           {!groqApiKey && (
@@ -1410,7 +1473,11 @@ function App() {
                           )}
                           <div className="summary-instructions">
                             <label>
-                              <span>¿Que quieres que resuma la IA?</span>
+                              <span>
+                                {selectedSummaryInterview.summaryType === 'listado'
+                                  ? '¿Qué secciones quieres en el listado?'
+                                  : 'Contexto adicional (opcional)'}
+                              </span>
                               <textarea
                                 value={selectedSummaryInterview.summaryInstructions}
                                 onChange={(event) =>
@@ -1418,8 +1485,12 @@ function App() {
                                     summaryInstructions: event.target.value,
                                   })
                                 }
-                                rows={4}
-                                placeholder="Ej: Resume la trayectoria profesional, por que quiere trabajar aqui y sus pretensiones salariales"
+                                rows={selectedSummaryInterview.summaryType === 'listado' ? 4 : 2}
+                                placeholder={
+                                  selectedSummaryInterview.summaryType === 'listado'
+                                    ? 'Ej: Trayectoria profesional, Habilidades técnicas, Pretensiones salariales, Disponibilidad'
+                                    : 'Ej: Candidata para puesto administrativo en correduría de seguros'
+                                }
                               />
                             </label>
                           </div>
