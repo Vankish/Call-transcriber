@@ -111,6 +111,7 @@ ipcMain.handle('config:save', async (_event, payload) => {
 })
 
 const GROQ_MAX_BYTES = 24 * 1024 * 1024
+const CHUNK_DURATION_SEC = 600 // 10 minutos por chunk
 
 function getAudioDurationSec(filePath) {
   return new Promise((resolve) => {
@@ -124,9 +125,22 @@ function getAudioDurationSec(filePath) {
   })
 }
 
+function convertToMp3(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const args = ['-i', inputPath, '-vn', '-ar', '16000', '-ac', '1', '-b:a', '32k', '-y', outputPath]
+    const proc = spawn(ffmpegPath, args)
+    let stderr = ''
+    proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`ffmpeg conversión falló: ${stderr.slice(-300)}`))
+    })
+  })
+}
+
 async function transcribeChunk(filePath, groqApiKey) {
   const audioBuffer = await fs.readFile(filePath)
-  const ext = path.extname(filePath).slice(1) || 'webm'
+  const ext = path.extname(filePath).slice(1) || 'mp3'
   const blob = new Blob([audioBuffer], { type: `audio/${ext}` })
   const formData = new FormData()
   formData.append('file', blob, path.basename(filePath))
@@ -148,47 +162,50 @@ async function transcribeChunk(filePath, groqApiKey) {
   return response.text()
 }
 
-async function transcribeAudio(filePath, groqApiKey) {
-  const stat = await fs.stat(filePath)
+async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
+  const numChunks = Math.ceil(durationSec / CHUNK_DURATION_SEC)
+  const chunkPaths = []
 
-  if (stat.size <= GROQ_MAX_BYTES) {
-    return transcribeChunk(filePath, groqApiKey)
+  for (let i = 0; i < numChunks; i++) {
+    const start = i * CHUNK_DURATION_SEC
+    const chunkPath = path.join(tmpDir, `chunk_${i}.mp3`)
+    await new Promise((resolve, reject) => {
+      const args = ['-i', mp3Path, '-ss', String(start), '-t', String(CHUNK_DURATION_SEC), '-c', 'copy', '-y', chunkPath]
+      const proc = spawn(ffmpegPath, args)
+      let stderr = ''
+      proc.stderr.on('data', (d) => { stderr += d.toString() })
+      proc.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`ffmpeg chunk ${i + 1} falló: ${stderr.slice(-300)}`))
+      })
+    })
+    chunkPaths.push(chunkPath)
   }
 
-  const durationSec = await getAudioDurationSec(filePath)
-  if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
+  return chunkPaths
+}
 
-  const numChunks = Math.ceil(stat.size / GROQ_MAX_BYTES)
-  const chunkDuration = Math.ceil(durationSec / numChunks)
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-chunks-'))
-  const ext = path.extname(filePath) || '.webm'
+async function transcribeAudio(filePath, groqApiKey) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
 
   try {
-    const chunkPaths = []
-    for (let i = 0; i < numChunks; i++) {
-      const chunkPath = path.join(tmpDir, `chunk_${i}${ext}`)
-      await new Promise((resolve, reject) => {
-        const args = [
-          '-i', filePath,
-          '-ss', String(i * chunkDuration),
-          '-t', String(chunkDuration),
-          '-c', 'copy', '-y', chunkPath,
-        ]
-        const proc = spawn(ffmpegPath, args)
-        let stderr = ''
-        proc.stderr.on('data', (d) => { stderr += d.toString() })
-        proc.on('close', (code) => {
-          if (code === 0) resolve()
-          else reject(new Error(`ffmpeg falló (fragmento ${i + 1}): ${stderr.slice(-300)}`))
-        })
-      })
-      chunkPaths.push(chunkPath)
+    // Paso 1: convertir a MP3 mono 16kHz 32kbps
+    const mp3Path = path.join(tmpDir, 'audio.mp3')
+    await convertToMp3(filePath, mp3Path)
+
+    const stat = await fs.stat(mp3Path)
+
+    // Paso 2: cabe en una sola llamada → transcribir directo
+    if (stat.size <= GROQ_MAX_BYTES) {
+      return transcribeChunk(mp3Path, groqApiKey)
     }
 
-    const texts = []
-    for (const chunkPath of chunkPaths) {
-      texts.push(await transcribeChunk(chunkPath, groqApiKey))
-    }
+    // Paso 3: archivo muy largo → fragmentar y transcribir en paralelo
+    const durationSec = await getAudioDurationSec(mp3Path)
+    if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
+
+    const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir)
+    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey)))
     return texts.join(' ')
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
