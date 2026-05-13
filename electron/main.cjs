@@ -10,7 +10,7 @@ const {
   session,
   shell,
 } = require('electron')
-const ffmpegPath = require('ffmpeg-static')
+const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
 
 const isDev = process.env.ELECTRON_DEV === '1'
 
@@ -81,7 +81,7 @@ async function readConfig() {
     const raw = await fs.readFile(CONFIG_FILE(), 'utf-8')
     return JSON.parse(raw)
   } catch {
-    return { groqApiKey: null }
+    return { groqApiKey: null, transcriptionModel: 'whisper-large-v3', transcriptionLanguage: 'es', summaryModel: 'llama-3.3-70b-versatile' }
   }
 }
 
@@ -138,21 +138,29 @@ function convertToMp3(inputPath, outputPath) {
   })
 }
 
-async function transcribeChunk(filePath, groqApiKey) {
+async function transcribeChunk(filePath, groqApiKey, model, language) {
   const audioBuffer = await fs.readFile(filePath)
   const ext = path.extname(filePath).slice(1) || 'mp3'
   const blob = new Blob([audioBuffer], { type: `audio/${ext}` })
   const formData = new FormData()
   formData.append('file', blob, path.basename(filePath))
-  formData.append('model', 'whisper-large-v3')
-  formData.append('language', 'es')
+  formData.append('model', model || 'whisper-large-v3')
+  if (language && language !== 'auto') formData.append('language', language)
   formData.append('response_format', 'text')
 
-  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${groqApiKey}` },
-    body: formData,
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60000)
+  let response
+  try {
+    response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${groqApiKey}` },
+      body: formData,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -185,27 +193,24 @@ async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
   return chunkPaths
 }
 
-async function transcribeAudio(filePath, groqApiKey) {
+async function transcribeAudio(filePath, groqApiKey, model, language) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
 
   try {
-    // Paso 1: convertir a MP3 mono 16kHz 32kbps
     const mp3Path = path.join(tmpDir, 'audio.mp3')
     await convertToMp3(filePath, mp3Path)
 
     const stat = await fs.stat(mp3Path)
 
-    // Paso 2: cabe en una sola llamada → transcribir directo
     if (stat.size <= GROQ_MAX_BYTES) {
-      return transcribeChunk(mp3Path, groqApiKey)
+      return transcribeChunk(mp3Path, groqApiKey, model, language)
     }
 
-    // Paso 3: archivo muy largo → fragmentar y transcribir en paralelo
     const durationSec = await getAudioDurationSec(mp3Path)
     if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir)
-    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey)))
+    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
     return texts.join(' ')
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
@@ -217,7 +222,8 @@ ipcMain.handle('transcription:run', async (_event, { filePath }) => {
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
   }
-  const text = await transcribeAudio(filePath, config.groqApiKey)
+  const model = config.transcriptionModel || 'whisper-large-v3'
+  const text = await transcribeAudio(filePath, config.groqApiKey, model, 'es')
   return { text }
 })
 
@@ -265,7 +271,7 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: config.summaryModel || 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
