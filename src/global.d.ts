@@ -12,10 +12,20 @@ type SaveRecordingResult = {
 
 type GetConfigResult = {
   groqApiKey: string | null
+  transcriptionModel?: string
+  summaryModel?: string
+  userName?: string
+  userEmail?: string
+  userCompany?: string
 }
 
 type SaveConfigPayload = {
   groqApiKey: string
+  transcriptionModel: string
+  summaryModel: string
+  userName: string
+  userEmail: string
+  userCompany: string
 }
 
 type SaveConfigResult = {

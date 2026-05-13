@@ -11,7 +11,7 @@
     "build": "tsc -b && vite build",
     "desktop:build": "npm run build && electron .",
     "dist:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --asar --asar-unpack=\"**/ffmpeg-static/**\"",
-    "package:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --asar --asar-unpack=\"**/ffmpeg-static/**\"",
+    "package:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true",
     "lint": "eslint .",
     "preview": "vite preview"
   },

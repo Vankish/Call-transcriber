@@ -50,6 +50,12 @@ const TrashIcon = () => (
   </svg>
 )
 
+const CheckIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+)
+
 const PencilIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -113,8 +119,18 @@ function App() {
   const [outputDevices, setOutputDevices] = useState<AudioDeviceOption[]>([])
   const [recordingMessage, setRecordingMessage] = useState('')
   const [groqApiKey, setGroqApiKey] = useState('')
+  const [transcriptionModel, setTranscriptionModel] = useState('whisper-large-v3')
+  const [summaryModel, setSummaryModel] = useState('llama-3.3-70b-versatile')
+  const [userName, setUserName] = useState('')
+  const [userEmail, setUserEmail] = useState('')
+  const [userCompany, setUserCompany] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [settingsKeyDraft, setSettingsKeyDraft] = useState('')
+  const [settingsTranscriptionModelDraft, setSettingsTranscriptionModelDraft] = useState('whisper-large-v3')
+  const [settingsSummaryModelDraft, setSettingsSummaryModelDraft] = useState('llama-3.3-70b-versatile')
+  const [settingsUserNameDraft, setSettingsUserNameDraft] = useState('')
+  const [settingsUserEmailDraft, setSettingsUserEmailDraft] = useState('')
+  const [settingsUserCompanyDraft, setSettingsUserCompanyDraft] = useState('')
 
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
@@ -124,6 +140,7 @@ function App() {
   const [playbackRate, setPlaybackRate] = useState(1)
   const [editingInterviewId, setEditingInterviewId] = useState<string | null>(null)
   const [editingNameDraft, setEditingNameDraft] = useState('')
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
@@ -164,6 +181,11 @@ function App() {
     if (!window.desktopApp?.getConfig) return
     void window.desktopApp.getConfig().then((config) => {
       setGroqApiKey(config.groqApiKey ?? '')
+      setTranscriptionModel(config.transcriptionModel ?? 'whisper-large-v3')
+      setSummaryModel(config.summaryModel ?? 'llama-3.3-70b-versatile')
+      setUserName(config.userName ?? '')
+      setUserEmail(config.userEmail ?? '')
+      setUserCompany(config.userCompany ?? '')
     })
   }, [])
 
@@ -184,11 +206,13 @@ function App() {
             recordingFilePath: interview.recordingFilePath ?? null,
             captureSource: interview.captureSource ?? 'none',
             transcriptionStatus:
-              interview.transcriptionStatus ??
-              (interview.transcriptOriginal &&
-              !interview.transcriptOriginal.startsWith('Transcripcion pendiente')
-                ? 'done'
-                : 'pending'),
+              interview.transcriptionStatus === 'transcribing'
+                ? 'error'
+                : interview.transcriptionStatus ??
+                  (interview.transcriptOriginal &&
+                  !interview.transcriptOriginal.startsWith('Transcripcion pendiente')
+                    ? 'done'
+                    : 'pending'),
             summaryInstructions: interview.summaryInstructions ?? '',
             summaryText: interview.summaryText ?? '',
             summaryStatus: interview.summaryStatus ?? 'idle',
@@ -204,6 +228,12 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ interviews, candidates }))
   }, [interviews, candidates])
+
+  useEffect(() => {
+    if (!pendingDeleteId) return
+    const t = setTimeout(() => setPendingDeleteId(null), 3000)
+    return () => clearTimeout(t)
+  }, [pendingDeleteId])
 
   useEffect(() => {
     if (!selectedCandidateId) {
@@ -707,26 +737,7 @@ function App() {
       }
     }
 
-    if (recordingFilePath && window.desktopApp?.transcribeAudio) {
-      updateInterview(interviewId, {
-        recordingUrl,
-        recordingFilePath,
-        transcriptionStatus: 'transcribing',
-      })
-      try {
-        const result = await window.desktopApp.transcribeAudio({ filePath: recordingFilePath })
-        updateInterview(interviewId, {
-          transcriptOriginal: result.text,
-          transcriptEdited: result.text,
-          transcriptionStatus: 'done',
-        })
-      } catch (error) {
-        console.error('Error transcribiendo', error)
-        updateInterview(interviewId, { transcriptionStatus: 'error' })
-      }
-    } else {
-      updateInterview(interviewId, { recordingUrl, recordingFilePath })
-    }
+    updateInterview(interviewId, { recordingUrl, recordingFilePath })
 
     pendingBlobRef.current = null
   }
@@ -737,6 +748,11 @@ function App() {
   }
 
   const handleDeleteCandidate = (candidateId: string) => {
+    if (pendingDeleteId !== candidateId) {
+      setPendingDeleteId(candidateId)
+      return
+    }
+    setPendingDeleteId(null)
     const toDelete = interviews.filter((i) => i.candidateId === candidateId)
     toDelete.forEach((interview) => {
       if (interview.recordingFilePath && window.desktopApp?.deleteRecording) {
@@ -749,6 +765,11 @@ function App() {
   }
 
   const handleDeleteInterview = (interviewId: string) => {
+    if (pendingDeleteId !== interviewId) {
+      setPendingDeleteId(interviewId)
+      return
+    }
+    setPendingDeleteId(null)
     if (playingInterviewId === interviewId) stopAudio()
     const interview = interviews.find((i) => i.id === interviewId)
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) {
@@ -759,9 +780,21 @@ function App() {
 
   const handleSaveSettings = async () => {
     if (window.desktopApp?.saveConfig) {
-      await window.desktopApp.saveConfig({ groqApiKey: settingsKeyDraft })
+      await window.desktopApp.saveConfig({
+        groqApiKey: settingsKeyDraft,
+        transcriptionModel: settingsTranscriptionModelDraft,
+        summaryModel: settingsSummaryModelDraft,
+        userName: settingsUserNameDraft,
+        userEmail: settingsUserEmailDraft,
+        userCompany: settingsUserCompanyDraft,
+      })
     }
     setGroqApiKey(settingsKeyDraft)
+    setTranscriptionModel(settingsTranscriptionModelDraft)
+    setSummaryModel(settingsSummaryModelDraft)
+    setUserName(settingsUserNameDraft)
+    setUserEmail(settingsUserEmailDraft)
+    setUserCompany(settingsUserCompanyDraft)
     setShowSettings(false)
   }
 
@@ -770,15 +803,17 @@ function App() {
       <header className="top-bar">
         <h1>Entrevistas</h1>
         <div className="top-bar-actions">
-          <button type="button" className="primary-btn">
-            Nueva entrevista
-          </button>
           <button
             type="button"
             className="settings-btn"
             title="Configuracion"
             onClick={() => {
               setSettingsKeyDraft(groqApiKey)
+              setSettingsTranscriptionModelDraft(transcriptionModel)
+              setSettingsSummaryModelDraft(summaryModel)
+              setSettingsUserNameDraft(userName)
+              setSettingsUserEmailDraft(userEmail)
+              setSettingsUserCompanyDraft(userCompany)
               setShowSettings(true)
             }}
           >
@@ -789,28 +824,95 @@ function App() {
 
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-box settings-modal-box" onClick={(e) => e.stopPropagation()}>
             <h2>Configuracion</h2>
-            <p>
-              Para usar la transcripcion y el resumen automatico necesitas una API key de
-              Groq.
-            </p>
-            <p className="modal-link-note">
-              Groq es gratuita &mdash;{' '}
-              <a href="https://console.groq.com" target="_blank" rel="noreferrer">
-                consigue tu key en console.groq.com
-              </a>
-            </p>
-            <label className="modal-label">
-              API Key de Groq
-              <input
-                type="password"
-                className="modal-input"
-                value={settingsKeyDraft}
-                onChange={(e) => setSettingsKeyDraft(e.target.value)}
-                placeholder="Tu API key de Groq"
-              />
-            </label>
+
+            <div className="settings-section">
+              <div className="settings-section-title">API Key</div>
+              <p className="modal-link-note">
+                Groq es gratuita &mdash;{' '}
+                <a href="https://console.groq.com" target="_blank" rel="noreferrer">
+                  consigue tu key en console.groq.com
+                </a>
+              </p>
+              <label className="modal-label">
+                API Key de Groq
+                <input
+                  type="password"
+                  className="modal-input"
+                  value={settingsKeyDraft}
+                  onChange={(e) => setSettingsKeyDraft(e.target.value)}
+                  placeholder="gsk_..."
+                />
+              </label>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Cuenta</div>
+              <label className="modal-label">
+                Nombre
+                <input
+                  type="text"
+                  className="modal-input"
+                  value={settingsUserNameDraft}
+                  onChange={(e) => setSettingsUserNameDraft(e.target.value)}
+                  placeholder="Tu nombre"
+                />
+              </label>
+              <label className="modal-label">
+                Email
+                <input
+                  type="email"
+                  className="modal-input"
+                  value={settingsUserEmailDraft}
+                  onChange={(e) => setSettingsUserEmailDraft(e.target.value)}
+                  placeholder="tu@email.com"
+                />
+              </label>
+              <label className="modal-label">
+                Empresa
+                <input
+                  type="text"
+                  className="modal-input"
+                  value={settingsUserCompanyDraft}
+                  onChange={(e) => setSettingsUserCompanyDraft(e.target.value)}
+                  placeholder="Nombre de la empresa"
+                />
+              </label>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Transcripcion</div>
+              <label className="modal-label">
+                Modelo Whisper
+                <select
+                  className="modal-input modal-select"
+                  value={settingsTranscriptionModelDraft}
+                  onChange={(e) => setSettingsTranscriptionModelDraft(e.target.value)}
+                >
+                  <option value="whisper-large-v3">whisper-large-v3 — Mayor precision</option>
+                  <option value="whisper-large-v3-turbo">whisper-large-v3-turbo — Rapido y preciso</option>
+                  <option value="distil-whisper-large-v3-en">distil-whisper-large-v3-en — Solo ingles, muy rapido</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Resumen</div>
+              <label className="modal-label">
+                Modelo LLM
+                <select
+                  className="modal-input modal-select"
+                  value={settingsSummaryModelDraft}
+                  onChange={(e) => setSettingsSummaryModelDraft(e.target.value)}
+                >
+                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile — Mas capaz</option>
+                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant — Mas rapido</option>
+                  <option value="gemma2-9b-it">gemma2-9b-it — Alternativa equilibrada</option>
+                </select>
+              </label>
+            </div>
+
             <div className="modal-actions">
               <button
                 type="button"
@@ -958,11 +1060,11 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="btn-trash"
-                  title="Eliminar candidata y todos sus datos"
+                  className={`btn-trash${pendingDeleteId === candidate.id ? ' confirming' : ''}`}
+                  title={pendingDeleteId === candidate.id ? 'Confirmar eliminación' : 'Eliminar candidata y todos sus datos'}
                   onClick={() => handleDeleteCandidate(candidate.id)}
                 >
-                  <TrashIcon />
+                  {pendingDeleteId === candidate.id ? <CheckIcon /> : <TrashIcon />}
                 </button>
               </li>
             ))}
@@ -1267,11 +1369,11 @@ function App() {
                                 </button>
                                 <button
                                   type="button"
-                                  className="btn-trash"
-                                  title="Eliminar entrevista y grabacion"
+                                  className={`btn-trash${pendingDeleteId === interview.id ? ' confirming' : ''}`}
+                                  title={pendingDeleteId === interview.id ? 'Confirmar eliminación' : 'Eliminar entrevista y grabacion'}
                                   onClick={() => handleDeleteInterview(interview.id)}
                                 >
-                                  <TrashIcon />
+                                  {pendingDeleteId === interview.id ? <CheckIcon /> : <TrashIcon />}
                                 </button>
                               </>
                             )}
@@ -1386,6 +1488,17 @@ function App() {
                                 <button type="button" onClick={handleRestoreTranscript}>
                                   Restaurar original
                                 </button>
+                                {selectedTranscriptInterview.recordingFilePath && (
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    onClick={() =>
+                                      void handleTranscribe(selectedTranscriptInterview.id)
+                                    }
+                                  >
+                                    Transcribir
+                                  </button>
+                                )}
                                 {saveMessage && (
                                   <span className="save-message">{saveMessage}</span>
                                 )}
