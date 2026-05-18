@@ -20,8 +20,9 @@ function sanitizeName(value) {
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 860,
+    width: 1280,
+    height: 820,
+    useContentSize: true,
     minWidth: 1024,
     minHeight: 700,
     autoHideMenuBar: true,
@@ -31,6 +32,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   })
+
+  mainWindow.maximize()
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
@@ -118,6 +121,7 @@ function getAudioDurationSec(filePath) {
     const proc = spawn(ffmpegPath, ['-i', filePath])
     let stderr = ''
     proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('error', () => resolve(null))
     proc.on('close', () => {
       const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/)
       resolve(m ? parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]) : null)
@@ -131,11 +135,43 @@ function convertToMp3(inputPath, outputPath) {
     const proc = spawn(ffmpegPath, args)
     let stderr = ''
     proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('error', (err) => reject(new Error(`ffmpeg no pudo iniciarse: ${err.message}`)))
     proc.on('close', (code) => {
       if (code === 0) resolve()
       else reject(new Error(`ffmpeg conversión falló: ${stderr.slice(-300)}`))
     })
   })
+}
+
+function formatDiarizedTranscript(segments) {
+  const speakerMap = {}
+  let speakerCount = 0
+  let result = ''
+  let currentSpeaker = null
+
+  for (const segment of segments) {
+    const rawSpeaker = segment.speaker ?? null
+    if (!rawSpeaker) continue
+
+    if (!(rawSpeaker in speakerMap)) {
+      speakerCount++
+      speakerMap[rawSpeaker] = `Hablante ${speakerCount}`
+    }
+
+    const speaker = speakerMap[rawSpeaker]
+    const text = (segment.text || '').trim()
+    if (!text) continue
+
+    if (speaker !== currentSpeaker) {
+      if (result) result += '\n'
+      result += `[${speaker}]: ${text}`
+      currentSpeaker = speaker
+    } else {
+      result += ' ' + text
+    }
+  }
+
+  return result
 }
 
 async function transcribeChunk(filePath, groqApiKey, model, language) {
@@ -146,10 +182,11 @@ async function transcribeChunk(filePath, groqApiKey, model, language) {
   formData.append('file', blob, path.basename(filePath))
   formData.append('model', model || 'whisper-large-v3')
   if (language && language !== 'auto') formData.append('language', language)
-  formData.append('response_format', 'text')
+  formData.append('response_format', 'verbose_json')
+  formData.append('diarize', 'true')
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
+  const timeout = setTimeout(() => controller.abort(), 120000)
   let response
   try {
     response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -167,7 +204,13 @@ async function transcribeChunk(filePath, groqApiKey, model, language) {
     throw new Error(`Error de Groq: ${errorText}`)
   }
 
-  return response.text()
+  const data = await response.json()
+
+  if (data.segments && data.segments.some((s) => s.speaker !== undefined)) {
+    return formatDiarizedTranscript(data.segments)
+  }
+
+  return data.text || ''
 }
 
 async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
@@ -182,6 +225,7 @@ async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
       const proc = spawn(ffmpegPath, args)
       let stderr = ''
       proc.stderr.on('data', (d) => { stderr += d.toString() })
+      proc.on('error', (err) => reject(new Error(`ffmpeg no pudo iniciarse (chunk ${i + 1}): ${err.message}`)))
       proc.on('close', (code) => {
         if (code === 0) resolve()
         else reject(new Error(`ffmpeg chunk ${i + 1} falló: ${stderr.slice(-300)}`))
@@ -203,7 +247,7 @@ async function transcribeAudio(filePath, groqApiKey, model, language) {
     const stat = await fs.stat(mp3Path)
 
     if (stat.size <= GROQ_MAX_BYTES) {
-      return transcribeChunk(mp3Path, groqApiKey, model, language)
+      return await transcribeChunk(mp3Path, groqApiKey, model, language)
     }
 
     const durationSec = await getAudioDurationSec(mp3Path)
@@ -211,7 +255,7 @@ async function transcribeAudio(filePath, groqApiKey, model, language) {
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir)
     const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
-    return texts.join(' ')
+    return texts.join('\n\n')
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -240,8 +284,13 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
     systemPrompt =
       'Eres un asistente experto en análisis de entrevistas de trabajo. ' +
       'Genera un listado estructurado por secciones basándote en los temas indicados. ' +
-      'Para cada sección usa un título en negrita seguido de bullets con la información extraída. ' +
-      'Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió". ' +
+      'Para cada sección usa un título en negrita seguido de bullets con la información extraída.\n\n' +
+      'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
+      '- La transcripción puede incluir etiquetas de hablante como [Hablante 1] y [Hablante 2]. Generalmente [Hablante 1] es el entrevistador y [Hablante 2] es la candidata, aunque puede variar. Úsalas para atribuir correctamente cada dato a quien lo dice.\n' +
+      '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
+      '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
+      '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
+      '- Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".\n' +
       'Responde en español.'
 
     userPrompt = instructions
@@ -256,7 +305,12 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
       'competencias técnicas y habilidades clave, y adecuación al puesto. ' +
       'NO uses listas con guiones o puntos. ' +
       'NO incluyas frases como "el entrevistador preguntó" o "el candidato respondió". ' +
-      'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación. ' +
+      'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación.\n\n' +
+      'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
+      '- La transcripción puede incluir etiquetas de hablante como [Hablante 1] y [Hablante 2]. Generalmente [Hablante 1] es el entrevistador y [Hablante 2] es la candidata, aunque puede variar. Úsalas para atribuir correctamente cada dato a quien lo dice.\n' +
+      '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
+      '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
+      '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
       'Responde en español.'
 
     userPrompt = instructions
@@ -276,7 +330,7 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.3,
+      temperature: 0.1,
     }),
   })
 
