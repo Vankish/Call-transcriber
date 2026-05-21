@@ -18,10 +18,10 @@ type Interview = {
   summaryType: 'resumen' | 'listado'
 }
 type AudioDeviceOption = { id: string; name: string }
-type Toast = { id: string; message: string; type: 'success' | 'error' | 'info' }
-type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'settings' | 'profile'
+type Toast = { id: string; message: string; sub?: string; type: 'success' | 'error' | 'info' | 'warning' }
+type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'candidates' | 'settings' | 'profile'
 type ProfileScreenTab = 'perfil' | 'plan' | 'seguridad' | 'notif'
-type SettingsTab = 'general' | 'grabacion'
+type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 
 // ── Storage ────────────────────────────────────────────────────────────────
 const V1_KEY = 'call-transcriber-hito1'
@@ -35,6 +35,8 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleString('es-ES', { day: '2
 const fmtShort = (iso: string) => new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 const initials = (name: string) => name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
+const AVATAR_COLORS = ['#2563eb', '#10b981', '#f59e33', '#eb4566', '#8b5cf6', '#ec4899']
+const avatarColor = (id: string) => AVATAR_COLORS[id.charCodeAt(id.length - 1) % AVATAR_COLORS.length]
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 const TrashIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
@@ -42,18 +44,21 @@ const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="no
 const PencilIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 const PlayIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 const PauseIconSm = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-const PlusIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 const HomeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
 const FolderIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 
 const SettingsIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
 const UserIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
 const ChevronRight = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-const MicIcon = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+const ChevronLeft = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
 const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
 const DownloadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-const BellIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+const UsersIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+const KeyIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+const MicIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
 const LockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+const BellIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+const StarIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
 
 const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
@@ -88,6 +93,8 @@ function App() {
   const [profileScreenTab, setProfileScreenTab] = useState<ProfileScreenTab>('perfil')
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [searchQuery, setSearchQuery] = useState('')
+  const [projectSearchQuery, setProjectSearchQuery] = useState('')
+  const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'active' | 'closed'>('all')
 
   // ── Interview selection ────────────────────────────────────────────────
   const [selectedInterviewId, setSelectedInterviewId] = useState<string | null>(null)
@@ -98,7 +105,7 @@ function App() {
   // ── Audio devices ──────────────────────────────────────────────────────
   const [micDevices, setMicDevices] = useState<AudioDeviceOption[]>([])
   const [outputDevices, setOutputDevices] = useState<AudioDeviceOption[]>([])
-  const [recordingMessage, setRecordingMessage] = useState('')
+  const [_recordingMessage, setRecordingMessage] = useState('')
 
   // ── Config ─────────────────────────────────────────────────────────────
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -123,6 +130,16 @@ function App() {
   const [settingsPasswordDraft, setSettingsPasswordDraft] = useState('')
   const [settingsPasswordNewDraft, setSettingsPasswordNewDraft] = useState('')
   const [settingsPasswordConfirmDraft, setSettingsPasswordConfirmDraft] = useState('')
+  const [settingsAudioFormatDraft, setSettingsAudioFormatDraft] = useState<'mp3' | 'wav'>('mp3')
+  const [settingsChunkDurationDraft, setSettingsChunkDurationDraft] = useState(30)
+  const [settingsRecordingQualityDraft, setSettingsRecordingQualityDraft] = useState('high')
+  const [settingsLanguageDraft, setSettingsLanguageDraft] = useState('es')
+  const [settingsAutoSaveDraft, setSettingsAutoSaveDraft] = useState(true)
+  const [settingsDateFormatDraft, setSettingsDateFormatDraft] = useState('DD/MM/YYYY')
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'txt' | 'clipboard'>('clipboard')
+  const [userPhoto, setUserPhoto] = useState('')
+  const [projDescDraft, setProjDescDraft] = useState('')
+  const [candidateNotesDraft, setCandidateNotesDraft] = useState('')
 
   // ── Modals & overlays ──────────────────────────────────────────────────
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -140,12 +157,14 @@ function App() {
   const [showProfilePopup, setShowProfilePopup] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [exportCandidateId, setExportCandidateId] = useState<string | null>(null)
+  const [dashFilter, setDashFilter] = useState<'active' | 'closed'>('active')
+  const [dashSearch, setDashSearch] = useState('')
 
   // ── Playback ───────────────────────────────────────────────────────────
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
-  const [playbackProgress, setPlaybackProgress] = useState(0)
-  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
-  const [playbackRate, setPlaybackRate] = useState(1)
+  const [_playbackProgress, setPlaybackProgress] = useState(0)
+  const [_playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
+  const [playbackRate, _setPlaybackRate] = useState(1)
 
   // ── Toasts ─────────────────────────────────────────────────────────────
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -161,6 +180,7 @@ function App() {
   const pendingBlobRef = useRef<Blob | null>(null)
   const pendingMimeTypeRef = useRef<string>('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const photoInputRef = useRef<HTMLInputElement | null>(null)
 
   // ── Derived ────────────────────────────────────────────────────────────
   const activeProject = projects.find(p => p.id === activeProjectId) ?? null
@@ -171,6 +191,15 @@ function App() {
     const q = searchQuery.toLowerCase()
     return projectCandidates.filter(c => c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.role.toLowerCase().includes(q))
   }, [projectCandidates, searchQuery])
+  const filteredProjects = useMemo(() => {
+    let list = projects
+    if (projectStatusFilter !== 'all') list = list.filter(p => p.status === projectStatusFilter)
+    if (projectSearchQuery.trim()) {
+      const q = projectSearchQuery.toLowerCase()
+      list = list.filter(p => p.name.toLowerCase().includes(q) || p.company.toLowerCase().includes(q))
+    }
+    return list
+  }, [projects, projectSearchQuery, projectStatusFilter])
   const candidateInterviews = useMemo(() =>
     interviews.filter(i => i.candidateId === activeCandidateId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
     [interviews, activeCandidateId])
@@ -181,8 +210,6 @@ function App() {
   const activeRecordingCandidate = activeRecordingInterview ? candidates.find(c => c.id === activeRecordingInterview.candidateId) : null
   const activeRecordingProject = activeRecordingCandidate ? projects.find(p => p.id === activeRecordingCandidate.projectId) : null
   const transcribingInterview = interviews.find(i => i.transcriptionStatus === 'transcribing')
-  const exportCandidate = candidates.find(c => c.id === exportCandidateId) ?? null
-  const exportInterviews = exportCandidateId ? interviews.filter(i => i.candidateId === exportCandidateId && i.transcriptionStatus === 'done') : []
 
   const stats = useMemo(() => ({
     projects: projects.length,
@@ -192,9 +219,9 @@ function App() {
   }), [projects, interviews])
 
   // ── Toast helper ───────────────────────────────────────────────────────
-  const toast = useCallback((message: string, type: Toast['type'] = 'success') => {
+  const toast = useCallback((message: string, type: Toast['type'] = 'success', sub?: string) => {
     const id = uid()
-    setToasts(t => [...t, { id, message, type }])
+    setToasts(t => [...t, { id, message, sub, type }])
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000)
   }, [])
 
@@ -246,6 +273,9 @@ function App() {
 
   // ── Persist ────────────────────────────────────────────────────────────
   useEffect(() => { localStorage.setItem(V2_KEY, JSON.stringify({ projects, candidates, interviews })) }, [projects, candidates, interviews])
+
+  // ── Load user photo ────────────────────────────────────────────────────
+  useEffect(() => { const p = localStorage.getItem('ct-user-photo'); if (p) setUserPhoto(p) }, [])
 
   // ── Auto-clear pending delete ──────────────────────────────────────────
   useEffect(() => {
@@ -300,12 +330,13 @@ function App() {
   }
 
   // ── Recording ──────────────────────────────────────────────────────────
-  const handleStartRecording = async () => {
-    if (!selectedInterview?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
+  const handleStartRecording = async (interviewOverride?: Interview) => {
+    const iv = interviewOverride ?? selectedInterview
+    if (!iv?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
     try {
       setRecordingMessage('Solicitando permisos...')
       chunkRef.current = []
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: selectedInterview.micDeviceId } } })
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId } } })
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
       try { sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }); systemStreamRef.current = sysStream } catch { /* silent */ }
@@ -316,7 +347,7 @@ function App() {
       mixedStreamRef.current = dest.stream
       const recorder = new MediaRecorder(dest.stream)
       mediaRecorderRef.current = recorder
-      activeInterviewIdRef.current = selectedInterview.id
+      activeInterviewIdRef.current = iv.id
       recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
       recorder.onstop = () => {
         const blob = new Blob(chunkRef.current, { type: recorder.mimeType })
@@ -326,9 +357,19 @@ function App() {
         setSessionNameDraft(''); setShowSessionNameModal(true); cleanupRecording()
       }
       recorder.start(1000)
-      updateInterview(selectedInterview.id, { status: 'recording', captureSource: sysStream?.getAudioTracks().length ? 'mic+system' : 'mic' })
+      updateInterview(iv.id, { status: 'recording', captureSource: sysStream?.getAudioTracks().length ? 'mic+system' : 'mic' })
       setRecordingMessage(sysStream ? 'Grabando micrófono + sistema.' : 'Grabando solo micrófono.')
     } catch { setRecordingMessage('No se pudo iniciar la grabación.'); cleanupRecording() }
+  }
+
+  const handleNewRecording = () => {
+    if (!activeCandidateId) return
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: micDevices[0]?.id ?? '', outputDeviceId: outputDevices[0]?.id ?? '', transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
+    setInterviews(c => [n, ...c])
+    setSelectedInterviewId(n.id)
+    setSelectedTranscriptInterviewId(n.id)
+    setSelectedSummaryInterviewId(n.id)
+    void handleStartRecording(n)
   }
 
   const handlePauseRecording = () => {
@@ -381,7 +422,11 @@ function App() {
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedTranscriptInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')
-    } catch { updateInterview(interviewId, { transcriptionStatus: 'error' }); if (notifErrors) toast('Error al transcribir', 'error') }
+    } catch (err) {
+      updateInterview(interviewId, { transcriptionStatus: 'error' })
+      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      if (notifErrors) toast('Error al transcribir', 'error', msg)
+    }
   }
 
   const handleGenerateSummary = async (interviewId: string) => {
@@ -392,7 +437,11 @@ function App() {
       const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, instructions: interview.summaryInstructions, summaryType: interview.summaryType })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
       if (notifSummary) toast('Resumen generado')
-    } catch { updateInterview(interviewId, { summaryStatus: 'error' }); if (notifErrors) toast('Error al generar resumen', 'error') }
+    } catch (err) {
+      updateInterview(interviewId, { summaryStatus: 'error' })
+      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      if (notifErrors) toast('Error al generar resumen', 'error', msg)
+    }
   }
 
   // ── Playback ───────────────────────────────────────────────────────────
@@ -415,34 +464,7 @@ function App() {
     void audio.play(); setPlayingInterviewId(interview.id)
   }
 
-  const handleCycleSpeed = () => {
-    const rates: [number, number, number] = [1, 1.5, 2]
-    const next = rates[(rates.indexOf(playbackRate as 1 | 1.5 | 2) + 1) % rates.length]
-    setPlaybackRate(next); if (audioRef.current) audioRef.current.playbackRate = next
-  }
-
-  const handleBarMouseDown = (e: React.MouseEvent<HTMLDivElement>, interview: Interview) => {
-    if (playingInterviewId !== interview.id || !audioRef.current) return
-    e.preventDefault()
-    const bar = e.currentTarget
-    const seek = (x: number) => {
-      const rect = bar.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (x - rect.left) / rect.width))
-      const total = isFinite(audioRef.current!.duration) && audioRef.current!.duration > 0 ? audioRef.current!.duration : interview.durationSec
-      audioRef.current!.currentTime = ratio * total; setPlaybackProgress(ratio); setPlaybackCurrentTime(ratio * total)
-    }
-    seek(e.clientX)
-    const move = (ev: MouseEvent) => seek(ev.clientX)
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
-    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
-  }
-
   // ── CRUD ───────────────────────────────────────────────────────────────
-  const handleCreateInterview = () => {
-    if (!activeCandidateId) return
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: micDevices[0]?.id ?? '', outputDeviceId: outputDevices[0]?.id ?? '', transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
-    setInterviews(c => [n, ...c]); setSelectedInterviewId(n.id); setSelectedTranscriptInterviewId(n.id); setSelectedSummaryInterviewId(n.id); setActiveTab('entrevistas')
-  }
-
   const handleDeleteInterview = (interviewId: string) => {
     if (pendingDeleteId !== interviewId) { setPendingDeleteId(interviewId); return }
     setPendingDeleteId(null); if (playingInterviewId === interviewId) stopAudio()
@@ -472,6 +494,10 @@ function App() {
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Candidata actualizada')
   }
 
+  const updateProject = (id: string, changes: Partial<Project>) => {
+    setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
+  }
+
   const handleCreateProject = () => {
     if (!projectDraft.name.trim()) return
     const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status }
@@ -484,7 +510,7 @@ function App() {
     toast('Configuración guardada')
   }
 
-  const openSettings = (tab: SettingsTab = 'general') => {
+  const openSettings = (tab: SettingsTab = 'api-keys') => {
     setSettingsKeyDraft(groqApiKey); setSettingsTxModelDraft(transcriptionModel); setSettingsSumModelDraft(summaryModel)
     setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany)
     setSettingsTab(tab); setScreen('settings')
@@ -494,6 +520,20 @@ function App() {
   const goToCandidate = (candidateId: string, projectId?: string) => {
     if (projectId) setActiveProjectId(projectId)
     setActiveCandidateId(candidateId); setActiveTab('entrevistas'); setScreen('candidate-detail')
+  }
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      setUserPhoto(dataUrl)
+      localStorage.setItem('ct-user-photo', dataUrl)
+      toast('Foto de perfil actualizada', 'success')
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
   }
 
   const handleOnboardingSave = async () => {
@@ -510,6 +550,7 @@ function App() {
     if (screen === 'projects') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos' }]
     if (screen === 'project-detail' && activeProject) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos', action: () => setScreen('projects') }, { label: activeProject.name }]
     if (screen === 'candidate-detail' && activeProject && activeCandidate) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: activeProject.name, action: () => goToProject(activeProject.id) }, { label: activeCandidate.name }]
+    if (screen === 'candidates') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Candidatas' }]
     if (screen === 'settings') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Configuración' }]
     if (screen === 'profile') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Mi Perfil' }]
     return []
@@ -520,123 +561,342 @@ function App() {
   // ════════════════════════════════════════════════════════ RENDER ══════
 
   const renderDashboard = () => {
-    const recent = [...interviews].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
+    const recent = [...interviews]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 3)
+
+    const filteredProjects = projects.filter(p => {
+      const matchFilter = p.status === dashFilter
+      const matchSearch = !dashSearch.trim() ||
+        p.name.toLowerCase().includes(dashSearch.toLowerCase()) ||
+        p.company.toLowerCase().includes(dashSearch.toLowerCase())
+      return matchFilter && matchSearch
+    })
+
     return (
-      <div className="screen-dashboard">
-        <div className="dash-header">
-          <div><h2>Inicio</h2><p className="screen-sub">Bienvenido, {userName || 'usuario'}</p></div>
-        </div>
-        <div className="stats-grid">
-          {[['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]].map(([label, val]) => (
-            <div key={label as string} className="stat-card"><span className="stat-value">{val}</span><span className="stat-label">{label}</span></div>
-          ))}
-        </div>
-        <div className="dash-body">
-          {projects.length > 0 && (
-            <div className="dash-section">
-              <div className="dash-section-head"><h3>Proyectos recientes</h3><button type="button" className="link-btn" onClick={() => setScreen('projects')}>Ver todos →</button></div>
-              <ul className="project-mini-list">
-                {projects.slice(0, 4).map(p => {
-                  const cnt = candidates.filter(c => c.projectId === p.id).length
-                  return (
-                    <li key={p.id} className="project-mini-row" onClick={() => goToProject(p.id)}>
-                      <div className="pmr-info"><span className="pmr-name">{p.name}</span><span className="pmr-company">{p.company} · Creado {fmtShort(p.createdAt)}</span></div>
-                      <div className="pmr-right"><span className="pmr-count">{cnt} candidatas</span><span className={`status-badge status-${p.status}`}>{p.status === 'active' ? '● Activo' : '■ Cerrado'}</span></div>
-                    </li>
-                  )
-                })}
-              </ul>
+      <div className="dash-layout">
+        {/* ── Lista de proyectos ── */}
+        <div className="dash-main">
+          <div className="dash-projects-header">
+            <h2 className="dash-projects-title">Mis Proyectos</h2>
+            <button type="button" className="primary-btn pill-btn" onClick={() => setShowNewProject(true)}>
+              Nuevo proyecto
+</button>
+          </div>
+
+          <div className="dash-toolbar">
+            <div className="dash-search">
+              <span className="dash-search-icon">🔍</span>
+              <input
+                type="text"
+                placeholder="Buscar por proyecto o empresa..."
+                value={dashSearch}
+                onChange={e => setDashSearch(e.target.value)}
+              />
             </div>
-          )}
-          {recent.length > 0 && (
-            <div className="dash-section">
-              <div className="dash-section-head"><h3>Actividad reciente</h3></div>
-              <ul className="activity-list">
-                {recent.map(i => {
-                  const cand = candidates.find(c => c.id === i.candidateId)
-                  const proj = cand ? projects.find(p => p.id === cand.projectId) : null
-                  return (
-                    <li key={i.id} className="activity-row" onClick={() => cand && goToCandidate(cand.id, cand.projectId)}>
-                      <span className="activity-icon">⊙</span>
-                      <div className="activity-info"><span className="activity-title">{i.sessionName || 'Entrevista'}</span><span className="activity-sub">{cand?.name ?? '—'} · {proj?.name ?? '—'}</span></div>
-                      <span className="activity-date">{fmtShort(i.createdAt)}</span>
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          )}
-          {projects.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-icon">≡</div>
-              <h3>Empieza creando un proyecto</h3>
-              <p>Organiza tus candidatas por procesos de selección.</p>
-              <button type="button" className="primary-btn" onClick={() => setShowNewProject(true)}>Crear primer proyecto</button>
-            </div>
-          )}
+            <button
+              type="button"
+              className={`dash-filter-btn${dashFilter === 'active' ? ' dash-filter-btn--on' : ''}`}
+              onClick={() => setDashFilter('active')}
+            >Activos</button>
+            <button
+              type="button"
+              className={`dash-filter-btn${dashFilter === 'closed' ? ' dash-filter-btn--on' : ''}`}
+              onClick={() => setDashFilter('closed')}
+            >Cerrados</button>
+          </div>
+
+          <div className="proj-list">
+            {filteredProjects.length === 0 ? (
+              <div className="empty-state">
+                {projects.length === 0 ? (
+                  <>
+                    <div className="es-circle"><span className="es-icon">≡</span></div>
+                    <h3 className="es-title">No tienes proyectos todavía</h3>
+                    <p className="es-sub">Crea tu primer proyecto para empezar a gestionar candidatas</p>
+                    <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
+                  </>
+                ) : (
+                  <><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>Prueba otro filtro o búsqueda.</p></>
+                )}
+              </div>
+            ) : filteredProjects.map(p => {
+              const cCnt = candidates.filter(c => c.projectId === p.id).length
+              const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
+              const tCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'done').length
+              const pCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'pending').length
+              const isClosed = p.status === 'closed'
+              return (
+                <div key={p.id} className={`plc${isClosed ? ' plc--closed' : ''}`}>
+                  <div className="plc-accent" />
+                  <div className="plc-body">
+                    <div className="plc-top">
+                      <div className="plc-info">
+                        <h3 className="plc-title">{p.name}</h3>
+                        <p className="plc-meta">{p.company} · Creado {fmtShort(p.createdAt)}</p>
+                      </div>
+                      <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
+                        {isClosed ? '■ Cerrado' : '● Activo'}
+                      </span>
+                    </div>
+                    <div className="plc-bottom">
+                      <div className="plc-stats">
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">candidatas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">entrevistas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">transcritas</span></div>
+                        <div className="plc-stat">
+                          <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
+                          <span className="plc-stat-lbl">pendientes</span>
+                        </div>
+                      </div>
+                      <div className="plc-actions">
+                        <button
+                          type="button"
+                          className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`}
+                          onClick={() => goToProject(p.id)}
+                        >
+                          {isClosed ? 'Ver proyecto' : 'Abrir proyecto'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`plc-status-btn${isClosed ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`}
+                          onClick={() => updateProject(p.id, { status: isClosed ? 'active' : 'closed' })}
+                        >
+                          {isClosed ? 'Reabrir' : 'Cerrar'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
+
+        {/* ── Account panel ── */}
+        <aside className="account-panel">
+          <div className="ap-top-accent" />
+          <div className="ap-user-section">
+            <div className="ap-avatar" style={{ background: userPhoto ? 'transparent' : undefined, padding: 0, overflow: 'hidden' }}>
+              {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
+            </div>
+            <h3 className="ap-name">{userName || 'Usuario'}</h3>
+            <p className="ap-email">{userEmail}</p>
+            <span className="ap-plan-badge">✦ Pro Plan</span>
+          </div>
+          <div className="ap-divider" />
+          <div className="ap-section">
+            <h4>Resumen global</h4>
+            <div className="ap-stats-grid">
+              {([['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]] as [string, number][]).map(([l, v]) => (
+                <div key={l} className="ap-stat-card">
+                  <span className="ap-stat-num">{v}</span>
+                  <span className="ap-stat-lbl">{l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="ap-divider" />
+          <div className="ap-section">
+            <h4>Acciones rápidas</h4>
+            <button type="button" className="primary-btn pill-btn ap-action-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { if (projects.length > 0) goToProject(projects[0].id) }}>🎙 Nueva entrevista</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}>📤 Exportar informes</button>
+          </div>
+          <div className="ap-divider" />
+          <div className="ap-section">
+            <h4>Actividad reciente</h4>
+            {recent.length === 0
+              ? <p className="ap-empty">Sin actividad reciente.</p>
+              : recent.map(i => {
+                const cand = candidates.find(c => c.id === i.candidateId)
+                return (
+                  <div key={i.id} className="ap-activity-row" onClick={() => cand && goToCandidate(cand.id, cand.projectId)}>
+                    <span>{i.summaryStatus === 'done' ? '📝' : '🎙'} {i.sessionName || 'Entrevista'} — {cand?.name ?? '—'}</span>
+                  </div>
+                )
+              })
+            }
+          </div>
+          <button type="button" className="ap-logout">Cerrar sesión</button>
+        </aside>
       </div>
     )
   }
 
-  const renderProjects = () => (
-    <div className="screen-content">
-      <div className="content-header">
-        <div><h2>Proyectos</h2><p className="screen-sub">{projects.length} proyecto{projects.length !== 1 ? 's' : ''}</p></div>
-      </div>
-      {projects.length === 0 ? (
-        <div className="empty-state"><div className="empty-icon">≡</div><h3>Sin proyectos</h3><p>Crea tu primer proyecto para organizar candidatas.</p><button type="button" className="primary-btn" onClick={() => setShowNewProject(true)}>Crear proyecto</button></div>
-      ) : (
-        <div className="projects-grid">
-          {projects.map(p => {
-            const cCnt = candidates.filter(c => c.projectId === p.id).length
-            const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
-            const tCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'done').length
-            return (
-              <div key={p.id} className="project-card" onClick={() => goToProject(p.id)}>
-                <div className="pc-head">
-                  <div><h3 className="pc-name">{p.name}</h3><p className="pc-company">{p.company} · {fmtShort(p.createdAt)}</p></div>
-                  <span className={`status-badge status-${p.status}`}>{p.status === 'active' ? '● Activo' : '■ Cerrado'}</span>
-                </div>
-                <div className="pc-stats">
-                  {[['candidatas', cCnt], ['entrevistas', iCnt], ['transcritas', tCnt]].map(([l, v]) => (
-                    <div key={l as string}><span className="pc-stat-val">{v}</span><span className="pc-stat-lbl">{l}</span></div>
-                  ))}
-                </div>
-                <button type="button" className="pc-open">Abrir proyecto →</button>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-
-  const renderProjectDetail = () => {
-    if (!activeProject) return null
+  const renderProjects = () => {
+    const isFiltered = !!projectSearchQuery.trim() || projectStatusFilter !== 'all'
     return (
       <div className="screen-content">
         <div className="content-header">
-          <div><h2>{activeProject.name}</h2><p className="screen-sub">{activeProject.company} · {projectCandidates.length} candidata{projectCandidates.length !== 1 ? 's' : ''}</p></div>
-          <div className="content-header-actions">
-            <button type="button" className="btn-icon-only" title="Exportar" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
-            <button type="button" className="primary-btn btn-icon-left" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}><PlusIcon /> Nueva candidata</button>
+          <div><h2>Mis Proyectos</h2></div>
+          <button type="button" className="primary-btn pill-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
+        </div>
+        <div className="proj-toolbar">
+          <div className={`proj-search-bar${projectSearchQuery ? ' proj-search-bar--active' : ''}`}>
+            <span className="proj-search-icon"><SearchIcon /></span>
+            <input type="text" placeholder="Buscar proyectos..." value={projectSearchQuery} onChange={e => setProjectSearchQuery(e.target.value)} />
+            {projectSearchQuery && <button type="button" className="proj-search-clear" onClick={() => setProjectSearchQuery('')}>✕</button>}
           </div>
+          <div className="proj-filter-group">
+            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'active' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'active' ? 'all' : 'active')}>Activos</button>
+            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'closed' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'closed' ? 'all' : 'closed')}>Cerrados</button>
+          </div>
+        </div>
+        {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para "${projectSearchQuery}"` : ''}</p>}
+        {filteredProjects.length === 0 ? (
+          isFiltered
+            ? <div className="empty-state"><div className="empty-icon">≡</div><h3>Sin resultados</h3><p>No hay proyectos que coincidan con los filtros aplicados.</p></div>
+            : <div className="empty-state">
+                <div className="es-circle"><span className="es-icon">≡</span></div>
+                <h3 className="es-title">No tienes proyectos todavía</h3>
+                <p className="es-sub">Crea tu primer proyecto para empezar a gestionar candidatas</p>
+                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
+              </div>
+        ) : (
+          <div className="proj-list">
+            {filteredProjects.map(p => {
+              const cCnt = candidates.filter(c => c.projectId === p.id).length
+              const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
+              const tCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'done').length
+              return (
+                <div key={p.id} className="proj-list-card" onClick={() => goToProject(p.id)}>
+                  <div className="proj-list-card-accent" />
+                  <div className="proj-list-card-body">
+                    <div className="proj-list-card-info">
+                      <span className="proj-list-card-title">{p.name}</span>
+                      <span className="proj-list-card-meta">{p.company}  ·  {p.status === 'active' ? 'Activo' : 'Cerrado'}  ·  {cCnt} candidata{cCnt !== 1 ? 's' : ''}</span>
+                      <span className="proj-list-card-stats">{tCnt} transcrita{tCnt !== 1 ? 's' : ''}  ·  {iCnt} grabacion{iCnt !== 1 ? 'es' : ''}</span>
+                    </div>
+                    <span className={`proj-list-card-badge${p.status === 'active' ? ' proj-list-card-badge--active' : ' proj-list-card-badge--closed'}`}>
+                      {p.status === 'active' ? '● Activo' : '■ Cerrado'}
+                    </span>
+                    <div className="proj-list-card-actions">
+                      <button type="button" className="proj-list-card-btn" onClick={e => { e.stopPropagation(); goToProject(p.id) }}>Abrir →</button>
+                      <button
+                        type="button"
+                        className={`plc-status-btn${p.status === 'closed' ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`}
+                        onClick={e => { e.stopPropagation(); updateProject(p.id, { status: p.status === 'closed' ? 'active' : 'closed' }) }}
+                      >{p.status === 'closed' ? 'Reabrir' : 'Cerrar'}</button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {isFiltered && filteredProjects.length > 0 && projectSearchQuery.trim() && (
+          <p className="proj-no-more">No hay más proyectos con '{projectSearchQuery}'</p>
+        )}
+      </div>
+    )
+  }
+
+  const renderProjectDetail = () => {
+    if (!activeProject) return null
+    const iCount = interviews.filter(i => projectCandidates.find(c => c.id === i.candidateId)).length
+    const tCount = interviews.filter(i => projectCandidates.find(c => c.id === i.candidateId) && i.transcriptionStatus === 'done').length
+    return (
+      <div className="screen-content">
+        {/* Project header card */}
+        <div className="proj-header-card">
+          <div className="proj-header-accent" />
+          <div className="proj-header-body">
+            <div className="proj-header-info">
+              <h2 className="proj-header-title">{activeProject.name}</h2>
+              <p className="proj-header-sub">{activeProject.company} · Creado {fmtShort(activeProject.createdAt)}</p>
+            </div>
+            <div className="proj-header-stats">
+              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">candidatas</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">entrevistas</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{tCount}</span><span className="proj-stat-l">transcritas</span></div>
+            </div>
+            <div className="proj-header-actions">
+              <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
+            </div>
+          </div>
+        </div>
+
+        {/* Section header */}
+        <div className="proj-section-header">
+          <h3 className="proj-section-title">Candidatas del proceso</h3>
+          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nueva candidata</button>
+        </div>
+
+        {/* Search */}
+        <div className="search-bar">
+          <span className="search-icon"><SearchIcon /></span>
+          <input type="text" placeholder="Buscar por nombre, email o puesto..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}>✕</button>}
+        </div>
+
+        {filteredCandidates.length === 0 ? (
+          searchQuery
+            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay candidatas que coincidan con "{searchQuery}"</p></div>
+            : <div className="empty-state">
+                <div className="es-circle"><span className="es-icon">◎</span></div>
+                <h3 className="es-title">No hay candidatas en este proyecto</h3>
+                <p className="es-sub">Añade tu primera candidata para empezar a grabar y transcribir entrevistas</p>
+                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nueva candidata</button>
+              </div>
+        ) : (
+          <div className="pdc-list">
+            {filteredCandidates.map(c => {
+              const ci = interviews.filter(i => i.candidateId === c.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+              const last = ci[0]
+              const hasDone = ci.some(i => i.transcriptionStatus === 'done')
+              const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
+              const statusInfo: [string, string] = last
+                ? hasDone ? ['● Transcrita', 'pdc-badge--done'] : hasPending ? ['● Pendiente', 'pdc-badge--pending'] : ['● Sin transcripción', 'pdc-badge--pending']
+                : ['○ Sin entrevista', 'pdc-badge--none']
+              return (
+                <div key={c.id} className="pdc-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
+                  <div className="pdc-row-accent" />
+                  <div className="pdc-row-body">
+                    <div className="pdc-row-info">
+                      <span className="pdc-row-name">{c.name}</span>
+                      <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fmtShort(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
+                    </div>
+                    <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
+                    <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
+                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}</button>
+                      <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>Ver entrevistas</button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderCandidates = () => {
+    const allCandidates = candidates.filter(c => {
+      if (!searchQuery.trim()) return true
+      const q = searchQuery.toLowerCase()
+      return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.role.toLowerCase().includes(q)
+    })
+    return (
+      <div className="screen-content">
+        <div className="content-header">
+          <div><h2>Candidatas</h2><p className="screen-sub">{candidates.length} candidata{candidates.length !== 1 ? 's' : ''}</p></div>
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
           <input type="text" placeholder="Buscar por nombre, email o puesto..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}>✕</button>}
         </div>
-        {filteredCandidates.length === 0 ? (
-          searchQuery ? (
-            <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay candidatas que coincidan con "{searchQuery}"</p></div>
-          ) : (
-            <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin candidatas</h3><p>Añade candidatas a este proyecto.</p><button type="button" className="primary-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Añadir candidata</button></div>
-          )
+        {allCandidates.length === 0 ? (
+          searchQuery
+            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay candidatas que coincidan con "{searchQuery}"</p></div>
+            : <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin candidatas</h3><p>Las candidatas aparecerán aquí cuando las añadas a un proyecto.</p></div>
         ) : (
           <div className="candidates-table">
-            {filteredCandidates.map(c => {
+            {allCandidates.map(c => {
+              const project = projects.find(p => p.id === c.projectId)
               const ci = interviews.filter(i => i.candidateId === c.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
               const last = ci[0]
               const hasDone = ci.some(i => i.transcriptionStatus === 'done')
@@ -645,9 +905,12 @@ function App() {
                 ? hasDone ? ['● Transcrita', 'status-done'] : hasPending ? ['● Pendiente', 'status-pending'] : ['● Sin transcripción', 'status-pending']
                 : ['○ Sin entrevista', 'status-none']
               return (
-                <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, activeProject.id)}>
+                <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId)}>
                   <div className="ctr-avatar">{initials(c.name)}</div>
-                  <div className="ctr-info"><span className="ctr-name">{c.name}</span><span className="ctr-meta">{c.email}{last ? ` · Última: ${fmtShort(last.createdAt)}` : ''}</span></div>
+                  <div className="ctr-info">
+                    <span className="ctr-name">{c.name}</span>
+                    <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fmtShort(last.createdAt)}` : ''}</span>
+                  </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
@@ -666,20 +929,48 @@ function App() {
 
   const renderCandidateDetail = () => {
     if (!activeCandidate) return null
+    const totalDuration = candidateInterviews.reduce((a, i) => a + i.durationSec, 0)
+    const transcribedCount = candidateInterviews.filter(i => i.transcriptionStatus === 'done').length
+    const hasError = candidateInterviews.some(i => i.transcriptionStatus === 'error')
+    const subtitleParts = [activeCandidate.email, activeCandidate.role, activeProject?.name].filter(Boolean)
     return (
       <div className="screen-content screen-candidate">
-        <div className="cdh">
-          <div className="cdh-avatar">{initials(activeCandidate.name)}</div>
-          <div className="cdh-info"><h2>{activeCandidate.name}</h2><p>{activeCandidate.role}{activeCandidate.email ? ` · ${activeCandidate.email}` : ''}</p></div>
-          <div className="cdh-actions">
-            <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
-            <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+        <div className="cand-header-card">
+          <div className="cand-header-accent" />
+          <div className="cand-header-body">
+            <div className="cand-header-main">
+              <h2 className="cand-header-name">{activeCandidate.name}</h2>
+              {subtitleParts.length > 0 && <p className="cand-header-sub">{subtitleParts.join('  ·  ')}</p>}
+            </div>
+            <div className="cand-header-stats">
+              <div className="cand-hstat">
+                <span className="cand-hstat-n">{candidateInterviews.length}</span>
+                <span className="cand-hstat-l">grabaciones</span>
+              </div>
+              <div className="cand-hstat">
+                <span className="cand-hstat-n">{transcribedCount}</span>
+                <span className="cand-hstat-l">transcritas</span>
+              </div>
+              <div className="cand-hstat">
+                <span className="cand-hstat-n cand-hstat-n--sm">{fmt(totalDuration)}</span>
+                <span className="cand-hstat-l">duración total</span>
+              </div>
+            </div>
+            <div className="cand-header-right">
+              <span className={`cand-status-badge${hasError ? ' cand-status-badge--error' : transcribedCount > 0 ? ' cand-status-badge--done' : ''}`}>
+                {hasError ? '● Error' : transcribedCount > 0 ? '● Transcrita' : '○ Pendiente'}
+              </span>
+              <div className="cand-header-actions">
+                <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
+                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="profile-tabs">
-          {(['entrevistas', 'transcripcion', 'resumen'] as ProfileTab[]).map(tab => (
-            <button key={tab} type="button" className={activeTab === tab ? 'is-active' : ''} onClick={() => setActiveTab(tab)}>
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+        <div className="profile-tabs-pill">
+          {([['entrevistas', '🎙 Entrevistas'], ['transcripcion', '📝 Transcripción'], ['resumen', '✨ Resumen IA']] as [ProfileTab, string][]).map(([tab, label]) => (
+            <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => setActiveTab(tab)}>
+              {label}
             </button>
           ))}
         </div>
@@ -691,337 +982,536 @@ function App() {
   }
 
   const renderInterviewsTab = () => (
-    <div className="tab-content">
-      <div className="tab-section-header">
-        <h3>Sesión de entrevista</h3>
-        <button type="button" className="primary-btn btn-icon-left" onClick={handleCreateInterview}><PlusIcon /> Nueva entrevista</button>
-      </div>
-      {selectedInterview ? (
-        <div className="recording-panel">
-          <p className="interview-time">Creada: {fmtDate(selectedInterview.createdAt)}</p>
-          <div className="controls-row">
-            <button type="button" className={`btn-record${selectedInterview.status === 'recording' ? ' is-recording' : ''}`} onClick={() => selectedInterview.status === 'paused' ? handleResumeRecording() : void handleStartRecording()} disabled={selectedInterview.status === 'recording'}>
-              {selectedInterview.status === 'paused' ? 'Reanudar' : 'Grabar'}
-            </button>
-            <button type="button" className="btn-control" onClick={handlePauseRecording} disabled={selectedInterview.status !== 'recording'}>Pausar</button>
-            <button type="button" className="btn-control" onClick={handleStopRecording} disabled={selectedInterview.status === 'idle' || selectedInterview.status === 'stopped'}>Parar</button>
-            <span className="timer">{fmt(selectedInterview.durationSec)}</span>
-          </div>
-          <div className="device-grid">
-            <label>Micrófono<select value={selectedInterview.micDeviceId} onChange={e => updateInterview(selectedInterview.id, { micDeviceId: e.target.value })}>{micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
-            <label>Salida<select value={selectedInterview.outputDeviceId} onChange={e => updateInterview(selectedInterview.id, { outputDeviceId: e.target.value })}>{outputDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
-          </div>
-          {recordingMessage && <p className="recording-message">{recordingMessage}</p>}
-          {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcribiendo...</span></div>}
-          {selectedInterview.transcriptionStatus === 'error' && <p className="error-note">Error al transcribir. Ve a Transcripción para reintentar.</p>}
+    <div className="interviews-tab">
+      {!groqApiKey && (
+        <div className="warning-note" style={{ marginBottom: 12 }}>
+          ⚠ Sin API key de Groq — la transcripción no funcionará. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora →</button>
         </div>
-      ) : <p className="tab-note">Pulsa "Nueva entrevista" para empezar.</p>}
-      <div className="interviews-list">
-        <p className="section-label">Historial de entrevistas</p>
-        {candidateInterviews.length === 0 ? <p className="tab-note">Aún no hay entrevistas.</p> : (
-          <ul>
-            {candidateInterviews.map(iv => (
-              <li key={iv.id} className="history-row">
-                {editingInterviewId === iv.id ? (
-                  <>
-                    <input type="text" className="history-edit-input" value={editingNameDraft} onChange={e => setEditingNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) } if (e.key === 'Escape') setEditingInterviewId(null) }} autoFocus />
-                    <button type="button" className="btn-icon btn-icon--confirm" onClick={() => { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) }}><CheckIcon /></button>
-                    <button type="button" className="btn-icon" onClick={() => setEditingInterviewId(null)}>✕</button>
-                  </>
-                ) : (
-                  <>
-                    <button type="button" className={`history-item${iv.id === selectedInterviewId ? ' is-selected' : ''}`} onClick={() => setSelectedInterviewId(iv.id)}>
-                      <span className="history-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
-                      {(iv.recordingFilePath ?? iv.recordingUrl) && (<>
-                        <span className="playback-timer">{playingInterviewId === iv.id ? fmt(Math.floor(playbackCurrentTime)) : fmt(iv.durationSec)}</span>
-                        <div className="speed-bar-group">
-                          <button type="button" className="btn-speed" onClick={handleCycleSpeed}>x{playbackRate}</button>
-                          <div className="playback-bar" onMouseDown={e => handleBarMouseDown(e, iv)}>
-                            <div className="playback-bar-fill" style={{ width: playingInterviewId === iv.id ? `${playbackProgress * 100}%` : '0%' }} />
-                            {playingInterviewId === iv.id && <div className="playback-bar-thumb" style={{ left: `${playbackProgress * 100}%` }} />}
-                          </div>
-                        </div>
-                      </>)}
-                    </button>
-                    {(iv.recordingUrl ?? iv.recordingFilePath) && <button type="button" className="btn-icon" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>}
-                    <button type="button" className="btn-icon" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fmtDate(iv.createdAt)) }}><PencilIcon /></button>
-                    <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? '¿Confirmar eliminación?' : 'Eliminar entrevista'} onClick={() => handleDeleteInterview(iv.id)}>
-                      {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}
-                    </button>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+      )}
+      <div className="rec-section-header">
+        <h3 className="rec-section-title">Grabaciones</h3>
+        <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}>🎙 Nueva grabación</button>
       </div>
+      {candidateInterviews.length === 0 ? (
+        <div className="rec-empty-card">
+          <div className="rec-empty-icon-wrap"><span className="rec-empty-icon">🎙</span></div>
+          <h3 className="rec-empty-title">No hay grabaciones todavía</h3>
+          <p className="rec-empty-sub">Graba la primera entrevista con {activeCandidate?.name ?? 'la candidata'} para empezar</p>
+          <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}>🎙 Nueva grabación</button>
+        </div>
+      ) : (
+        <div className="rec-rows">
+          {candidateInterviews.map(iv => {
+            const isDone = iv.transcriptionStatus === 'done'
+            const isError = iv.transcriptionStatus === 'error'
+            const isTranscribing = iv.transcriptionStatus === 'transcribing'
+            return (
+              <div key={iv.id} className="rec-row">
+                <div className="rec-row-accent" />
+                <div className="rec-row-info">
+                  <div className="rec-row-top">
+                    {editingInterviewId === iv.id ? (
+                      <div className="rec-row-edit-wrap" onClick={e => e.stopPropagation()}>
+                        <input type="text" className="rec-row-edit-input" value={editingNameDraft} onChange={e => setEditingNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) } if (e.key === 'Escape') setEditingInterviewId(null) }} autoFocus />
+                        <button type="button" className="btn-icon btn-icon--confirm" onClick={() => { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) }}><CheckIcon /></button>
+                        <button type="button" className="btn-icon" onClick={() => setEditingInterviewId(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <span className="rec-row-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
+                    )}
+                  </div>
+                  <span className="rec-row-meta">{fmtShort(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}</span>
+                </div>
+                <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
+                  {isDone ? '✓ Transcrita' : isError ? '⚠ Error' : isTranscribing ? '↻ Transcribiendo' : '⏳ Pendiente'}
+                </span>
+                <div className="rec-row-actions" onClick={e => e.stopPropagation()}>
+                  {(iv.recordingUrl ?? iv.recordingFilePath) && (
+                    <button type="button" className="btn-icon" title="Reproducir" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                  )}
+                  <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fmtDate(iv.createdAt)) }}><PencilIcon /></button>
+                  <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? '¿Confirmar?' : 'Eliminar'} onClick={() => handleDeleteInterview(iv.id)}>
+                    {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}
+                  </button>
+                </div>
+                {isDone ? (
+                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={() => { setSelectedTranscriptInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
+                ) : iv.recordingFilePath && !isTranscribing ? (
+                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={() => void handleTranscribe(iv.id)}>{isError ? '↺ Reintentar' : '▶ Transcribir'}</button>
+                ) : isTranscribing ? (
+                  <div className="rec-row-spinner"><span className="spinner" /></div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 
-  const renderTranscriptTab = () => (
-    <div className="tab-content">
-      <div className="transcript-layout">
-        <aside className="transcript-list">
-          <p className="section-label">Entrevistas</p>
-          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : (
-            <ul>{candidateInterviews.map(iv => (
-              <li key={iv.id} className="history-row">
-                <button type="button" className={`history-item${iv.id === selectedTranscriptInterviewId ? ' is-selected' : ''}`} onClick={() => setSelectedTranscriptInterviewId(iv.id)}><span className="history-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span></button>
-                {(iv.recordingUrl ?? iv.recordingFilePath) && <button type="button" className="btn-icon" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>}
-              </li>
-            ))}</ul>
-          )}
+  const renderTranscriptTab = () => {
+    const wordCount = transcriptDraft.trim() ? transcriptDraft.trim().split(/\s+/).length : 0
+    const readingMin = Math.ceil(wordCount / 150)
+    return (
+      <div className="transcript-layout-v2">
+        <aside className="trx-list-panel">
+          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
+            const hasDone = iv.transcriptionStatus === 'done'
+            const isSelected = iv.id === selectedTranscriptInterviewId
+            return (
+              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedTranscriptInterviewId(iv.id)}>
+                <div className="trx-list-item-info">
+                  <span className="trx-list-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
+                  <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
+                </div>
+                <div className="trx-list-item-bottom">
+                  <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? '● Transcrita' : '○ Pendiente'}</span>
+                  {iv.recordingFilePath && !hasDone && (
+                    <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>Transcribir</button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </aside>
-        <div className="transcript-editor">
-          <p className="section-label">Transcripción editable</p>
+        <div className="trx-separator" />
+        <div className="trx-editor-panel">
           {selectedTranscriptInterview ? (
             <>
+              <div className="trx-toolbar">
+                <div className="trx-search"><SearchIcon /><input type="text" placeholder="Buscar en transcripción..." /></div>
+                <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}>📋 Copiar todo</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedTranscriptInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}>📤 Descargar .txt</button>
+              </div>
               {selectedTranscriptInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso...</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedTranscriptInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
-              {selectedTranscriptInterview.transcriptionStatus === 'error' && <div className="error-block"><p className="error-note">Error al transcribir.</p><button type="button" className="secondary-btn" onClick={() => void handleTranscribe(selectedTranscriptInterview.id)}>Reintentar</button></div>}
-              {selectedTranscriptInterview.transcriptionStatus !== 'transcribing' && (
-                <>
-                  {!selectedTranscriptInterview.transcriptEdited && <p className="tab-note empty-transcript">Sin transcripción — graba y transcribe esta entrevista para ver el texto aquí.</p>}
-                  <textarea value={transcriptDraft} onChange={e => setTranscriptDraft(e.target.value)} rows={12} placeholder="La transcripción aparecerá aquí..." />
-                  <div className="editor-actions">
-                    <button type="button" className="primary-btn" onClick={() => { updateInterview(selectedTranscriptInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
-                    <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}>Copiar</button>
-                    <button type="button" onClick={() => setTranscriptDraft(selectedTranscriptInterview.transcriptOriginal)}>Restaurar original</button>
-                    {selectedTranscriptInterview.recordingFilePath && <button type="button" className="primary-btn" onClick={() => void handleTranscribe(selectedTranscriptInterview.id)}>Transcribir</button>}
+              {selectedTranscriptInterview.transcriptionStatus === 'error' && (
+                <div className="trx-error-card">
+                  <div className="trx-error-accent" />
+                  <div className="trx-error-body">
+                    <div className="trx-error-icon-wrap"><span className="trx-error-icon">⚠</span></div>
+                    <h3 className="trx-error-title">Error al transcribir</h3>
+                    <p className="trx-error-sub1">No se pudo completar la transcripción.</p>
+                    <p className="trx-error-sub2">Verifica tu clave API de Groq o inténtalo de nuevo.</p>
+                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedTranscriptInterview.id)}>↺  Reintentar</button>
+                    <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}>← Volver a grabaciones</button>
                   </div>
-                </>
+                </div>
               )}
+              {selectedTranscriptInterview.transcriptionStatus !== 'transcribing' && (
+                !selectedTranscriptInterview.transcriptEdited ? (
+                  <div className="trx-pending-state">
+                    <div className="trx-pending-icon">⊙</div>
+                    <p className="trx-pending-title">Esta grabación aún no ha sido transcrita</p>
+                    <p className="trx-pending-sub">Pulsa "Transcribir" en el panel izquierdo para procesarla con Whisper.</p>
+                  </div>
+                ) : (
+                  <textarea className="trx-textarea" value={transcriptDraft} onChange={e => setTranscriptDraft(e.target.value)} placeholder="La transcripción aparecerá aquí..." />
+                )
+              )}
+              <div className="trx-footer">
+                <span className="trx-footer-info">✏️ Haz clic para editar · {wordCount} palabras · {readingMin} min</span>
+                <div className="trx-footer-actions">
+                  <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedTranscriptInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
+                  <button type="button" className="trx-footer-btn" onClick={() => setTranscriptDraft(selectedTranscriptInterview.transcriptOriginal)}>Restaurar original</button>
+                </div>
+              </div>
             </>
           ) : <p className="tab-note">Selecciona una entrevista para editar su transcripción.</p>}
         </div>
       </div>
-    </div>
-  )
+    )
+  }
 
-  const renderSummaryTab = () => (
-    <div className="tab-content">
-      <div className="transcript-layout">
-        <aside className="transcript-list">
-          <p className="section-label">Entrevistas</p>
-          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : (
-            <ul>{candidateInterviews.map(iv => (
-              <li key={iv.id} className="history-row">
-                <button type="button" className={`history-item${iv.id === selectedSummaryInterviewId ? ' is-selected' : ''}`} onClick={() => setSelectedSummaryInterviewId(iv.id)}><span className="history-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span></button>
-                {(iv.recordingUrl ?? iv.recordingFilePath) && <button type="button" className="btn-icon" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>}
-              </li>
-            ))}</ul>
-          )}
+  const renderSummaryTab = () => {
+    const SECTION_COLORS: [string, string][] = [['perfil', '#2563eb'], ['general', '#2563eb'], ['fuertes', '#1ab273'], ['mejora', '#f2991a'], ['áreas', '#f2991a'], ['areas', '#f2991a'], ['recomend', '#2563eb']]
+    const getSectionColor = (title: string) => { const l = title.toLowerCase(); for (const [k, c] of SECTION_COLORS) { if (l.includes(k)) return c }; return '#2563eb' }
+    const parseSections = (text: string) => {
+      const lines = text.split('\n')
+      const sections: { title: string; content: string; color: string }[] = []
+      let cur: { title: string; lines: string[]; color: string } | null = null
+      for (const line of lines) {
+        const isHeading = line.match(/^#{1,3}\s+/) || (line.match(/^\*\*.+\*\*$/) && line.trim().length < 60)
+        if (isHeading) {
+          if (cur) sections.push({ title: cur.title, content: cur.lines.join('\n').trim(), color: cur.color })
+          const title = line.replace(/^#+\s*/, '').replace(/\*\*/g, '').trim()
+          cur = { title, lines: [], color: getSectionColor(title) }
+        } else if (cur) { cur.lines.push(line) } else if (line.trim()) { cur = { title: '', lines: [line], color: '#2563eb' } }
+      }
+      if (cur) sections.push({ title: cur.title, content: cur.lines.join('\n').trim(), color: cur.color })
+      return sections.filter(s => s.title || s.content)
+    }
+    const summarySections = selectedSummaryInterview?.summaryText ? parseSections(selectedSummaryInterview.summaryText) : []
+    return (
+      <div className="transcript-layout-v2">
+        <aside className="trx-list-panel">
+          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
+            const hasSummary = iv.summaryStatus === 'done' || !!iv.summaryText
+            const isSelected = iv.id === selectedSummaryInterviewId
+            return (
+              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedSummaryInterviewId(iv.id)}>
+                <div className="trx-list-item-info">
+                  <span className="trx-list-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
+                  <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
+                </div>
+                <div className="trx-list-item-bottom">
+                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '✨ Con resumen' : '○ Sin resumen'}</span>
+                </div>
+              </div>
+            )
+          })}
         </aside>
-        <div className="transcript-editor">
-          <div className="summary-header">
-            <p className="section-label">Resumen con IA</p>
-            {selectedSummaryInterview && <select className="summary-type-select" value={selectedSummaryInterview.summaryType} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}><option value="resumen">Resumen explicativo</option><option value="listado">Listado por puntos</option></select>}
-          </div>
+        <div className="trx-separator" />
+        <div className="trx-editor-panel">
           {selectedSummaryInterview ? (
             <>
+              <div className="trx-toolbar">
+                <select className={`sum-type-select${selectedSummaryInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`} value={selectedSummaryInterview.summaryType} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}>
+                  <option value="resumen">Resumen descriptivo ⌄</option>
+                  <option value="listado">Listado por puntos ⌄</option>
+                </select>
+                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedSummaryInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedSummaryInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey || selectedSummaryInterview.transcriptionStatus !== 'done' || selectedSummaryInterview.summaryStatus === 'generating'}>✦ Regenerar</button>
+              </div>
               {!groqApiKey && <p className="warning-note">Configura tu API key de Groq en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
               {selectedSummaryInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
-              <div className="summary-instructions">
-                <label><span>{selectedSummaryInterview.summaryType === 'listado' ? '¿Qué secciones quieres?' : 'Contexto adicional (opcional)'}</span>
-                  <textarea value={selectedSummaryInterview.summaryInstructions} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryInstructions: e.target.value })} rows={selectedSummaryInterview.summaryType === 'listado' ? 4 : 2} placeholder={selectedSummaryInterview.summaryType === 'listado' ? 'Ej: Trayectoria, Habilidades, Pretensiones salariales' : 'Ej: Candidata para puesto administrativo'} />
-                </label>
+              {selectedSummaryInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
+              {selectedSummaryInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
+              <div className="sum-instructions">
+                <textarea value={selectedSummaryInterview.summaryInstructions} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryInstructions: e.target.value })} rows={2} placeholder={selectedSummaryInterview.summaryType === 'listado' ? 'Ej: Trayectoria, Habilidades, Pretensiones salariales' : 'Ej: Candidata para puesto administrativo'} />
               </div>
-              <div className="editor-actions">
-                <button type="button" className="primary-btn" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey || selectedSummaryInterview.transcriptionStatus !== 'done' || selectedSummaryInterview.summaryStatus === 'generating'}>Generar resumen</button>
-                <button type="button" className={`btn-copy${selectedSummaryInterview.summaryText ? ' btn-copy--filled' : ''}`} disabled={!selectedSummaryInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedSummaryInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>Copiar</button>
-                {selectedSummaryInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando...</span></div>}
-                {selectedSummaryInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
-              </div>
-              {(selectedSummaryInterview.summaryStatus === 'done' || selectedSummaryInterview.summaryText) && <div className="summary-result"><textarea value={selectedSummaryInterview.summaryText} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryText: e.target.value })} rows={10} /></div>}
+              {selectedSummaryInterview.summaryText ? (
+                selectedSummaryInterview.summaryType === 'resumen' ? (
+                  <div className="sum-prose-card">
+                    <p className="sum-prose-text">{selectedSummaryInterview.summaryText}</p>
+                  </div>
+                ) : summarySections.length > 1 ? (
+                  <div className="sum-sections">
+                    {summarySections.map((sec, i) => (
+                      <div key={i} className="sum-section" style={{ borderLeftColor: sec.color }}>
+                        {sec.title && <h4 className="sum-section-title" style={{ color: sec.color }}>{sec.title}</h4>}
+                        <div className="sum-section-content">{sec.content.split('\n').map((line, j) => line.trim() ? <p key={j}>{line}</p> : null)}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="summary-result"><textarea value={selectedSummaryInterview.summaryText} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryText: e.target.value })} rows={10} /></div>
+                )
+              ) : (
+                selectedSummaryInterview.transcriptionStatus === 'done' && selectedSummaryInterview.summaryStatus !== 'generating' && (
+                  <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey}>
+                    ✦ Generar resumen con IA
+                  </button>
+                )
+              )}
             </>
           ) : <p className="tab-note">Selecciona una entrevista para generar su resumen.</p>}
         </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   const renderSettings = () => (
     <div className="screen-content">
       <div className="content-header"><h2>Configuración</h2></div>
-      <div className="settings-tabs">
-        <button type="button" className={settingsTab === 'general' ? 'is-active' : ''} onClick={() => setSettingsTab('general')}>General</button>
-        <button type="button" className={settingsTab === 'grabacion' ? 'is-active' : ''} onClick={() => setSettingsTab('grabacion')}>Grabación</button>
+      <div className="settings-layout">
+        <aside className="settings-nav">
+          {([
+            ['api-keys', <KeyIcon />, 'API Keys'],
+            ['grabacion', <MicIcon />, 'Grabación'],
+            ['general', <SettingsIcon />, 'General'],
+          ] as [SettingsTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
+            <button key={tab} type="button" className={`settings-nav-item${settingsTab === tab ? ' is-active' : ''}`} onClick={() => setSettingsTab(tab)}>
+              <span className="settings-nav-icon">{icon}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </aside>
+        <div className="settings-panel">
+          {settingsTab === 'api-keys' && (
+            <div className="settings-sections">
+              <div className="settings-section">
+                <div className="settings-section-title">API Key de Groq</div>
+                <div className="settings-section-divider" />
+                <p className="modal-link-note">Groq es gratuita — <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a></p>
+                <label className="modal-label">API Key<input type="password" className="modal-input" value={settingsKeyDraft} onChange={e => setSettingsKeyDraft(e.target.value)} placeholder="gsk_..." /></label>
+              </div>
+              <div className="settings-section">
+                <div className="settings-section-title">Modelos IA</div>
+                <div className="settings-section-divider" />
+                <label className="modal-label">Transcripción (Whisper)
+                  <select className="modal-input modal-select" value={settingsTxModelDraft} onChange={e => setSettingsTxModelDraft(e.target.value)}>
+                    <option value="whisper-large-v3">whisper-large-v3 — Mayor precisión</option>
+                    <option value="whisper-large-v3-turbo">whisper-large-v3-turbo — Rápido y preciso</option>
+                    <option value="distil-whisper-large-v3-en">distil-whisper-large-v3-en — Solo inglés</option>
+                  </select>
+                </label>
+                <label className="modal-label">Resumen IA (LLM)
+                  <select className="modal-input modal-select" value={settingsSumModelDraft} onChange={e => setSettingsSumModelDraft(e.target.value)}>
+                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile — Más capaz</option>
+                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant — Más rápido</option>
+                    <option value="gemma2-9b-it">gemma2-9b-it — Alternativa</option>
+                  </select>
+                </label>
+              </div>
+              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+            </div>
+          )}
+          {settingsTab === 'grabacion' && (
+            <>
+              <div className="panel-header">
+                <h2 className="panel-title">Grabación</h2>
+              </div>
+              <div className="panel-header-divider" />
+              <div className="settings-sections">
+                <div className="settings-section">
+                  <div className="settings-section-label">FORMATO DE AUDIO</div>
+                  <div className="settings-section-divider" />
+                  <p className="cfg-field-desc">Elige el formato en que se guardan las grabaciones</p>
+                  <div className="cfg-format-toggle">
+                    <button type="button" className={`cfg-fmt-btn${settingsAudioFormatDraft === 'mp3' ? ' is-active' : ''}`} onClick={() => setSettingsAudioFormatDraft('mp3')}>MP3</button>
+                    <button type="button" className={`cfg-fmt-btn${settingsAudioFormatDraft === 'wav' ? ' is-active' : ''}`} onClick={() => setSettingsAudioFormatDraft('wav')}>WAV</button>
+                  </div>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">DURACIÓN DE FRAGMENTO (SEG)</div>
+                  <div className="settings-section-divider" />
+                  <input type="number" className="cfg-input" value={settingsChunkDurationDraft} onChange={e => setSettingsChunkDurationDraft(Number(e.target.value))} min={5} max={300} />
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">CALIDAD DE GRABACIÓN</div>
+                  <div className="settings-section-divider" />
+                  <select className="cfg-select" value={settingsRecordingQualityDraft} onChange={e => setSettingsRecordingQualityDraft(e.target.value)}>
+                    <option value="high">Alta (128 kbps)</option>
+                    <option value="medium">Media (64 kbps)</option>
+                    <option value="low">Baja (32 kbps)</option>
+                  </select>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">COMPORTAMIENTO</div>
+                  <div className="settings-section-divider" />
+                  <div className="toggle-row">
+                    <div><span className="toggle-label">Transcripción automática</span><span className="notif-sub">Transcribir automáticamente al terminar cada grabación</span></div>
+                    <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(t => !t)}><span className="toggle-circle" /></button>
+                  </div>
+                </div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+              </div>
+            </>
+          )}
+          {settingsTab === 'general' && (
+            <>
+              <div className="panel-header">
+                <h2 className="panel-title">General</h2>
+              </div>
+              <div className="panel-header-divider" />
+              <div className="settings-sections">
+                <div className="settings-section">
+                  <div className="settings-section-label">IDIOMA DE LA INTERFAZ</div>
+                  <div className="settings-section-divider" />
+                  <select className="cfg-select" value={settingsLanguageDraft} onChange={e => setSettingsLanguageDraft(e.target.value)}>
+                    <option value="es">Español</option>
+                    <option value="en">English</option>
+                    <option value="fr">Français</option>
+                  </select>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">GUARDADO AUTOMÁTICO</div>
+                  <div className="settings-section-divider" />
+                  <div className="toggle-row">
+                    <div><span className="toggle-label">Guardado automático</span><span className="notif-sub">Guarda los cambios automáticamente al cerrar</span></div>
+                    <button type="button" className={`toggle-btn${settingsAutoSaveDraft ? ' on' : ''}`} onClick={() => setSettingsAutoSaveDraft(t => !t)}><span className="toggle-circle" /></button>
+                  </div>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">FORMATO DE FECHA</div>
+                  <div className="settings-section-divider" />
+                  <select className="cfg-select" value={settingsDateFormatDraft} onChange={e => setSettingsDateFormatDraft(e.target.value)}>
+                    <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                    <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                    <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  </select>
+                </div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      {settingsTab === 'general' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="settings-section-title">API Key</div>
-            <p className="modal-link-note">Groq es gratuita — <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a></p>
-            <label className="modal-label">API Key de Groq<input type="password" className="modal-input" value={settingsKeyDraft} onChange={e => setSettingsKeyDraft(e.target.value)} placeholder="gsk_..." /></label>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Cuenta</div>
-            <label className="modal-label">Nombre<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder="Tu nombre" /></label>
-            <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder="tu@email.com" /></label>
-            <label className="modal-label">Empresa<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder="Nombre de la empresa" /></label>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Modelos IA</div>
-            <label className="modal-label">Transcripción (Whisper)
-              <select className="modal-input modal-select" value={settingsTxModelDraft} onChange={e => setSettingsTxModelDraft(e.target.value)}>
-                <option value="whisper-large-v3">whisper-large-v3 — Mayor precisión</option>
-                <option value="whisper-large-v3-turbo">whisper-large-v3-turbo — Rápido y preciso</option>
-                <option value="distil-whisper-large-v3-en">distil-whisper-large-v3-en — Solo inglés</option>
-              </select>
-            </label>
-            <label className="modal-label">Resumen IA (LLM)
-              <select className="modal-input modal-select" value={settingsSumModelDraft} onChange={e => setSettingsSumModelDraft(e.target.value)}>
-                <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile — Más capaz</option>
-                <option value="llama-3.1-8b-instant">llama-3.1-8b-instant — Más rápido</option>
-                <option value="gemma2-9b-it">gemma2-9b-it — Alternativa</option>
-              </select>
-            </label>
-          </div>
-          <div className="settings-save"><button type="button" className="primary-btn" onClick={() => void handleSaveSettings()}>Guardar configuración</button></div>
-        </div>
-      )}
-      {settingsTab === 'grabacion' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="settings-section-title">Comportamiento</div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Transcripción automática</span><span className="toggle-desc">Transcribir automáticamente al terminar cada grabación</span></div>
-              <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Notificaciones</div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Transcripción completada</span></div>
-              <button type="button" className={`toggle-btn${notifTranscription ? ' on' : ''}`} onClick={() => setNotifTranscription(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Resumen generado</span></div>
-              <button type="button" className={`toggle-btn${notifSummary ? ' on' : ''}`} onClick={() => setNotifSummary(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Errores</span></div>
-              <button type="button" className={`toggle-btn${notifErrors ? ' on' : ''}`} onClick={() => setNotifErrors(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Dispositivos</div>
-            <label className="modal-label">Micrófono preferido
-              <select className="modal-input">{micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
-            </label>
-            <p className="device-help">La app intentará capturar audio del sistema (loopback). Si no está disponible, grabará solo el micrófono.</p>
-          </div>
-        </div>
-      )}
     </div>
   )
 
   const renderProfile = () => (
     <div className="screen-content">
       <div className="content-header"><h2>Mi Perfil</h2></div>
-      <div className="profile-screen-tabs">
-        {(['perfil', 'plan', 'seguridad', 'notif'] as ProfileScreenTab[]).map(t => (
-          <button key={t} type="button" className={profileScreenTab === t ? 'is-active' : ''} onClick={() => setProfileScreenTab(t)}>
-            {t === 'perfil' ? 'Perfil' : t === 'plan' ? 'Plan & Uso' : t === 'seguridad' ? 'Seguridad' : 'Notificaciones'}
-          </button>
-        ))}
+      <div className="settings-layout">
+        <aside className="settings-nav">
+          {([
+            ['perfil', <UserIcon />, 'Perfil'],
+            ['plan', <StarIcon />, 'Plan & Uso'],
+            ['seguridad', <LockIcon />, 'Seguridad'],
+            ['notif', <BellIcon />, 'Notificaciones'],
+          ] as [ProfileScreenTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
+            <button key={tab} type="button" className={`settings-nav-item${profileScreenTab === tab ? ' is-active' : ''}`} onClick={() => setProfileScreenTab(tab)}>
+              <span className="settings-nav-icon">{icon}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </aside>
+        <div className="settings-panel">
+          {profileScreenTab === 'perfil' && (
+            <div className="settings-sections">
+              <div className="settings-section">
+                <div className="prof-avatar-row">
+                  <div className="prof-avatar-circle" onClick={() => photoInputRef.current?.click()} style={{ background: userPhoto ? 'transparent' : undefined, overflow: 'hidden' }}>
+                    {userPhoto ? <img src={userPhoto} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%', display: 'block' }} /> : userInitials}
+                    <div className="prof-avatar-overlay">📷</div>
+                  </div>
+                  <div className="prof-avatar-info">
+                    <p className="prof-avatar-name">{userName || 'Sin nombre'}</p>
+                    <p className="prof-avatar-email">{userEmail || 'Sin email'}</p>
+                    <button type="button" className="prof-avatar-link" onClick={() => photoInputRef.current?.click()}>Cambiar foto →</button>
+                    {userPhoto && <button type="button" className="prof-avatar-remove" onClick={() => { setUserPhoto(''); localStorage.removeItem('ct-user-photo') }}>Eliminar foto</button>}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-section">
+                <div className="settings-section-label">DATOS PERSONALES</div>
+                <div className="settings-section-divider" />
+                <div className="prof-fields-grid">
+                  <label className="modal-label">Nombre<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder="Tu nombre" /></label>
+                  <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder="tu@email.com" /></label>
+                  <label className="modal-label">Empresa<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder="Nombre de la empresa" /></label>
+                  <label className="modal-label">Cargo<input type="text" className="modal-input" placeholder="Tu cargo" /></label>
+                </div>
+              </div>
+              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+            </div>
+          )}
+          {profileScreenTab === 'plan' && (
+            <>
+              <div className="panel-header">
+                <h2 className="panel-title">Plan & Uso</h2>
+                <p className="panel-subtitle">Tu plan actual y estadísticas de uso</p>
+              </div>
+              <div className="panel-header-divider" />
+              <div className="settings-sections">
+                <div className="settings-section">
+                  <div className="prof-plan-card">
+                    <p className="prof-plan-label">Plan actual</p>
+                    <div className="prof-plan-badge">✦ Pro Plan</div>
+                    <div className="prof-plan-card-divider" />
+                    <p className="prof-plan-email">{userEmail || 'usuario'}</p>
+                    <p className="prof-plan-since">Miembro desde mayo 2026</p>
+                  </div>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">ESTADÍSTICAS DE USO</div>
+                  <div className="settings-section-divider" />
+                  <div className="prof-stats-grid">
+                    {([['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]] as [string, number][]).map(([label, val]) => (
+                      <div key={label} className="prof-stat-card"><span className="prof-stat-n">{val}</span><span className="prof-stat-l">{label}</span></div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+          {profileScreenTab === 'seguridad' && (
+            <>
+              <div className="panel-header">
+                <h2 className="panel-title">Seguridad</h2>
+                <p className="panel-subtitle">Gestiona tu contraseña y acceso</p>
+              </div>
+              <div className="panel-header-divider" />
+              <div className="settings-sections">
+                <div className="settings-section">
+                  <div className="settings-section-label">CAMBIAR CONTRASEÑA</div>
+                  <div className="settings-section-divider" />
+                  <label className="sec-field-label">Contraseña actual</label>
+                  <input type="password" className="sec-input" value={settingsPasswordDraft} onChange={e => setSettingsPasswordDraft(e.target.value)} placeholder="••••••••" />
+                  <label className="sec-field-label">Nueva contraseña</label>
+                  <input type="password" className="sec-input" value={settingsPasswordNewDraft} onChange={e => setSettingsPasswordNewDraft(e.target.value)} placeholder="••••••••" />
+                  <label className="sec-field-label">Confirmar nueva contraseña</label>
+                  <input type="password" className="sec-input" value={settingsPasswordConfirmDraft} onChange={e => setSettingsPasswordConfirmDraft(e.target.value)} placeholder="••••••••" />
+                </div>
+                <div className="sec-bottom-divider" />
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn sec-update-btn" onClick={() => { toast('Contraseña actualizada'); setSettingsPasswordDraft(''); setSettingsPasswordNewDraft(''); setSettingsPasswordConfirmDraft('') }}>Actualizar contraseña</button></div>
+              </div>
+            </>
+          )}
+          {profileScreenTab === 'notif' && (
+            <>
+              <div className="panel-header">
+                <h2 className="panel-title">Notificaciones</h2>
+                <p className="panel-subtitle">Elige cuándo y cómo te avisamos</p>
+              </div>
+              <div className="panel-header-divider" />
+              <div className="notif-list">
+                <div className="notif-row">
+                  <div><span className="toggle-label">Transcripción completada</span><span className="notif-sub">Recibe un email cuando una transcripción finaliza</span></div>
+                  <button type="button" className={`toggle-btn${notifTranscription ? ' on' : ''}`} onClick={() => setNotifTranscription(t => !t)}><span className="toggle-circle" /></button>
+                </div>
+                <div className="notif-divider" />
+                <div className="notif-row">
+                  <div><span className="toggle-label">Resumen semanal</span><span className="notif-sub">Resumen de actividad cada lunes por la mañana</span></div>
+                  <button type="button" className={`toggle-btn${notifSummary ? ' on' : ''}`} onClick={() => setNotifSummary(t => !t)}><span className="toggle-circle" /></button>
+                </div>
+                <div className="notif-divider" />
+                <div className="notif-row">
+                  <div><span className="toggle-label">Alertas de error</span><span className="notif-sub">Notificación si falla el procesamiento de audio</span></div>
+                  <button type="button" className={`toggle-btn${notifErrors ? ' on' : ''}`} onClick={() => setNotifErrors(t => !t)}><span className="toggle-circle" /></button>
+                </div>
+                <div className="notif-divider" />
+                <div className="notif-row">
+                  <div><span className="toggle-label">Novedades del producto</span><span className="notif-sub">Actualizaciones y nuevas funcionalidades</span></div>
+                  <button type="button" className="toggle-btn"><span className="toggle-circle" /></button>
+                </div>
+                <div className="notif-divider" />
+              </div>
+              <div className="settings-save" style={{ marginTop: 20 }}><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar preferencias</button></div>
+            </>
+          )}
+        </div>
       </div>
-      {profileScreenTab === 'perfil' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="profile-avatar-block">
-              <div className="profile-avatar-lg">{userInitials}</div>
-              <div><p className="profile-avatar-name">{userName || 'Sin nombre'}</p><p className="profile-avatar-email">{userEmail || 'Sin email'}</p></div>
-            </div>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Información personal</div>
-            <label className="modal-label">Nombre<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder="Tu nombre" /></label>
-            <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder="tu@email.com" /></label>
-            <label className="modal-label">Empresa<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder="Nombre de la empresa" /></label>
-          </div>
-          <div className="settings-save"><button type="button" className="primary-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
-        </div>
-      )}
-      {profileScreenTab === 'plan' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="settings-section-title">Plan actual</div>
-            <div className="plan-badge">✦ Plan gratuito</div>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>Usa tu propia API Key de Groq — sin límites impuestos por la app.</p>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Estadísticas de uso</div>
-            <div className="stats-grid" style={{ marginBottom: 0 }}>
-              {[['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]].map(([label, val]) => (
-                <div key={label as string} className="stat-card"><span className="stat-value">{val}</span><span className="stat-label">{label}</span></div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-      {profileScreenTab === 'seguridad' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="settings-section-title">Cambiar contraseña</div>
-            <label className="modal-label">Contraseña actual<input type="password" className="modal-input" value={settingsPasswordDraft} onChange={e => setSettingsPasswordDraft(e.target.value)} placeholder="••••••••" /></label>
-            <label className="modal-label">Nueva contraseña<input type="password" className="modal-input" value={settingsPasswordNewDraft} onChange={e => setSettingsPasswordNewDraft(e.target.value)} placeholder="••••••••" /></label>
-            <label className="modal-label">Confirmar nueva contraseña<input type="password" className="modal-input" value={settingsPasswordConfirmDraft} onChange={e => setSettingsPasswordConfirmDraft(e.target.value)} placeholder="••••••••" /></label>
-            <button type="button" className="primary-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { toast('Contraseña actualizada'); setSettingsPasswordDraft(''); setSettingsPasswordNewDraft(''); setSettingsPasswordConfirmDraft('') }}>Actualizar contraseña</button>
-          </div>
-          <div className="settings-section">
-            <div className="settings-section-title">Sesión</div>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>Actualmente conectado como: {userEmail || 'usuario'}</p>
-          </div>
-        </div>
-      )}
-      {profileScreenTab === 'notif' && (
-        <div className="settings-sections">
-          <div className="settings-section">
-            <div className="settings-section-title">Preferencias</div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Transcripción completada</span><span className="toggle-desc">Notificar cuando una transcripción finaliza</span></div>
-              <button type="button" className={`toggle-btn${notifTranscription ? ' on' : ''}`} onClick={() => setNotifTranscription(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Resumen generado</span><span className="toggle-desc">Notificar cuando la IA genera un resumen</span></div>
-              <button type="button" className={`toggle-btn${notifSummary ? ' on' : ''}`} onClick={() => setNotifSummary(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-            <div className="toggle-row">
-              <div><span className="toggle-label">Errores</span><span className="toggle-desc">Notificar cuando hay un error en el proceso</span></div>
-              <button type="button" className={`toggle-btn${notifErrors ? ' on' : ''}`} onClick={() => setNotifErrors(t => !t)}><span className="toggle-circle" /></button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 
   // ── Overlays ───────────────────────────────────────────────────────────
 
-  const renderRecordingOverlay = () => {
+  const renderRecordingScreen = () => {
     if (!activeRecordingInterview) return null
     const isRecording = activeRecordingInterview.status === 'recording'
+    const contextLabel = [activeRecordingCandidate?.name, activeRecordingProject ? `Proyecto: ${activeRecordingProject.name}` : null].filter(Boolean).join('  ·  ')
     return (
-      <div className="recording-overlay">
-        <div className="rec-overlay-content">
-          <div className="rec-overlay-meta">
-            {activeRecordingProject && <span className="rec-overlay-project">{activeRecordingProject.name}</span>}
-            {activeRecordingCandidate && <span className="rec-overlay-candidate">{activeRecordingCandidate.name}</span>}
+      <div className="rec-screen">
+        <div className="rec-screen-content">
+          <div className={`rec-badge${isRecording ? '' : ' rec-badge--paused'}`}>
+            {isRecording ? '● EN GRABACIÓN' : '‖ EN PAUSA'}
           </div>
-          <div className={`rec-circle${isRecording ? '' : ' paused'}`}>
-            <MicIcon />
+          <div className="rec-screen-timer">{fmt(activeRecordingInterview.durationSec)}</div>
+          {contextLabel && <p className="rec-screen-context">{contextLabel}</p>}
+          <div className="rec-screen-separator" />
+          <div className="rec-waveform">
+            {[20, 38, 52, 42, 62, 46, 58, 36, 50, 28, 44, 22].map((h, i) => (
+              <div key={i} className="rec-wave-bar" style={{ height: h, animationDelay: `${i * 0.08}s` }} />
+            ))}
           </div>
-          <div className="rec-timer">{fmt(activeRecordingInterview.durationSec)}</div>
-          <div className="rec-status">{isRecording ? '● Grabando' : '‖ En pausa'}</div>
-          <div className="rec-controls">
-            {isRecording ? (
-              <button type="button" className="rec-btn rec-btn--secondary" onClick={handlePauseRecording}>‖ Pausar</button>
-            ) : (
-              <button type="button" className="rec-btn rec-btn--primary" onClick={handleResumeRecording}>▶ Reanudar</button>
-            )}
-            <button type="button" className="rec-btn rec-btn--stop" onClick={handleStopRecording}>■ Parar</button>
+          <div className="rec-screen-controls">
+            <div className="rec-screen-btn-wrap">
+              <button type="button" className="rec-stop-btn" onClick={handleStopRecording}>
+                <div className="rec-stop-icon" />
+              </button>
+              <span className="rec-btn-label rec-stop-label">Detener</span>
+            </div>
+            <div className="rec-screen-btn-wrap">
+              {isRecording ? (
+                <button type="button" className="rec-pause-btn" onClick={handlePauseRecording}>‖</button>
+              ) : (
+                <button type="button" className="rec-pause-btn" onClick={handleResumeRecording}>▶</button>
+              )}
+              <span className="rec-btn-label">{isRecording ? 'Pausar' : 'Reanudar'}</span>
+            </div>
           </div>
-          <p className="rec-note">{activeRecordingInterview.captureSource === 'mic+system' ? 'Grabando micrófono + sistema' : 'Grabando micrófono'}</p>
         </div>
       </div>
     )
@@ -1071,19 +1561,52 @@ function App() {
         }).join('\n---\n\n')
     }).join('\n\n====\n\n')
 
+    const handleExport = async () => {
+      if (exportFormat === 'clipboard') {
+        try { await navigator.clipboard.writeText(exportText); toast('Copiado al portapapeles', 'info', 'El texto ha sido copiado exitosamente.'); setShowExport(false) }
+        catch { toast('No se pudo copiar', 'error') }
+      } else if (exportFormat === 'txt') {
+        const blob = new Blob([exportText], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a'); a.href = url; a.download = 'exportacion.txt'; a.click(); URL.revokeObjectURL(url)
+        toast('Archivo descargado', 'success'); setShowExport(false)
+      } else {
+        toast('Exportación PDF no disponible en esta versión', 'warning'); setShowExport(false)
+      }
+    }
+
+    const options: { key: 'pdf' | 'txt' | 'clipboard'; icon: string; title: string; desc: string }[] = [
+      { key: 'pdf', icon: '≡', title: 'PDF', desc: 'Documento con diseño y formato' },
+      { key: 'txt', icon: '✎', title: 'Texto plano (.txt)', desc: 'Sin formato, solo texto' },
+      { key: 'clipboard', icon: '⎘', title: 'Copiar al portapapeles', desc: 'Copia el texto al clipboard' },
+    ]
+
     return (
       <div className="modal-overlay" onClick={() => setShowExport(false)}>
-        <div className="modal-box export-modal" onClick={e => e.stopPropagation()}>
-          <h2>Exportar informe</h2>
-          <p>{exportCandidateId ? `Candidata: ${exportCandidate?.name}` : `Proyecto: ${activeProject?.name} · ${allCandidatesToExport.length} candidatas`}</p>
-          {exportInterviews.length === 0 && !exportCandidateId && allCandidatesToExport.every(c => interviews.filter(i => i.candidateId === c.id && i.transcriptionStatus === 'done').length === 0) ? (
-            <p className="warning-note">No hay entrevistas transcritas para exportar.</p>
-          ) : (
-            <textarea className="export-preview" readOnly value={exportText} rows={10} />
-          )}
-          <div className="modal-actions">
-            <button type="button" className="primary-btn" onClick={async () => { try { await navigator.clipboard.writeText(exportText); toast('Informe copiado al portapapeles'); setShowExport(false) } catch { toast('No se pudo copiar', 'error') } }}>Copiar al portapapeles</button>
-            <button type="button" onClick={() => setShowExport(false)}>Cerrar</button>
+        <div className="modal-box modal-box--figma exp-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <div>
+              <h2 className="modal-title">Exportar transcripción</h2>
+              <p className="modal-subtitle">Selecciona el formato de exportación</p>
+            </div>
+            <button type="button" className="modal-close" onClick={() => setShowExport(false)}>✕</button>
+          </div>
+          <div className="modal-header-divider" />
+          <div className="exp-options">
+            {options.map(opt => (
+              <button key={opt.key} type="button" className={`exp-option${exportFormat === opt.key ? ' exp-option--selected' : ''}`} onClick={() => setExportFormat(opt.key)}>
+                <span className={`exp-option-icon${exportFormat === opt.key ? ' exp-option-icon--selected' : ''}`}>{opt.icon}</span>
+                <div className="exp-option-text">
+                  <span className={`exp-option-title${exportFormat === opt.key ? ' exp-option-title--selected' : ''}`}>{opt.title}</span>
+                  <span className="exp-option-desc">{opt.desc}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="modal-footer-divider" />
+          <div className="modal-actions modal-actions--figma">
+            <button type="button" className="modal-cancel-btn" onClick={() => setShowExport(false)}>Cancelar</button>
+            <button type="button" className="modal-action-btn" onClick={() => void handleExport()}>Exportar →</button>
           </div>
         </div>
       </div>
@@ -1094,62 +1617,95 @@ function App() {
 
   return (
     <div className="app-shell">
-      {/* Sidebar */}
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="sidebar-logo-badge">CT</span>
-          <span className="sidebar-logo-text">Call Transcriber</span>
-        </div>
-        <nav className="sidebar-nav">
-          <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>Inicio</span></button>
-          <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>Proyectos</span></button>
-        </nav>
-        <div className="sidebar-bottom">
-          <button type="button" className="sidebar-user" onClick={() => setShowProfilePopup(p => !p)}>
-            <div className="sidebar-avatar">{userInitials}</div>
-            <div className="sidebar-user-info">
-              <span className="sidebar-user-name">{userName || 'Usuario'}</span>
-              <span className="sidebar-user-email">{userEmail}</span>
-            </div>
-          </button>
-        </div>
-      </aside>
+      {/* Global top bar */}
+      <header className="global-top-bar">
+        <div className="gtb-accent" />
+        <span className="gtb-title">Call Transcriber</span>
+      </header>
 
-      {/* Main */}
-      <div className="main-area">
-        <header className="top-bar">
-          <div className="breadcrumb">
-            {breadcrumb.map((item, i) => (
-              <span key={i} className="bc-item">
-                {i > 0 && <span className="bc-sep"><ChevronRight /></span>}
-                {item.action ? <button type="button" className="bc-link" onClick={item.action}>{item.label}</button> : <span className="bc-current">{item.label}</span>}
-              </span>
-            ))}
-          </div>
-        </header>
-        <main className="content-area">
-          {screen === 'dashboard' && renderDashboard()}
-          {screen === 'projects' && renderProjects()}
-          {screen === 'project-detail' && renderProjectDetail()}
-          {screen === 'candidate-detail' && renderCandidateDetail()}
-          {screen === 'settings' && renderSettings()}
-          {screen === 'profile' && renderProfile()}
-        </main>
+      {activeRecordingInterview && renderRecordingScreen()}
+
+      <div className="app-body" style={activeRecordingInterview ? { display: 'none' } : undefined}>
+        {/* Sidebar */}
+        {screen === 'candidate-detail' && activeProject ? (
+          <aside className="sidebar sidebar--cands">
+            <div className="csb-header">
+              <button type="button" className="csb-back" onClick={() => setScreen('project-detail')}><ChevronLeft /></button>
+              <span className="csb-project-name">{activeProject.name}</span>
+            </div>
+            <div className="csb-list">
+              {projectCandidates.map(c => (
+                <button key={c.id} type="button" className={`csb-item${c.id === activeCandidateId ? ' is-active' : ''}`} onClick={() => goToCandidate(c.id, activeProject.id)}>
+                  <div className="csb-avatar" style={{ background: avatarColor(c.id) }}>{initials(c.name)}</div>
+                  <div className="csb-info">
+                    <span className="csb-name">{c.name}</span>
+                    <span className="csb-role">{c.role || '—'}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+        ) : (
+          <aside className="sidebar">
+            <nav className="sidebar-nav">
+              <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>Inicio</span></button>
+              <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>Proyectos</span></button>
+              <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>Candidatas</span></button>
+            </nav>
+            <div className="sidebar-bottom">
+              <button type="button" className="sidebar-user" onClick={() => setShowProfilePopup(p => !p)}>
+                <div className="sidebar-avatar" style={{ background: userPhoto ? 'transparent' : undefined, padding: 0, overflow: 'hidden' }}>
+                    {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
+                  </div>
+                <div className="sidebar-user-info">
+                  <span className="sidebar-user-name">{userName || 'Usuario'}</span>
+                  <span className="sidebar-user-email">{userEmail}</span>
+                </div>
+              </button>
+            </div>
+          </aside>
+        )}
+
+        {/* Main */}
+        <div className="main-area">
+          {screen !== 'dashboard' && (
+            <header className="top-bar">
+              <div className="breadcrumb">
+                {breadcrumb.map((item, i) => (
+                  <span key={i} className="bc-item">
+                    {i > 0 && <span className="bc-sep"><ChevronRight /></span>}
+                    {item.action ? <button type="button" className="bc-link" onClick={item.action}>{item.label}</button> : <span className="bc-current">{item.label}</span>}
+                  </span>
+                ))}
+              </div>
+            </header>
+          )}
+          <main className="content-area">
+            {screen === 'dashboard' && renderDashboard()}
+            {screen === 'projects' && renderProjects()}
+            {screen === 'project-detail' && renderProjectDetail()}
+            {screen === 'candidates' && renderCandidates()}
+            {screen === 'candidate-detail' && renderCandidateDetail()}
+            {screen === 'settings' && renderSettings()}
+            {screen === 'profile' && renderProfile()}
+          </main>
+        </div>
       </div>
 
       {/* Profile popup */}
       {showProfilePopup && (
         <div className="profile-popup" onMouseLeave={() => setShowProfilePopup(false)}>
           <div className="pp-user">
-            <div className="pp-avatar">{userInitials}</div>
+            <div className="pp-avatar" style={{ background: userPhoto ? 'transparent' : avatarColor(userEmail || 'u'), overflow: 'hidden', padding: 0 }}>
+              {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
+            </div>
             <div><p className="pp-name">{userName || 'Usuario'}</p><p className="pp-email">{userEmail}</p></div>
           </div>
           <div className="pp-divider" />
           <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi perfil</button>
           <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> Configuración</button>
-          <button type="button" className="pp-item" onClick={() => { openSettings('grabacion'); setShowProfilePopup(false) }}><BellIcon /> Notificaciones</button>
           <div className="pp-divider" />
-          <button type="button" className="pp-item" onClick={() => { setScreen('profile'); setProfileScreenTab('seguridad'); setShowProfilePopup(false) }}><LockIcon /> Seguridad</button>
+          <button type="button" className="pp-item pp-item--danger" onClick={() => setShowProfilePopup(false)}>→ Cerrar sesión</button>
         </div>
       )}
 
@@ -1189,16 +1745,38 @@ function App() {
 
       {/* Candidate modal */}
       {(showNewCandidate || editingCandidateId !== null) && (
-        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE) }}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h2>{editingCandidateId ? 'Editar candidata' : 'Nueva candidata'}</h2>
-            <label className="modal-label">Nombre *<input type="text" className="modal-input" value={candidateDraft.name} onChange={e => setCandidateDraft(d => ({ ...d, name: e.target.value }))} placeholder="Nombre completo" autoFocus /></label>
-            <label className="modal-label">Email<input type="email" className="modal-input" value={candidateDraft.email} onChange={e => setCandidateDraft(d => ({ ...d, email: e.target.value }))} placeholder="correo@ejemplo.com" /></label>
-            <label className="modal-label">Teléfono<input type="text" className="modal-input" value={candidateDraft.phone} onChange={e => setCandidateDraft(d => ({ ...d, phone: e.target.value }))} placeholder="+34 600 000 000" /></label>
-            <label className="modal-label">Puesto<input type="text" className="modal-input" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder="Ej: Frontend Developer" /></label>
-            <div className="modal-actions">
-              <button type="button" className="primary-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? 'Guardar' : 'Crear'}</button>
-              <button type="button" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE) }}>Cancelar</button>
+        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>
+          <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">{editingCandidateId ? 'Editar candidata' : 'Nueva candidata'}</h2>
+                <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>✕</button>
+            </div>
+            <div className="modal-header-divider" />
+            <div className="modal-field">
+              <span className="modal-field-label">Nombre completo *</span>
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.name} onChange={e => setCandidateDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Ana García" autoFocus />
+            </div>
+            <div className="modal-row-2">
+              <div className="modal-field">
+                <span className="modal-field-label">Email</span>
+                <input type="email" className="modal-input modal-input--figma" value={candidateDraft.email} onChange={e => setCandidateDraft(d => ({ ...d, email: e.target.value }))} placeholder="ana@email.com" />
+              </div>
+              <div className="modal-field">
+                <span className="modal-field-label">Teléfono</span>
+                <input type="text" className="modal-input modal-input--figma" value={candidateDraft.phone} onChange={e => setCandidateDraft(d => ({ ...d, phone: e.target.value }))} placeholder="+34 600 000 000" />
+              </div>
+            </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Notas previas (opcional)</span>
+              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder="Puntos a tratar, perfil del CV, observaciones..." rows={3} />
+            </div>
+            <div className="modal-footer-divider" />
+            <div className="modal-actions modal-actions--figma">
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>Cancelar</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? '👤 Guardar cambios' : '👤 Añadir candidata'}</button>
             </div>
           </div>
         </div>
@@ -1206,21 +1784,44 @@ function App() {
 
       {/* Project modal */}
       {showNewProject && (
-        <div className="modal-overlay" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT) }}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h2>Nuevo proyecto</h2>
-            <label className="modal-label">Nombre del proceso *<input type="text" className="modal-input" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Administrativo/a Seguros" autoFocus /></label>
-            <label className="modal-label">Empresa<input type="text" className="modal-input" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder="Nombre de la empresa" /></label>
-            <div className="modal-actions">
-              <button type="button" className="primary-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>Crear</button>
-              <button type="button" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT) }}>Cancelar</button>
+        <div className="modal-overlay" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>
+          <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">Nuevo proyecto</h2>
+                <p className="modal-subtitle">Define el proceso de selección que vas a gestionar</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>✕</button>
+            </div>
+            <div className="modal-header-divider" />
+            <div className="modal-field">
+              <span className="modal-field-label">Nombre del proyecto *</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Administrativo/a Seguros" autoFocus />
+            </div>
+            <div className="modal-row-2">
+              <div className="modal-field">
+                <span className="modal-field-label">Empresa / Cliente *</span>
+                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder="Ej: Cosmobrok" />
+              </div>
+              <div className="modal-field">
+                <span className="modal-field-label">Tipo de proceso</span>
+                <select className="modal-input modal-input--figma modal-select"><option value="">Seleccionar tipo...</option><option>Selección directa</option><option>ETT</option><option>Headhunting</option></select>
+              </div>
+            </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Descripción (opcional)</span>
+              <textarea className="modal-input modal-input--figma modal-textarea" value={projDescDraft} onChange={e => setProjDescDraft(e.target.value)} placeholder="Añade contexto sobre el proceso de selección..." rows={3} />
+            </div>
+            <div className="modal-footer-divider" />
+            <div className="modal-actions modal-actions--figma">
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>Cancelar</button>
+              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>✦ Crear proyecto</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Recording fullscreen overlay */}
-      {renderRecordingOverlay()}
+      {/* Recording screen is rendered above app-body */}
 
       {/* Transcribing modal */}
       {renderTranscribingModal()}
@@ -1228,9 +1829,25 @@ function App() {
       {/* Export modal */}
       {renderExportModal()}
 
+      {/* Hidden photo input */}
+      <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhotoChange} />
+
       {/* Toasts */}
       <div className="toast-container">
-        {toasts.map(t => <div key={t.id} className={`toast toast--${t.type}`}>{t.message}</div>)}
+        {toasts.map(t => {
+          const icons: Record<Toast['type'], string> = { success: '✓', error: '✕', info: '⎘', warning: '⚠' }
+          return (
+            <div key={t.id} className={`toast toast--${t.type}`}>
+              <div className="toast-accent" />
+              <span className="toast-icon">{icons[t.type]}</span>
+              <div className="toast-body">
+                <span className="toast-title">{t.message}</span>
+                {t.sub && <span className="toast-sub">{t.sub}</span>}
+              </div>
+              <button type="button" className="toast-close" onClick={() => setToasts(x => x.filter(x2 => x2.id !== t.id))}>✕</button>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
