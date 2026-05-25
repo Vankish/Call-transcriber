@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('desktopApp', {
   transcribeAudio: (payload) => ipcRenderer.invoke('transcription:run', payload),
   generateSummary: (payload) => ipcRenderer.invoke('summary:generate', payload),
   deleteRecording: (payload) => ipcRenderer.invoke('recording:delete', payload),
+  openOAuthWindow: (url) => ipcRenderer.invoke('auth:open-oauth-window', url),
 })

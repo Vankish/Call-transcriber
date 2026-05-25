@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import type { Session } from '@supabase/supabase-js'
+import { supabase } from './lib/supabase'
+import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
+import { AuthScreen } from './AuthScreen'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed' }
@@ -24,7 +28,6 @@ type ProfileScreenTab = 'perfil' | 'plan' | 'seguridad' | 'notif'
 type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 
 // ── Storage ────────────────────────────────────────────────────────────────
-const V1_KEY = 'call-transcriber-hito1'
 const V2_KEY = 'call-transcriber-v2'
 const ONBOARDING_KEY = 'ct-onboarding-done'
 
@@ -59,6 +62,9 @@ const MicIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none
 const LockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
 const BellIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
 const StarIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+const DocIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+const ClipboardIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+const CameraIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
 
 const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
@@ -77,6 +83,39 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
     summaryStatus: i.summaryStatus ?? 'idle',
     summaryType: i.summaryType ?? 'resumen',
   }))
+}
+
+// ── DB ↔ App converters ────────────────────────────────────────────────────────
+const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'] })
+const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role })
+const ivFromDb    = (r: DbInterview): Interview => ({
+  id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
+  sessionName: r.session_name, status: r.status as RecordingStatus,
+  durationSec: r.duration_sec, micDeviceId: r.mic_device_id, outputDeviceId: r.output_device_id,
+  transcriptOriginal: r.transcript_original, transcriptEdited: r.transcript_edited,
+  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path,
+  captureSource: r.capture_source as Interview['captureSource'],
+  transcriptionStatus: r.transcription_status as Interview['transcriptionStatus'],
+  summaryInstructions: r.summary_instructions, summaryText: r.summary_text,
+  summaryStatus: r.summary_status as Interview['summaryStatus'],
+  summaryType: r.summary_type as Interview['summaryType'],
+})
+const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
+  const db: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (patch.sessionName           !== undefined) db.session_name          = patch.sessionName
+  if (patch.status                !== undefined) db.status                = patch.status
+  if (patch.durationSec           !== undefined) db.duration_sec          = patch.durationSec
+  if (patch.transcriptOriginal    !== undefined) db.transcript_original   = patch.transcriptOriginal
+  if (patch.transcriptEdited      !== undefined) db.transcript_edited     = patch.transcriptEdited
+  if (patch.transcriptUpdatedAt   !== undefined) db.transcript_updated_at = patch.transcriptUpdatedAt
+  if (patch.recordingFilePath     !== undefined) db.recording_file_path   = patch.recordingFilePath
+  if (patch.captureSource         !== undefined) db.capture_source        = patch.captureSource
+  if (patch.transcriptionStatus   !== undefined) db.transcription_status  = patch.transcriptionStatus
+  if (patch.summaryInstructions   !== undefined) db.summary_instructions  = patch.summaryInstructions
+  if (patch.summaryText           !== undefined) db.summary_text          = patch.summaryText
+  if (patch.summaryStatus         !== undefined) db.summary_status        = patch.summaryStatus
+  if (patch.summaryType           !== undefined) db.summary_type          = patch.summaryType
+  return db
 }
 
 function App() {
@@ -166,6 +205,10 @@ function App() {
   const [_playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
   const [playbackRate, _setPlaybackRate] = useState(1)
 
+  // ── Auth ───────────────────────────────────────────────────────────────
+  const [session, setSession]       = useState<Session | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
   // ── Toasts ─────────────────────────────────────────────────────────────
   const [toasts, setToasts] = useState<Toast[]>([])
 
@@ -225,6 +268,78 @@ function App() {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000)
   }, [])
 
+  // ── Auth: session management ───────────────────────────────────────────
+  useEffect(() => {
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (!session) { setProjects([]); setCandidates([]); setInterviews([]) }
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // ── Load data from Supabase when session is ready ──────────────────────
+  useEffect(() => {
+    if (!session) return
+    const userId = session.user.id
+    const load = async () => {
+      try {
+        const [pRes, cRes, iRes, prRes] = await Promise.all([
+          supabase.from('projects').select('*').eq('user_id', userId).order('created_at'),
+          supabase.from('candidates').select('*').eq('user_id', userId).order('created_at'),
+          supabase.from('interviews').select('*').eq('user_id', userId).order('created_at'),
+          supabase.from('profiles').select('*').eq('id', userId).single(),
+        ])
+        const hasRemote = (pRes.data?.length ?? 0) > 0 || (cRes.data?.length ?? 0) > 0
+        if (hasRemote) {
+          setProjects((pRes.data ?? []).map(projFromDb))
+          setCandidates((cRes.data ?? []).map(candFromDb))
+          setInterviews(normalizeInterviews((iRes.data ?? []).map(ivFromDb)))
+        } else {
+          // First login: migrate localStorage data to Supabase
+          const raw = localStorage.getItem(V2_KEY)
+          if (raw) {
+            try {
+              const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
+              const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
+              if (projs.length || cands.length) {
+                if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })))
+                if (cands.length) await supabase.from('candidates').insert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: '' })))
+                for (const iv of ivs) {
+                  const cand = cands.find(c => c.id === iv.candidateId)
+                  if (!cand) continue
+                  await supabase.from('interviews').insert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, created_at: iv.createdAt, updated_at: iv.createdAt })
+                }
+                setProjects(projs); setCandidates(cands); setInterviews(ivs)
+                localStorage.removeItem(V2_KEY)
+                toast('Datos migrados a la nube ✓')
+              }
+            } catch { /* ignore migration errors */ }
+          }
+        }
+        if (prRes.data) {
+          const p = prRes.data
+          if (p.name)          setUserName(p.name)
+          if (p.company)       setUserCompany(p.company)
+          if (p.photo)         setUserPhoto(p.photo)
+          if (p.groq_api_key)  { setGroqApiKey(p.groq_api_key); setSettingsKeyDraft(p.groq_api_key) }
+          if (p.tx_model)      setTranscriptionModel(p.tx_model)
+          if (p.sum_model)     setSummaryModel(p.sum_model)
+        }
+      } catch { /* ignore */ }
+    }
+    void load()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id])
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    setScreen('dashboard')
+  }
+
   // ── Init: load config ──────────────────────────────────────────────────
   useEffect(() => {
     if (!window.desktopApp?.getConfig) { setConfigLoaded(true); return }
@@ -246,33 +361,7 @@ function App() {
     if (!done && !groqApiKey) setShowOnboarding(true)
   }, [configLoaded, groqApiKey])
 
-  // ── Init: load data + migration ────────────────────────────────────────
-  useEffect(() => {
-    const rawV2 = localStorage.getItem(V2_KEY)
-    if (rawV2) {
-      try {
-        const d = JSON.parse(rawV2) as { projects: Project[]; candidates: Candidate[]; interviews: Interview[] }
-        if (Array.isArray(d.projects)) setProjects(d.projects)
-        if (Array.isArray(d.candidates)) setCandidates(d.candidates)
-        if (Array.isArray(d.interviews)) setInterviews(normalizeInterviews(d.interviews))
-      } catch { /* ignore */ }
-      return
-    }
-    const rawV1 = localStorage.getItem(V1_KEY)
-    if (!rawV1) return
-    try {
-      const v1 = JSON.parse(rawV1) as {
-        candidates?: Array<{ id: string; name: string; email: string; phone: string; process: string }>
-        interviews?: Interview[]
-      }
-      const cosmobrok: Project = { id: uid(), name: 'Cosmobrok', company: 'Cosmobrok', createdAt: new Date().toISOString(), status: 'active' }
-      const migrated: Candidate[] = (v1.candidates ?? []).map(c => ({ id: c.id, projectId: cosmobrok.id, name: c.name, email: c.email, phone: c.phone, role: c.process }))
-      setProjects([cosmobrok]); setCandidates(migrated); setInterviews(normalizeInterviews(v1.interviews ?? []))
-    } catch { /* ignore */ }
-  }, [])
-
-  // ── Persist ────────────────────────────────────────────────────────────
-  useEffect(() => { localStorage.setItem(V2_KEY, JSON.stringify({ projects, candidates, interviews })) }, [projects, candidates, interviews])
+  // (data loaded from Supabase via the auth effect above)
 
   // ── Load user photo ────────────────────────────────────────────────────
   useEffect(() => { const p = localStorage.getItem('ct-user-photo'); if (p) setUserPhoto(p) }, [])
@@ -317,8 +406,10 @@ function App() {
   }, [])
 
   // ── Helpers ────────────────────────────────────────────────────────────
-  const updateInterview = (id: string, patch: Partial<Interview>) =>
+  const updateInterview = (id: string, patch: Partial<Interview>) => {
     setInterviews(c => c.map(i => i.id === id ? { ...i, ...patch } : i))
+    if (session) void supabase.from('interviews').update(ivPatchToDb(patch)).eq('id', id)
+  }
 
   const cleanupRecording = () => {
     mediaRecorderRef.current = null
@@ -363,9 +454,10 @@ function App() {
   }
 
   const handleNewRecording = () => {
-    if (!activeCandidateId) return
+    if (!activeCandidateId || !activeCandidate) return
     const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: micDevices[0]?.id ?? '', outputDeviceId: outputDevices[0]?.id ?? '', transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
     setInterviews(c => [n, ...c])
+    if (session) void supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
     setSelectedInterviewId(n.id)
     setSelectedTranscriptInterviewId(n.id)
     setSelectedSummaryInterviewId(n.id)
@@ -470,7 +562,9 @@ function App() {
     setPendingDeleteId(null); if (playingInterviewId === interviewId) stopAudio()
     const interview = interviews.find(i => i.id === interviewId)
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: interview.recordingFilePath })
-    setInterviews(c => c.filter(i => i.id !== interviewId)); toast('Entrevista eliminada')
+    setInterviews(c => c.filter(i => i.id !== interviewId))
+    if (session) void supabase.from('interviews').delete().eq('id', interviewId)
+    toast('Entrevista eliminada')
   }
 
   const handleDeleteCandidate = (candidateId: string) => {
@@ -478,6 +572,7 @@ function App() {
     setPendingDeleteId(null)
     interviews.filter(i => i.candidateId === candidateId).forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId)); setCandidates(c => c.filter(x => x.id !== candidateId))
+    if (session) void supabase.from('candidates').delete().eq('id', candidateId)
     if (activeCandidateId === candidateId) { setActiveCandidateId(null); setScreen('project-detail') }
     toast('Candidata eliminada')
   }
@@ -485,28 +580,41 @@ function App() {
   const handleCreateCandidate = () => {
     if (!candidateDraft.name.trim() || !activeProjectId) return
     const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() }
-    setCandidates(curr => [...curr, c]); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast(`Candidata ${c.name} creada`)
+    setCandidates(curr => [...curr, c])
+    if (session) void supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, created_at: new Date().toISOString() })
+    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast(`Candidata ${c.name} creada`)
   }
 
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
     setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() } : x))
+    if (session) void supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft }).eq('id', editingCandidateId)
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Candidata actualizada')
   }
 
   const updateProject = (id: string, changes: Partial<Project>) => {
     setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
+    if (session) {
+      const db: Record<string, unknown> = {}
+      if (changes.name    !== undefined) db.name    = changes.name
+      if (changes.company !== undefined) db.company = changes.company
+      if (changes.status  !== undefined) db.status  = changes.status
+      void supabase.from('projects').update(db).eq('id', id)
+    }
   }
 
   const handleCreateProject = () => {
     if (!projectDraft.name.trim()) return
     const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status }
-    setProjects(c => [...c, p]); setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); toast(`Proyecto ${p.name} creado`)
+    setProjects(c => [...c, p])
+    if (session) void supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })
+    setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); toast(`Proyecto ${p.name} creado`)
   }
 
   const handleSaveSettings = async () => {
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({ groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft, userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft })
     setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft); setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
+    if (session) void supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, groq_api_key: settingsKeyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id)
     toast('Configuración guardada')
   }
 
@@ -530,6 +638,7 @@ function App() {
       const dataUrl = reader.result as string
       setUserPhoto(dataUrl)
       localStorage.setItem('ct-user-photo', dataUrl)
+      if (session) void supabase.from('profiles').update({ photo: dataUrl, updated_at: new Date().toISOString() }).eq('id', session.user.id)
       toast('Foto de perfil actualizada', 'success')
     }
     reader.readAsDataURL(file)
@@ -586,7 +695,7 @@ function App() {
 
           <div className="dash-toolbar">
             <div className="dash-search">
-              <span className="dash-search-icon">🔍</span>
+              <span className="dash-search-icon"><SearchIcon /></span>
               <input
                 type="text"
                 placeholder="Buscar por proyecto o empresa..."
@@ -700,8 +809,8 @@ function App() {
           <div className="ap-section">
             <h4>Acciones rápidas</h4>
             <button type="button" className="primary-btn pill-btn ap-action-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
-            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { if (projects.length > 0) goToProject(projects[0].id) }}>🎙 Nueva entrevista</button>
-            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}>📤 Exportar informes</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { if (projects.length > 0) goToProject(projects[0].id) }}><MicIcon /> Nueva entrevista</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /> Exportar informes</button>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
@@ -712,7 +821,7 @@ function App() {
                 const cand = candidates.find(c => c.id === i.candidateId)
                 return (
                   <div key={i.id} className="ap-activity-row" onClick={() => cand && goToCandidate(cand.id, cand.projectId)}>
-                    <span>{i.summaryStatus === 'done' ? '📝' : '🎙'} {i.sessionName || 'Entrevista'} — {cand?.name ?? '—'}</span>
+                    <span>{i.summaryStatus === 'done' ? <DocIcon /> : <MicIcon />} {i.sessionName || 'Entrevista'} — {cand?.name ?? '—'}</span>
                   </div>
                 )
               })
@@ -968,7 +1077,7 @@ function App() {
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', '🎙 Entrevistas'], ['transcripcion', '📝 Transcripción'], ['resumen', '✨ Resumen IA']] as [ProfileTab, string][]).map(([tab, label]) => (
+          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <>✦ Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
             <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => setActiveTab(tab)}>
               {label}
             </button>
@@ -990,14 +1099,14 @@ function App() {
       )}
       <div className="rec-section-header">
         <h3 className="rec-section-title">Grabaciones</h3>
-        <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}>🎙 Nueva grabación</button>
+        <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
       </div>
       {candidateInterviews.length === 0 ? (
         <div className="rec-empty-card">
-          <div className="rec-empty-icon-wrap"><span className="rec-empty-icon">🎙</span></div>
+          <div className="rec-empty-icon-wrap"><span className="rec-empty-icon"><MicIcon /></span></div>
           <h3 className="rec-empty-title">No hay grabaciones todavía</h3>
           <p className="rec-empty-sub">Graba la primera entrevista con {activeCandidate?.name ?? 'la candidata'} para empezar</p>
-          <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}>🎙 Nueva grabación</button>
+          <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
         </div>
       ) : (
         <div className="rec-rows">
@@ -1023,7 +1132,7 @@ function App() {
                   <span className="rec-row-meta">{fmtShort(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}</span>
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
-                  {isDone ? '✓ Transcrita' : isError ? '⚠ Error' : isTranscribing ? '↻ Transcribiendo' : '⏳ Pendiente'}
+                  {isDone ? '✓ Transcrita' : isError ? '⚠ Error' : isTranscribing ? '↻ Transcribiendo' : '○ Pendiente'}
                 </span>
                 <div className="rec-row-actions" onClick={e => e.stopPropagation()}>
                   {(iv.recordingUrl ?? iv.recordingFilePath) && (
@@ -1080,8 +1189,8 @@ function App() {
             <>
               <div className="trx-toolbar">
                 <div className="trx-search"><SearchIcon /><input type="text" placeholder="Buscar en transcripción..." /></div>
-                <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}>📋 Copiar todo</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedTranscriptInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}>📤 Descargar .txt</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar todo</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedTranscriptInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> Descargar .txt</button>
               </div>
               {selectedTranscriptInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso...</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedTranscriptInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
               {selectedTranscriptInterview.transcriptionStatus === 'error' && (
@@ -1109,7 +1218,7 @@ function App() {
                 )
               )}
               <div className="trx-footer">
-                <span className="trx-footer-info">✏️ Haz clic para editar · {wordCount} palabras · {readingMin} min</span>
+                <span className="trx-footer-info">✎ Haz clic para editar · {wordCount} palabras · {readingMin} min</span>
                 <div className="trx-footer-actions">
                   <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedTranscriptInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
                   <button type="button" className="trx-footer-btn" onClick={() => setTranscriptDraft(selectedTranscriptInterview.transcriptOriginal)}>Restaurar original</button>
@@ -1154,7 +1263,7 @@ function App() {
                   <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '✨ Con resumen' : '○ Sin resumen'}</span>
+                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '✦ Con resumen' : '○ Sin resumen'}</span>
                 </div>
               </div>
             )
@@ -1364,7 +1473,7 @@ function App() {
                 <div className="prof-avatar-row">
                   <div className="prof-avatar-circle" onClick={() => photoInputRef.current?.click()} style={{ background: userPhoto ? 'transparent' : undefined, overflow: 'hidden' }}>
                     {userPhoto ? <img src={userPhoto} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%', display: 'block' }} /> : userInitials}
-                    <div className="prof-avatar-overlay">📷</div>
+                    <div className="prof-avatar-overlay"><CameraIcon /></div>
                   </div>
                   <div className="prof-avatar-info">
                     <p className="prof-avatar-name">{userName || 'Sin nombre'}</p>
@@ -1615,6 +1724,17 @@ function App() {
 
   // ════════════════════════════════════════════════════════ MAIN JSX ════
 
+  if (authLoading) return (
+    <div className="auth-root">
+      <div className="auth-card" style={{ alignItems: 'center', gap: 16 }}>
+        <span className="spinner" style={{ width: 28, height: 28 }} />
+        <p style={{ color: 'var(--text-muted)', margin: 0 }}>Iniciando...</p>
+      </div>
+    </div>
+  )
+
+  if (!session) return <AuthScreen />
+
   return (
     <div className="app-shell">
       {/* Global top bar */}
@@ -1658,9 +1778,12 @@ function App() {
                     {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
                   </div>
                 <div className="sidebar-user-info">
-                  <span className="sidebar-user-name">{userName || 'Usuario'}</span>
-                  <span className="sidebar-user-email">{userEmail}</span>
+                  <span className="sidebar-user-name">{userName || session?.user.email?.split('@')[0] || 'Usuario'}</span>
+                  <span className="sidebar-user-email">{userEmail || session?.user.email || ''}</span>
                 </div>
+              </button>
+              <button type="button" className="sidebar-signout" title="Cerrar sesión" onClick={() => void handleSignOut()}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
               </button>
             </div>
           </aside>
@@ -1776,7 +1899,7 @@ function App() {
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? '👤 Guardar cambios' : '👤 Añadir candidata'}</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir candidata</>}</button>
             </div>
           </div>
         </div>

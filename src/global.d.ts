@@ -60,6 +60,7 @@ interface Window {
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
+    openOAuthWindow: (url: string) => Promise<string | null>
   }
 }
 
