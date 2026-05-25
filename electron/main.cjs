@@ -352,6 +352,37 @@ ipcMain.handle('recording:delete', async (_event, { filePath }) => {
   }
 })
 
+ipcMain.handle('auth:open-oauth-window', (_event, oauthUrl) => {
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      width: 560,
+      height: 660,
+      title: 'Iniciar sesión',
+      autoHideMenuBar: true,
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    })
+
+    const interceptCallback = (url) => {
+      if (url.startsWith('http://localhost')) {
+        win.destroy()
+        resolve(url)
+        return true
+      }
+      return false
+    }
+
+    win.webContents.on('will-redirect', (event, url) => {
+      if (interceptCallback(url)) event.preventDefault()
+    })
+    win.webContents.on('will-navigate', (event, url) => {
+      if (interceptCallback(url)) event.preventDefault()
+    })
+
+    win.on('closed', () => resolve(null))
+    win.loadURL(oauthUrl)
+  })
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
