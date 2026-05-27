@@ -1,7 +1,42 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(curl -s -H \"X-Figma-Token: figd_g7QWwxIr2lQXA7qi2sHnc3rzZei8KHMnyIKMBSrX\" \"https://api.figma.com/v1/files/0k5r5kb77vM5LBlEHPqvtG/nodes?ids=1:98\")",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -H \"X-Figma-Token: figd_g7QWwxIr2lQXA7qi2sHnc3rzZei8KHMnyIKMBSrX\" \"https://api.figma.com/v1/images/0k5r5kb77vM5LBlEHPqvtG?ids=2005:295,2005:493,2005:449,2005:129,2005:939,2005:911&format=png&scale=1\")",
+      "Bash(mkdir -p /tmp/figma_frames)",
+      "Bash(curl -s \"https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/61d415e7-6187-4790-be44-bafcea79d664\" -o /tmp/figma_frames/frame1.png)",
+      "Bash(curl -s \"https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/8e93f51b-a1bb-4a82-be7d-c5fc72932086\" -o /tmp/figma_frames/frame2.png)",
+      "Bash(curl -s \"https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/1867f78f-c1e8-49d3-a406-ec4df3af777f\" -o /tmp/figma_frames/frame3.png)",
+      "Bash(curl -s \"https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/a6b63f63-e550-44a8-832e-ffce7668212b\" -o /tmp/figma_frames/frame4.png)",
+      "Bash(cp /tmp/figma_frames/frame1.png \"D:/CursorProyects/call-transcriber-app/frame1.png\")",
+      "Bash(cp /tmp/figma_frames/frame2.png \"D:/CursorProyects/call-transcriber-app/frame2.png\")",
+      "Bash(cp /tmp/figma_frames/frame5.png \"D:/CursorProyects/call-transcriber-app/frame5.png\")",
+      "Bash(cp /tmp/figma_frames/frame6.png \"D:/CursorProyects/call-transcriber-app/frame6.png\")",
+      "Bash(C:\\\\Users\\\\Usuari\\\\.bun\\\\bin\\\\bun.exe x *)",
+      "PowerShell(& \"C:\\\\Users\\\\Usuari\\\\.bun\\\\bin\\\\bun.exe\" \"C:\\\\Users\\\\Usuari\\\\.bun\\\\install\\\\cache\\\\cursor-talk-to-figma-mcp@0.3.5@@@1\\\\dist\\\\server.js\" 2>&1 | Select-Object -First 20)",
+      "mcp__TalkToFigma__join_channel",
+      "mcp__TalkToFigma__get_document_info",
+      "mcp__TalkToFigma__create_frame",
+      "mcp__TalkToFigma__create_text",
+      "mcp__TalkToFigma__set_corner_radius",
+      "mcp__TalkToFigma__create_rectangle",
+      "mcp__TalkToFigma__export_node_as_image",
+      "mcp__TalkToFigma__set_fill_color",
+      "mcp__TalkToFigma__set_stroke_color",
+      "mcp__TalkToFigma__set_focus",
+      "mcp__TalkToFigma__move_node",
+      "mcp__TalkToFigma__scan_nodes_by_types",
+      "mcp__TalkToFigma__scan_text_nodes",
+      "mcp__TalkToFigma__delete_node",
+      "mcp__TalkToFigma__get_node_info",
+      "mcp__TalkToFigma__resize_node",
+      "mcp__TalkToFigma__delete_multiple_nodes",
+      "mcp__TalkToFigma__set_text_content",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

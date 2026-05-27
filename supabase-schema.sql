@@ -2,12 +2,14 @@
 -- Run this entire file in the Supabase SQL Editor (supabase.com → SQL Editor)
 
 -- Profiles (extends auth.users)
+-- If already applied, run: ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS country text not null default '';
 create table public.profiles (
   id              uuid references auth.users on delete cascade primary key,
   name            text    not null default '',
   email           text    not null default '',
   company         text    not null default '',
   photo           text    not null default '',
+  country         text    not null default '',
   groq_api_key    text    not null default '',
   tx_model        text    not null default 'whisper-large-v3',
   sum_model       text    not null default 'llama-3.3-70b-versatile',
@@ -79,8 +81,13 @@ create policy "own interviews"  on public.interviews for all using (auth.uid() =
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer as $$
 begin
-  insert into public.profiles (id, email)
-  values (new.id, coalesce(new.email, ''));
+  insert into public.profiles (id, email, name, country)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', ''),
+    coalesce(new.raw_user_meta_data->>'country', '')
+  );
   return new;
 end;
 $$;
