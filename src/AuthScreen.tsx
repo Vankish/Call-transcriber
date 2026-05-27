@@ -3,13 +3,38 @@ import { supabase, isSupabaseConfigured } from './lib/supabase'
 
 type Mode = 'login' | 'register'
 
+const COUNTRIES = [
+  'Afganistán', 'Albania', 'Alemania', 'Andorra', 'Angola', 'Arabia Saudita',
+  'Argelia', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaiyán',
+  'Bahréin', 'Bangladesh', 'Bélgica', 'Bielorrusia', 'Bolivia', 'Bosnia y Herzegovina',
+  'Brasil', 'Bulgaria', 'Camerún', 'Canadá', 'Chile', 'China', 'Chipre',
+  'Colombia', 'Congo', 'Corea del Sur', 'Costa Rica', 'Croacia', 'Cuba',
+  'Dinamarca', 'Ecuador', 'Egipto', 'El Salvador', 'Emiratos Árabes Unidos',
+  'Eslovaquia', 'Eslovenia', 'España', 'Estados Unidos', 'Estonia', 'Etiopía',
+  'Filipinas', 'Finlandia', 'Francia', 'Georgia', 'Ghana', 'Grecia', 'Guatemala',
+  'Honduras', 'Hungría', 'India', 'Indonesia', 'Irak', 'Irán', 'Irlanda',
+  'Israel', 'Italia', 'Jamaica', 'Japón', 'Jordania', 'Kazajistán', 'Kenia',
+  'Kuwait', 'Letonia', 'Líbano', 'Libia', 'Lituania', 'Luxemburgo',
+  'Malasia', 'Malta', 'Marruecos', 'México', 'Moldavia', 'Mongolia',
+  'Myanmar', 'Nepal', 'Nicaragua', 'Nigeria', 'Noruega', 'Nueva Zelanda',
+  'Países Bajos', 'Pakistán', 'Panamá', 'Paraguay', 'Perú', 'Polonia',
+  'Portugal', 'Puerto Rico', 'Qatar', 'Reino Unido', 'República Checa',
+  'República Dominicana', 'Rumania', 'Rusia', 'Senegal', 'Serbia',
+  'Singapur', 'Siria', 'Sri Lanka', 'Sudáfrica', 'Suecia', 'Suiza',
+  'Tailandia', 'Tanzania', 'Túnez', 'Turquía', 'Ucrania', 'Uganda',
+  'Uruguay', 'Uzbekistán', 'Venezuela', 'Vietnam', 'Yemen', 'Zimbabue',
+]
+
 export function AuthScreen() {
-  const [mode, setMode]       = useState<Mode>('login')
-  const [email, setEmail]     = useState('')
-  const [password, setPass]   = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState('')
-  const [info, setInfo]       = useState('')
+  const [mode, setMode]               = useState<Mode>('login')
+  const [name, setName]               = useState('')
+  const [email, setEmail]             = useState('')
+  const [password, setPass]           = useState('')
+  const [confirmPassword, setConfirm] = useState('')
+  const [country, setCountry]         = useState('')
+  const [loading, setLoading]         = useState(false)
+  const [error, setError]             = useState('')
+  const [info, setInfo]               = useState('')
 
   const reset = () => { setError(''); setInfo('') }
 
@@ -17,10 +42,19 @@ export function AuthScreen() {
     e.preventDefault()
     reset()
     if (!email.trim() || !password.trim()) { setError('Introduce email y contraseña.'); return }
+    if (mode === 'register') {
+      if (!name.trim())                    { setError('Introduce tu nombre completo.'); return }
+      if (password !== confirmPassword)    { setError('Las contraseñas no coinciden.'); return }
+      if (!country)                        { setError('Selecciona tu país.'); return }
+    }
     setLoading(true)
     try {
       if (mode === 'register') {
-        const { error } = await supabase.auth.signUp({ email, password })
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { full_name: name.trim(), country } },
+        })
         if (error) throw error
         setInfo('Revisa tu email para confirmar la cuenta.')
       } else {
@@ -28,8 +62,7 @@ export function AuthScreen() {
         if (error) throw error
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
-      setError(translateError(msg))
+      setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
     } finally {
       setLoading(false)
     }
@@ -45,97 +78,186 @@ export function AuthScreen() {
       })
       if (error) throw error
       if (!data.url) throw new Error('No se pudo generar URL de Google')
-
-      if (!window.desktopApp?.openOAuthWindow) {
-        setError('OAuth no disponible en esta versión.')
-        return
-      }
+      if (!window.desktopApp?.openOAuthWindow) { setError('OAuth no disponible en esta versión.'); return }
       const callbackUrl = await window.desktopApp.openOAuthWindow(data.url)
       if (!callbackUrl) { setLoading(false); return }
-
       const parsed = new URL(callbackUrl)
       const code = parsed.searchParams.get('code')
       if (!code) throw new Error('No se recibió código de autorización')
       const { error: sessErr } = await supabase.auth.exchangeCodeForSession(code)
       if (sessErr) throw sessErr
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
-      setError(translateError(msg))
+      setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
     } finally {
       setLoading(false)
     }
   }
 
+  const switchMode = (m: Mode) => {
+    setMode(m); reset()
+    setName(''); setConfirm(''); setCountry('')
+  }
+
   return (
     <div className="auth-root">
-      <div className="auth-card">
-        <div className="auth-logo-row">
-          <div className="auth-logo-dot" />
-          <span className="auth-logo-text">Call Transcriber</span>
+      {/* ── Panel izquierdo — branding ── */}
+      <div className="auth-left">
+        <svg viewBox="0 0 270 86" xmlns="http://www.w3.org/2000/svg" className="auth-logo-svg">
+          {/* Circle icon */}
+          <rect x="0" y="3" width="80" height="80" rx="40" fill="#2563eb"/>
+          {/* Waveform bars */}
+          <rect x="13" y="34" width="7" height="18" rx="2" fill="#ffffff"/>
+          <rect x="25" y="28" width="7" height="30" rx="2" fill="#ffffff"/>
+          <rect x="37" y="21" width="7" height="44" rx="2" fill="#ffffff"/>
+          <rect x="49" y="28" width="7" height="30" rx="2" fill="#ffffff"/>
+          <rect x="61" y="34" width="7" height="18" rx="2" fill="#ffffff"/>
+          {/* Wordmark */}
+          <text x="96" y="40" fontFamily="Inter, system-ui, Arial, sans-serif" fontSize="22" fontWeight="700" fill="#ffffff">Call Transcriber</text>
+          {/* Tagline */}
+          <text x="97" y="60" fontFamily="Inter, system-ui, Arial, sans-serif" fontSize="11" fill="rgba(255,255,255,0.5)">Transcribe · Analiza · Decide</text>
+        </svg>
+
+        <div className="auth-left-body">
+          <h1 className="auth-headline">Entrevistas más<br />inteligentes.</h1>
+          <p className="auth-tagline">
+            Graba, transcribe y resume tus entrevistas con IA. Todo en un lugar.
+          </p>
+          <ul className="auth-features">
+            <li>✦&nbsp; Grabación de micrófono + sistema</li>
+            <li>✦&nbsp; Transcripción automática con Groq</li>
+            <li>✦&nbsp; Resúmenes IA y sincronización en la nube</li>
+          </ul>
         </div>
 
-        {!isSupabaseConfigured && (
-          <div className="auth-setup-banner">
-            <strong>Configuración pendiente</strong>
-            <p>Añade tus credenciales de Supabase en el archivo <code>.env</code> y reconstruye la app para activar la sincronización.</p>
-          </div>
-        )}
+        <div className="auth-deco-circle" />
+      </div>
 
-        <h1 className="auth-title">
-          {mode === 'login' ? 'Bienvenido de vuelta' : 'Crear cuenta'}
-        </h1>
-        <p className="auth-sub">
-          {mode === 'login'
-            ? 'Inicia sesión para acceder a tus entrevistas desde cualquier dispositivo.'
-            : 'Crea una cuenta para sincronizar tus entrevistas entre dispositivos.'}
-        </p>
+      {/* ── Panel derecho — formulario ── */}
+      <div className="auth-right">
+        <div className="auth-card">
+          {!isSupabaseConfigured && (
+            <div className="auth-setup-banner">
+              <strong>Configuración pendiente</strong>
+              <p>Añade tus credenciales de Supabase en el archivo <code>.env</code> y reconstruye la app.</p>
+            </div>
+          )}
 
-        <button type="button" className="auth-google-btn" onClick={handleGoogle} disabled={loading || !isSupabaseConfigured}>
-          <GoogleLogoIcon />
-          Continuar con Google
-        </button>
+          <h2 className="auth-title">
+            {mode === 'login' ? 'Bienvenido de vuelta' : 'Crear cuenta'}
+          </h2>
+          <p className="auth-sub">
+            {mode === 'login'
+              ? 'Inicia sesión para acceder a tus entrevistas desde cualquier dispositivo.'
+              : 'Crea una cuenta para sincronizar tus entrevistas entre dispositivos.'}
+          </p>
 
-        <div className="auth-divider"><span>o</span></div>
-
-        <form onSubmit={handleSubmit} className="auth-form">
-          <label className="auth-label">Email
-            <input
-              type="email"
-              className="auth-input"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="tu@email.com"
-              autoComplete="email"
-              disabled={loading}
-            />
-          </label>
-          <label className="auth-label">Contraseña
-            <input
-              type="password"
-              className="auth-input"
-              value={password}
-              onChange={e => setPass(e.target.value)}
-              placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
-              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-              disabled={loading}
-            />
-          </label>
-
-          {error && <p className="auth-error">{error}</p>}
-          {info  && <p className="auth-info">{info}</p>}
-
-          <button type="submit" className="auth-submit-btn" disabled={loading || !isSupabaseConfigured}>
-            {loading ? <span className="spinner" /> : mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta'}
+          <button
+            type="button"
+            className="auth-google-btn"
+            onClick={handleGoogle}
+            disabled={loading || !isSupabaseConfigured}
+          >
+            <GoogleLogoIcon />
+            {mode === 'login' ? 'Continuar con Google' : 'Registrarse con Google'}
           </button>
-        </form>
 
-        <p className="auth-switch">
-          {mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}
-          {' '}
-          <button type="button" className="link-btn" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); reset() }}>
-            {mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
-          </button>
-        </p>
+          <div className="auth-divider"><span>o</span></div>
+
+          <form onSubmit={handleSubmit} className="auth-form">
+            {mode === 'register' && (
+              <label className="auth-label">Nombre completo
+                <input
+                  type="text"
+                  className="auth-input"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Tu nombre"
+                  autoComplete="name"
+                  disabled={loading}
+                />
+              </label>
+            )}
+
+            <label className="auth-label">Email
+              <input
+                type="email"
+                className="auth-input"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="tu@email.com"
+                autoComplete="email"
+                disabled={loading}
+              />
+            </label>
+
+            <label className="auth-label">Contraseña
+              <input
+                type="password"
+                className="auth-input"
+                value={password}
+                onChange={e => setPass(e.target.value)}
+                placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
+                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                disabled={loading}
+              />
+            </label>
+
+            {mode === 'register' && (
+              <>
+                <label className="auth-label">Confirmar contraseña
+                  <input
+                    type="password"
+                    className="auth-input"
+                    value={confirmPassword}
+                    onChange={e => setConfirm(e.target.value)}
+                    placeholder="Repetir contraseña"
+                    autoComplete="new-password"
+                    disabled={loading}
+                  />
+                </label>
+
+                <label className="auth-label">País
+                  <select
+                    className="auth-input auth-select"
+                    value={country}
+                    onChange={e => setCountry(e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="">Selecciona tu país</option>
+                    {COUNTRIES.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
+
+            {error && <p className="auth-error">{error}</p>}
+            {info  && <p className="auth-info">{info}</p>}
+
+            <button
+              type="submit"
+              className="auth-submit-btn"
+              disabled={loading || !isSupabaseConfigured}
+            >
+              {loading
+                ? <span className="spinner" />
+                : mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta'}
+            </button>
+          </form>
+
+          <p className="auth-switch">
+            {mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}
+            {' '}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
+            >
+              {mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
+            </button>
+          </p>
+        </div>
       </div>
     </div>
   )

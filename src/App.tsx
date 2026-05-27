@@ -145,6 +145,16 @@ function App() {
   const [micDevices, setMicDevices] = useState<AudioDeviceOption[]>([])
   const [outputDevices, setOutputDevices] = useState<AudioDeviceOption[]>([])
   const [_recordingMessage, setRecordingMessage] = useState('')
+  const [defaultMicDeviceId, setDefaultMicDeviceId] = useState('')
+  const [defaultOutputDeviceId, setDefaultOutputDeviceId] = useState('')
+  const [defaultCaptureSystem, setDefaultCaptureSystem] = useState(false)
+  const [settingsDefaultMicDraft, setSettingsDefaultMicDraft] = useState('')
+  const [settingsDefaultOutputDraft, setSettingsDefaultOutputDraft] = useState('')
+  const [settingsDefaultSystemDraft, setSettingsDefaultSystemDraft] = useState(false)
+  const [showAudioSetupModal, setShowAudioSetupModal] = useState(false)
+  const [pendingMicId, setPendingMicId] = useState('')
+  const [pendingOutputId, setPendingOutputId] = useState('')
+  const [pendingCaptureSystem, setPendingCaptureSystem] = useState(false)
 
   // ── Config ─────────────────────────────────────────────────────────────
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -270,13 +280,14 @@ function App() {
 
   // ── Auth: session management ───────────────────────────────────────────
   useEffect(() => {
-    void supabase.auth.getSession().then(({ data: { session } }) => {
+    void supabase.auth.getSession()
+      .then(({ data }) => { setSession(data.session) })
+      .catch(() => {})
+      .finally(() => setAuthLoading(false))
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
-      setAuthLoading(false)
-    })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (!session) { setProjects([]); setCandidates([]); setInterviews([]) }
+      if (event === 'SIGNED_OUT') { setProjects([]); setCandidates([]); setInterviews([]) }
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -293,11 +304,17 @@ function App() {
           supabase.from('interviews').select('*').eq('user_id', userId).order('created_at'),
           supabase.from('profiles').select('*').eq('id', userId).single(),
         ])
+        if (pRes.error) { toast(`Error cargando proyectos: ${pRes.error.message}`, 'error'); return }
+        if (cRes.error) { toast(`Error cargando perfiles: ${cRes.error.message}`, 'error'); return }
         const hasRemote = (pRes.data?.length ?? 0) > 0 || (cRes.data?.length ?? 0) > 0
         if (hasRemote) {
           setProjects((pRes.data ?? []).map(projFromDb))
           setCandidates((cRes.data ?? []).map(candFromDb))
-          setInterviews(normalizeInterviews((iRes.data ?? []).map(ivFromDb)))
+          if (iRes.error) {
+            toast(`Error cargando entrevistas: ${iRes.error.message}`, 'error')
+          } else {
+            setInterviews(normalizeInterviews((iRes.data ?? []).map(ivFromDb)))
+          }
         } else {
           // First login: migrate localStorage data to Supabase
           const raw = localStorage.getItem(V2_KEY)
@@ -325,7 +342,24 @@ function App() {
           if (p.name)          setUserName(p.name)
           if (p.company)       setUserCompany(p.company)
           if (p.photo)         setUserPhoto(p.photo)
-          if (p.groq_api_key)  { setGroqApiKey(p.groq_api_key); setSettingsKeyDraft(p.groq_api_key) }
+          if (p.groq_api_key)  {
+            setGroqApiKey(p.groq_api_key); setSettingsKeyDraft(p.groq_api_key)
+            // sync to local config so main.cjs always has the key
+            if (window.desktopApp?.getConfig && window.desktopApp?.saveConfig) {
+              window.desktopApp.getConfig().then(cfg => {
+                if (!cfg.groqApiKey && window.desktopApp?.saveConfig) {
+                  void window.desktopApp.saveConfig({
+                    groqApiKey: p.groq_api_key,
+                    transcriptionModel: cfg.transcriptionModel ?? 'whisper-large-v3',
+                    summaryModel: cfg.summaryModel ?? 'llama-3.3-70b-versatile',
+                    userName: cfg.userName ?? '',
+                    userEmail: cfg.userEmail ?? '',
+                    userCompany: cfg.userCompany ?? '',
+                  })
+                }
+              }).catch(() => {})
+            }
+          }
           if (p.tx_model)      setTranscriptionModel(p.tx_model)
           if (p.sum_model)     setSummaryModel(p.sum_model)
         }
@@ -398,18 +432,37 @@ function App() {
         const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
         probe.getTracks().forEach(t => t.stop())
         const devs = await navigator.mediaDevices.enumerateDevices()
-        setMicDevices(devs.filter(d => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, name: d.label || `Micrófono ${i + 1}` })))
-        setOutputDevices(devs.filter(d => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, name: d.label || `Salida ${i + 1}` })))
+        const mics = devs.filter(d => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, name: d.label || `Micrófono ${i + 1}` }))
+        const outs = devs.filter(d => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, name: d.label || `Salida ${i + 1}` }))
+        setMicDevices(mics)
+        setOutputDevices(outs)
+        const savedMic = localStorage.getItem('ct-default-mic') ?? ''
+        const savedOut = localStorage.getItem('ct-default-output') ?? ''
+        const savedSystem = localStorage.getItem('ct-default-system') === 'true'
+        const resolvedMic = savedMic && mics.some(m => m.id === savedMic) ? savedMic : mics[0]?.id ?? ''
+        const resolvedOut = savedOut && outs.some(o => o.id === savedOut) ? savedOut : outs[0]?.id ?? ''
+        setDefaultMicDeviceId(resolvedMic)
+        setDefaultOutputDeviceId(resolvedOut)
+        setDefaultCaptureSystem(savedSystem)
+        setSettingsDefaultMicDraft(resolvedMic)
+        setSettingsDefaultOutputDraft(resolvedOut)
+        setSettingsDefaultSystemDraft(savedSystem)
       } catch { setRecordingMessage('No se pudieron cargar dispositivos de audio.') }
     }
     void load()
   }, [])
 
   // ── Helpers ────────────────────────────────────────────────────────────
-  const updateInterview = (id: string, patch: Partial<Interview>) => {
+  const updateInterview = useCallback((id: string, patch: Partial<Interview>) => {
     setInterviews(c => c.map(i => i.id === id ? { ...i, ...patch } : i))
-    if (session) void supabase.from('interviews').update(ivPatchToDb(patch)).eq('id', id)
-  }
+    if (session) {
+      supabase.from('interviews').update(ivPatchToDb(patch)).eq('id', id)
+        .then(({ error }) => {
+          if (error) console.error('Supabase update error:', error.message, error.details)
+        })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id])
 
   const cleanupRecording = () => {
     mediaRecorderRef.current = null
@@ -421,7 +474,7 @@ function App() {
   }
 
   // ── Recording ──────────────────────────────────────────────────────────
-  const handleStartRecording = async (interviewOverride?: Interview) => {
+  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
     try {
@@ -430,7 +483,9 @@ function App() {
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId } } })
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
-      try { sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }); systemStreamRef.current = sysStream } catch { /* silent */ }
+      if (captureSystem) {
+        try { sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }); systemStreamRef.current = sysStream } catch { /* silent */ }
+      }
       const ctx = new AudioContext(); audioContextRef.current = ctx
       const dest = ctx.createMediaStreamDestination()
       ctx.createMediaStreamSource(micStream).connect(dest)
@@ -455,13 +510,25 @@ function App() {
 
   const handleNewRecording = () => {
     if (!activeCandidateId || !activeCandidate) return
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: micDevices[0]?.id ?? '', outputDeviceId: outputDevices[0]?.id ?? '', transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
+    setPendingMicId(defaultMicDeviceId || micDevices[0]?.id || '')
+    setPendingOutputId(defaultOutputDeviceId || outputDevices[0]?.id || '')
+    setPendingCaptureSystem(defaultCaptureSystem)
+    setShowAudioSetupModal(true)
+  }
+
+  const handleConfirmRecordingSetup = () => {
+    if (!activeCandidateId || !activeCandidate || !pendingMicId) return
+    setShowAudioSetupModal(false)
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
     setInterviews(c => [n, ...c])
-    if (session) void supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
+    if (session) {
+      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
+        .then(({ error }) => { if (error) toast(`Error al crear entrevista en la nube: ${error.message}`, 'error') })
+    }
     setSelectedInterviewId(n.id)
     setSelectedTranscriptInterviewId(n.id)
     setSelectedSummaryInterviewId(n.id)
-    void handleStartRecording(n)
+    void handleStartRecording(n, pendingCaptureSystem)
   }
 
   const handlePauseRecording = () => {
@@ -557,39 +624,54 @@ function App() {
   }
 
   // ── CRUD ───────────────────────────────────────────────────────────────
-  const handleDeleteInterview = (interviewId: string) => {
+  const handleDeleteInterview = async (interviewId: string) => {
     if (pendingDeleteId !== interviewId) { setPendingDeleteId(interviewId); return }
     setPendingDeleteId(null); if (playingInterviewId === interviewId) stopAudio()
     const interview = interviews.find(i => i.id === interviewId)
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: interview.recordingFilePath })
     setInterviews(c => c.filter(i => i.id !== interviewId))
-    if (session) void supabase.from('interviews').delete().eq('id', interviewId)
+    if (session) {
+      const { error } = await supabase.from('interviews').delete().eq('id', interviewId)
+      if (error) { toast(`Error eliminando entrevista: ${error.message}`, 'error'); return }
+    }
     toast('Entrevista eliminada')
   }
 
-  const handleDeleteCandidate = (candidateId: string) => {
+  const handleDeleteCandidate = async (candidateId: string) => {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
-    interviews.filter(i => i.candidateId === candidateId).forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
-    setInterviews(c => c.filter(i => i.candidateId !== candidateId)); setCandidates(c => c.filter(x => x.id !== candidateId))
-    if (session) void supabase.from('candidates').delete().eq('id', candidateId)
+    const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
+    setInterviews(c => c.filter(i => i.candidateId !== candidateId))
+    setCandidates(c => c.filter(x => x.id !== candidateId))
+    if (session) {
+      if (candidateInterviewIds.length > 0) {
+        await supabase.from('interviews').delete().eq('candidate_id', candidateId)
+      }
+      const { error } = await supabase.from('candidates').delete().eq('id', candidateId)
+      if (error) { toast(`Error eliminando perfil: ${error.message}`, 'error'); return }
+    }
     if (activeCandidateId === candidateId) { setActiveCandidateId(null); setScreen('project-detail') }
-    toast('Candidata eliminada')
+    toast('Perfil eliminado')
   }
 
-  const handleCreateCandidate = () => {
+  const handleCreateCandidate = async () => {
     if (!candidateDraft.name.trim() || !activeProjectId) return
     const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() }
     setCandidates(curr => [...curr, c])
-    if (session) void supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, created_at: new Date().toISOString() })
-    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast(`Candidata ${c.name} creada`)
+    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE)
+    if (session) {
+      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, created_at: new Date().toISOString() })
+      if (error) { toast(`Error guardando perfil: ${error.message}`, 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
+    }
+    toast(`Perfil ${c.name} creado`)
   }
 
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
     setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() } : x))
     if (session) void supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft }).eq('id', editingCandidateId)
-    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Candidata actualizada')
+    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Perfil actualizado')
   }
 
   const updateProject = (id: string, changes: Partial<Project>) => {
@@ -603,17 +685,25 @@ function App() {
     }
   }
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     if (!projectDraft.name.trim()) return
     const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status }
     setProjects(c => [...c, p])
-    if (session) void supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })
-    setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); toast(`Proyecto ${p.name} creado`)
+    setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
+    if (session) {
+      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })
+      if (error) { toast(`Error guardando proyecto: ${error.message}`, 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
+    }
+    toast(`Proyecto ${p.name} creado`)
   }
 
   const handleSaveSettings = async () => {
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({ groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft, userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft })
     setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft); setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
+    localStorage.setItem('ct-default-mic', settingsDefaultMicDraft)
+    localStorage.setItem('ct-default-output', settingsDefaultOutputDraft)
+    localStorage.setItem('ct-default-system', String(settingsDefaultSystemDraft))
+    setDefaultMicDeviceId(settingsDefaultMicDraft); setDefaultOutputDeviceId(settingsDefaultOutputDraft); setDefaultCaptureSystem(settingsDefaultSystemDraft)
     if (session) void supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, groq_api_key: settingsKeyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id)
     toast('Configuración guardada')
   }
@@ -621,6 +711,7 @@ function App() {
   const openSettings = (tab: SettingsTab = 'api-keys') => {
     setSettingsKeyDraft(groqApiKey); setSettingsTxModelDraft(transcriptionModel); setSettingsSumModelDraft(summaryModel)
     setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany)
+    setSettingsDefaultMicDraft(defaultMicDeviceId); setSettingsDefaultOutputDraft(defaultOutputDeviceId); setSettingsDefaultSystemDraft(defaultCaptureSystem)
     setSettingsTab(tab); setScreen('settings')
   }
 
@@ -659,7 +750,7 @@ function App() {
     if (screen === 'projects') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos' }]
     if (screen === 'project-detail' && activeProject) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos', action: () => setScreen('projects') }, { label: activeProject.name }]
     if (screen === 'candidate-detail' && activeProject && activeCandidate) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: activeProject.name, action: () => goToProject(activeProject.id) }, { label: activeCandidate.name }]
-    if (screen === 'candidates') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Candidatas' }]
+    if (screen === 'candidates') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Perfiles' }]
     if (screen === 'settings') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Configuración' }]
     if (screen === 'profile') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Mi Perfil' }]
     return []
@@ -722,7 +813,7 @@ function App() {
                   <>
                     <div className="es-circle"><span className="es-icon">≡</span></div>
                     <h3 className="es-title">No tienes proyectos todavía</h3>
-                    <p className="es-sub">Crea tu primer proyecto para empezar a gestionar candidatas</p>
+                    <p className="es-sub">Crea tu primer proyecto para empezar a gestionar perfiles</p>
                     <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
                   </>
                 ) : (
@@ -750,7 +841,7 @@ function App() {
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
-                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">candidatas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">perfiles</span></div>
                         <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">entrevistas</span></div>
                         <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">transcritas</span></div>
                         <div className="plc-stat">
@@ -791,7 +882,7 @@ function App() {
             </div>
             <h3 className="ap-name">{userName || 'Usuario'}</h3>
             <p className="ap-email">{userEmail}</p>
-            <span className="ap-plan-badge">✦ Pro Plan</span>
+            <span className="ap-plan-badge">★ Pro Plan</span>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
@@ -859,7 +950,7 @@ function App() {
             : <div className="empty-state">
                 <div className="es-circle"><span className="es-icon">≡</span></div>
                 <h3 className="es-title">No tienes proyectos todavía</h3>
-                <p className="es-sub">Crea tu primer proyecto para empezar a gestionar candidatas</p>
+                <p className="es-sub">Crea tu primer proyecto para empezar a gestionar perfiles</p>
                 <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
               </div>
         ) : (
@@ -874,7 +965,7 @@ function App() {
                   <div className="proj-list-card-body">
                     <div className="proj-list-card-info">
                       <span className="proj-list-card-title">{p.name}</span>
-                      <span className="proj-list-card-meta">{p.company}  ·  {p.status === 'active' ? 'Activo' : 'Cerrado'}  ·  {cCnt} candidata{cCnt !== 1 ? 's' : ''}</span>
+                      <span className="proj-list-card-meta">{p.company}  ·  {p.status === 'active' ? 'Activo' : 'Cerrado'}  ·  {cCnt} perfil{cCnt !== 1 ? 'es' : ''}</span>
                       <span className="proj-list-card-stats">{tCnt} transcrita{tCnt !== 1 ? 's' : ''}  ·  {iCnt} grabacion{iCnt !== 1 ? 'es' : ''}</span>
                     </div>
                     <span className={`proj-list-card-badge${p.status === 'active' ? ' proj-list-card-badge--active' : ' proj-list-card-badge--closed'}`}>
@@ -916,7 +1007,7 @@ function App() {
               <p className="proj-header-sub">{activeProject.company} · Creado {fmtShort(activeProject.createdAt)}</p>
             </div>
             <div className="proj-header-stats">
-              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">candidatas</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">perfiles</span></div>
               <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">entrevistas</span></div>
               <div className="proj-stat"><span className="proj-stat-n">{tCount}</span><span className="proj-stat-l">transcritas</span></div>
             </div>
@@ -928,8 +1019,8 @@ function App() {
 
         {/* Section header */}
         <div className="proj-section-header">
-          <h3 className="proj-section-title">Candidatas del proceso</h3>
-          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nueva candidata</button>
+          <h3 className="proj-section-title">Perfiles del proceso</h3>
+          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nuevo perfil</button>
         </div>
 
         {/* Search */}
@@ -941,12 +1032,12 @@ function App() {
 
         {filteredCandidates.length === 0 ? (
           searchQuery
-            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay candidatas que coincidan con "{searchQuery}"</p></div>
+            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay perfiles que coincidan con "{searchQuery}"</p></div>
             : <div className="empty-state">
                 <div className="es-circle"><span className="es-icon">◎</span></div>
-                <h3 className="es-title">No hay candidatas en este proyecto</h3>
-                <p className="es-sub">Añade tu primera candidata para empezar a grabar y transcribir entrevistas</p>
-                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nueva candidata</button>
+                <h3 className="es-title">No hay perfiles en este proyecto</h3>
+                <p className="es-sub">Añade tu primer perfil para empezar a grabar y transcribir entrevistas</p>
+                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nuevo perfil</button>
               </div>
         ) : (
           <div className="pdc-list">
@@ -991,7 +1082,7 @@ function App() {
     return (
       <div className="screen-content">
         <div className="content-header">
-          <div><h2>Candidatas</h2><p className="screen-sub">{candidates.length} candidata{candidates.length !== 1 ? 's' : ''}</p></div>
+          <div><h2>Perfiles</h2><p className="screen-sub">{candidates.length} perfil{candidates.length !== 1 ? 'es' : ''}</p></div>
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
@@ -1000,8 +1091,8 @@ function App() {
         </div>
         {allCandidates.length === 0 ? (
           searchQuery
-            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay candidatas que coincidan con "{searchQuery}"</p></div>
-            : <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin candidatas</h3><p>Las candidatas aparecerán aquí cuando las añadas a un proyecto.</p></div>
+            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay perfiles que coincidan con "{searchQuery}"</p></div>
+            : <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin perfiles</h3><p>Los perfiles aparecerán aquí cuando los añadas a un proyecto.</p></div>
         ) : (
           <div className="candidates-table">
             {allCandidates.map(c => {
@@ -1024,7 +1115,7 @@ function App() {
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
                     <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar candidata'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}</button>
+                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}</button>
                   </div>
                   <button type="button" className="ctr-open">Ver entrevistas →</button>
                 </div>
@@ -1077,7 +1168,7 @@ function App() {
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <>✦ Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
+          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <>★ Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
             <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => setActiveTab(tab)}>
               {label}
             </button>
@@ -1105,7 +1196,7 @@ function App() {
         <div className="rec-empty-card">
           <div className="rec-empty-icon-wrap"><span className="rec-empty-icon"><MicIcon /></span></div>
           <h3 className="rec-empty-title">No hay grabaciones todavía</h3>
-          <p className="rec-empty-sub">Graba la primera entrevista con {activeCandidate?.name ?? 'la candidata'} para empezar</p>
+          <p className="rec-empty-sub">Graba la primera entrevista con {activeCandidate?.name ?? 'el perfil'} para empezar</p>
           <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
         </div>
       ) : (
@@ -1263,7 +1354,7 @@ function App() {
                   <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '✦ Con resumen' : '○ Sin resumen'}</span>
+                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '★ Con resumen' : '○ Sin resumen'}</span>
                 </div>
               </div>
             )
@@ -1279,14 +1370,14 @@ function App() {
                   <option value="listado">Listado por puntos ⌄</option>
                 </select>
                 <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedSummaryInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedSummaryInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey || selectedSummaryInterview.transcriptionStatus !== 'done' || selectedSummaryInterview.summaryStatus === 'generating'}>✦ Regenerar</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey || selectedSummaryInterview.transcriptionStatus !== 'done' || selectedSummaryInterview.summaryStatus === 'generating'}>★ Regenerar</button>
               </div>
               {!groqApiKey && <p className="warning-note">Configura tu API key de Groq en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
               {selectedSummaryInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
               {selectedSummaryInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
               {selectedSummaryInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
               <div className="sum-instructions">
-                <textarea value={selectedSummaryInterview.summaryInstructions} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryInstructions: e.target.value })} rows={2} placeholder={selectedSummaryInterview.summaryType === 'listado' ? 'Ej: Trayectoria, Habilidades, Pretensiones salariales' : 'Ej: Candidata para puesto administrativo'} />
+                <textarea value={selectedSummaryInterview.summaryInstructions} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryInstructions: e.target.value })} rows={2} placeholder={selectedSummaryInterview.summaryType === 'listado' ? 'Ej: Trayectoria, Habilidades, Pretensiones salariales' : 'Ej: Perfil para puesto administrativo'} />
               </div>
               {selectedSummaryInterview.summaryText ? (
                 selectedSummaryInterview.summaryType === 'resumen' ? (
@@ -1308,7 +1399,7 @@ function App() {
               ) : (
                 selectedSummaryInterview.transcriptionStatus === 'done' && selectedSummaryInterview.summaryStatus !== 'generating' && (
                   <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey}>
-                    ✦ Generar resumen con IA
+                    ★ Generar resumen con IA
                   </button>
                 )
               )}
@@ -1394,6 +1485,31 @@ function App() {
                     <option value="medium">Media (64 kbps)</option>
                     <option value="low">Baja (32 kbps)</option>
                   </select>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">DISPOSITIVOS PREDETERMINADOS</div>
+                  <div className="settings-section-divider" />
+                  <p className="cfg-field-desc">Se usarán automáticamente al iniciar una grabación</p>
+                  <label className="modal-label">Micrófono predeterminado (entrada)
+                    <select className="modal-input modal-select" value={settingsDefaultMicDraft} onChange={e => setSettingsDefaultMicDraft(e.target.value)}>
+                      {micDevices.length === 0
+                        ? <option value="">Sin dispositivos detectados</option>
+                        : micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                      }
+                    </select>
+                  </label>
+                  <label className="modal-label" style={{ marginTop: 12 }}>Dispositivo de salida predeterminado
+                    <select className="modal-input modal-select" value={settingsDefaultOutputDraft} onChange={e => setSettingsDefaultOutputDraft(e.target.value)}>
+                      {outputDevices.length === 0
+                        ? <option value="">Sin dispositivos detectados</option>
+                        : outputDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                      }
+                    </select>
+                  </label>
+                  <div className="toggle-row" style={{ marginTop: 12 }}>
+                    <div><span className="toggle-label">Capturar audio del sistema</span><span className="notif-sub">Capturar también el audio que sale por los altavoces</span></div>
+                    <button type="button" className={`toggle-btn${settingsDefaultSystemDraft ? ' on' : ''}`} onClick={() => setSettingsDefaultSystemDraft(t => !t)}><span className="toggle-circle" /></button>
+                  </div>
                 </div>
                 <div className="settings-section">
                   <div className="settings-section-label">COMPORTAMIENTO</div>
@@ -1507,7 +1623,7 @@ function App() {
                 <div className="settings-section">
                   <div className="prof-plan-card">
                     <p className="prof-plan-label">Plan actual</p>
-                    <div className="prof-plan-badge">✦ Pro Plan</div>
+                    <div className="prof-plan-badge">★ Pro Plan</div>
                     <div className="prof-plan-card-divider" />
                     <p className="prof-plan-email">{userEmail || 'usuario'}</p>
                     <p className="prof-plan-since">Miembro desde mayo 2026</p>
@@ -1740,7 +1856,17 @@ function App() {
       {/* Global top bar */}
       <header className="global-top-bar">
         <div className="gtb-accent" />
-        <span className="gtb-title">Call Transcriber</span>
+        <div className="gtb-logo">
+          <svg viewBox="0 0 80 80" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+            <rect width="80" height="80" rx="40" fill="#2563eb"/>
+            <rect x="13" y="31" width="7" height="18" rx="2" fill="#ffffff"/>
+            <rect x="25" y="25" width="7" height="30" rx="2" fill="#ffffff"/>
+            <rect x="37" y="18" width="7" height="44" rx="2" fill="#ffffff"/>
+            <rect x="49" y="25" width="7" height="30" rx="2" fill="#ffffff"/>
+            <rect x="61" y="31" width="7" height="18" rx="2" fill="#ffffff"/>
+          </svg>
+          <span className="gtb-title">Call Transcriber</span>
+        </div>
       </header>
 
       {activeRecordingInterview && renderRecordingScreen()}
@@ -1770,7 +1896,7 @@ function App() {
             <nav className="sidebar-nav">
               <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>Inicio</span></button>
               <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>Proyectos</span></button>
-              <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>Candidatas</span></button>
+              <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>Perfiles</span></button>
             </nav>
             <div className="sidebar-bottom">
               <button type="button" className="sidebar-user" onClick={() => setShowProfilePopup(p => !p)}>
@@ -1872,7 +1998,7 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">{editingCandidateId ? 'Editar candidata' : 'Nueva candidata'}</h2>
+                <h2 className="modal-title">{editingCandidateId ? 'Editar perfil' : 'Nuevo perfil'}</h2>
                 <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>✕</button>
@@ -1899,7 +2025,63 @@ function App() {
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir candidata</>}</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir perfil</>}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audio setup modal */}
+      {showAudioSetupModal && (
+        <div className="modal-overlay" onClick={() => setShowAudioSetupModal(false)}>
+          <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">Configurar grabación</h2>
+                <p className="modal-subtitle">Selecciona los dispositivos de audio para esta sesión</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setShowAudioSetupModal(false)}>✕</button>
+            </div>
+            <div className="modal-header-divider" />
+            <div className="modal-field">
+              <span className="modal-field-label">Entrada de audio (micrófono)</span>
+              <select
+                className="modal-input modal-input--figma modal-select"
+                value={pendingMicId}
+                onChange={e => setPendingMicId(e.target.value)}
+              >
+                {micDevices.length === 0
+                  ? <option value="">Sin dispositivos detectados</option>
+                  : micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                }
+              </select>
+            </div>
+            <div className="modal-field" style={{ marginTop: 12 }}>
+              <span className="modal-field-label">Salida de audio</span>
+              <select
+                className="modal-input modal-input--figma modal-select"
+                value={pendingOutputId}
+                onChange={e => setPendingOutputId(e.target.value)}
+              >
+                {outputDevices.length === 0
+                  ? <option value="">Sin dispositivos detectados</option>
+                  : outputDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                }
+              </select>
+            </div>
+            <div className="modal-field" style={{ marginTop: 16 }}>
+              <div className="toggle-row" style={{ padding: '12px 14px', background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                <div>
+                  <span className="toggle-label">Capturar audio del sistema</span>
+                  <span className="notif-sub">Graba también el audio de altavoces (llamadas, vídeos...)</span>
+                </div>
+                <button type="button" className={`toggle-btn${pendingCaptureSystem ? ' on' : ''}`} onClick={() => setPendingCaptureSystem(t => !t)}><span className="toggle-circle" /></button>
+              </div>
+            </div>
+            <div className="modal-footer-divider" />
+            <div className="modal-actions modal-actions--figma">
+              <button type="button" className="modal-cancel-btn" onClick={() => setShowAudioSetupModal(false)}>Cancelar</button>
+              <button type="button" className="modal-action-btn" onClick={handleConfirmRecordingSetup} disabled={!pendingMicId}><MicIcon /> Iniciar grabación</button>
             </div>
           </div>
         </div>
@@ -1938,7 +2120,7 @@ function App() {
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>✦ Crear proyecto</button>
+              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>Crear proyecto</button>
             </div>
           </div>
         </div>

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 180" width="640" height="180">
+
+  <!-- Background -->
+  <rect width="640" height="180" fill="#ffffff" rx="16"/>
+
+  <!-- ── Icon ───────────────────────────────────────────── -->
+  <rect x="24" y="20" width="140" height="140" rx="28" fill="#2563eb"/>
+
+  <!-- Recording dot -->
+  <circle cx="152" cy="34" r="9" fill="#ef4444"/>
+
+  <!-- Mic capsule -->
+  <rect x="71" y="38" width="38" height="58" rx="19" fill="#ffffff"/>
+
+  <!-- Stand arch -->
+  <path d="M56 90 Q56 122 90 122 Q124 122 124 90"
+        fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Stand pole -->
+  <line x1="90" y1="122" x2="90" y2="135"
+        stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Stand base -->
+  <line x1="73" y1="135" x2="107" y2="135"
+        stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Sound wave L inner -->
+  <path d="M63 82 Q55 91 63 100"
+        fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+  <!-- Sound wave L outer -->
+  <path d="M50 72 Q38 91 50 110"
+        fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.45"/>
+
+  <!-- Sound wave R inner -->
+  <path d="M117 82 Q125 91 117 100"
+        fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+  <!-- Sound wave R outer -->
+  <path d="M130 72 Q142 91 130 110"
+        fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.45"/>
+
+  <!-- ── Wordmark ──────────────────────────────────────── -->
+  <text x="188" y="97"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="50" font-weight="700" fill="#111827">Call</text>
+
+  <text x="310" y="97"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="50" font-weight="700" fill="#2563eb">Transcriber</text>
+
+  <!-- ── Tagline ───────────────────────────────────────── -->
+  <text x="190" y="128"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="12" font-weight="400" fill="#9ca3af" letter-spacing="2">
+    TRANSCRIBE  ·  ANALYSE  ·  SAVE
+  </text>
+
+  <!-- ── Divider ───────────────────────────────────────── -->
+  <line x1="24" y1="152" x2="616" y2="152" stroke="#e5e7eb" stroke-width="1.5"/>
+
+</svg>

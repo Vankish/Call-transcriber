@@ -10,14 +10,15 @@
     "electron:dev": "wait-on http-get://localhost:5173 && cross-env ELECTRON_DEV=1 electron .",
     "build": "tsc -b && vite build",
     "desktop:build": "npm run build && electron .",
-    "dist:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true",
-    "package:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true",
+    "dist:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --icon=build/icon.ico",
+    "package:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --icon=build/icon.ico",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "build": {
     "appId": "com.calltranscriber.desktop",
     "productName": "Call Transcriber",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "release"
     },
@@ -26,10 +27,19 @@
       "electron/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*"
+    ],
     "win": {
-      "target": [
-        "portable"
-      ]
+      "icon": "build/icon.ico",
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Call Transcriber"
     }
   },
   "dependencies": {
@@ -53,6 +63,8 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10",

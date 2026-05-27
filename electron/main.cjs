@@ -261,13 +261,49 @@ async function transcribeAudio(filePath, groqApiKey, model, language) {
   }
 }
 
+async function identifySpeakers(transcript, groqApiKey, summaryModel) {
+  if (!transcript || !groqApiKey) return transcript
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: summaryModel || 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista. ' +
+            'Tu tarea es identificar los turnos de conversación y etiquetarlos con [Entrevistador]: y [Candidato]:. ' +
+            'Basa tu decisión en el contexto: el entrevistador hace preguntas y conduce la conversación; ' +
+            'el candidato responde sobre sí mismo, su trayectoria y experiencia laboral. ' +
+            'Conserva el texto EXACTAMENTE como está, solo añade las etiquetas al inicio de cada turno. ' +
+            'Responde ÚNICAMENTE con la transcripción etiquetada, sin explicaciones ni texto adicional.',
+        },
+        { role: 'user', content: transcript },
+      ],
+      temperature: 0.1,
+      max_tokens: 8000,
+    }),
+  })
+  if (!response.ok) return transcript
+  const data = await response.json()
+  return data.choices?.[0]?.message?.content || transcript
+}
+
 ipcMain.handle('transcription:run', async (_event, { filePath }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
   }
   const model = config.transcriptionModel || 'whisper-large-v3'
-  const text = await transcribeAudio(filePath, config.groqApiKey, model, 'es')
+  let text = await transcribeAudio(filePath, config.groqApiKey, model, 'es')
+
+  // If Groq diarization didn't find multiple speakers, use LLM to identify them
+  const hasMultipleSpeakers = /\[Hablante [2-9]\]|\[Hablante [2-9]\]:/.test(text)
+  if (!hasMultipleSpeakers && text.trim().length > 0) {
+    text = await identifySpeakers(text, config.groqApiKey, config.summaryModel || 'llama-3.3-70b-versatile').catch(() => text)
+  }
+
   return { text }
 })
 
