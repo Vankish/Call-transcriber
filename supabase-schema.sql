@@ -19,13 +19,16 @@ create table public.profiles (
 
 -- Projects
 create table public.projects (
-  id          text primary key,
-  user_id     uuid references auth.users on delete cascade not null,
-  name        text not null default '',
-  company     text not null default '',
-  status      text not null default 'active',
-  created_at  timestamptz not null default now()
+  id                   text primary key,
+  user_id              uuid references auth.users on delete cascade not null,
+  name                 text    not null default '',
+  company              text    not null default '',
+  status               text    not null default 'active',
+  evaluation_criteria  jsonb   not null default '[]'::jsonb,
+  created_at           timestamptz not null default now()
 );
+-- Migration (run if table already exists):
+-- ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS evaluation_criteria jsonb not null default '[]'::jsonb;
 
 -- Candidates
 create table public.candidates (

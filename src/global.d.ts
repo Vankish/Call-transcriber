@@ -3,6 +3,7 @@ type SaveRecordingPayload = {
   candidateName: string
   createdAt: string
   extension: string
+  format?: string
   audioBytes: Uint8Array
 }
 
@@ -17,6 +18,13 @@ type GetConfigResult = {
   userName?: string
   userEmail?: string
   userCompany?: string
+  userRole?: string
+  audioFormat?: string
+  recordingQuality?: string
+  chunkDuration?: number
+  language?: string
+  dateFormat?: string
+  autoSave?: boolean
 }
 
 type SaveConfigPayload = {
@@ -26,6 +34,13 @@ type SaveConfigPayload = {
   userName: string
   userEmail: string
   userCompany: string
+  userRole?: string
+  audioFormat?: string
+  recordingQuality?: string
+  chunkDuration?: number
+  language?: string
+  dateFormat?: string
+  autoSave?: boolean
 }
 
 type SaveConfigResult = {
@@ -34,6 +49,8 @@ type SaveConfigResult = {
 
 type TranscribeAudioPayload = {
   filePath: string
+  language?: string
+  candidateName?: string
 }
 
 type TranscribeAudioResult = {
@@ -42,7 +59,7 @@ type TranscribeAudioResult = {
 
 type GenerateSummaryPayload = {
   transcript: string
-  instructions: string
+  criteria: string[]
   summaryType: 'resumen' | 'listado'
 }
 
@@ -61,6 +78,9 @@ interface Window {
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
     openOAuthWindow: (url: string) => Promise<string | null>
+    exportPdf: (payload: { html: string; fileName: string }) => Promise<{ ok: boolean; cancelled?: boolean; filePath?: string }>
+    getRecordingsDir: () => Promise<string>
+    selectAudioFile: () => Promise<string | null>
   }
 }
 

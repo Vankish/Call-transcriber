@@ -10,4 +10,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   generateSummary: (payload) => ipcRenderer.invoke('summary:generate', payload),
   deleteRecording: (payload) => ipcRenderer.invoke('recording:delete', payload),
   openOAuthWindow: (url) => ipcRenderer.invoke('auth:open-oauth-window', url),
+  exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
+  getRecordingsDir: () => ipcRenderer.invoke('recordings:get-dir'),
+  selectAudioFile: () => ipcRenderer.invoke('dialog:select-audio'),
 })
