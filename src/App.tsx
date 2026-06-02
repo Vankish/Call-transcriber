@@ -6,7 +6,21 @@ import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
 import { AuthScreen } from './AuthScreen'
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed' }
+type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[] }
+
+const EVALUATION_CRITERIA = [
+  { id: 'experiencia',   label: 'Experiencia laboral' },
+  { id: 'formacion',     label: 'Formación académica' },
+  { id: 'situacion',     label: 'Situación personal' },
+  { id: 'habilidades',   label: 'Habilidades técnicas' },
+  { id: 'idiomas',       label: 'Idiomas' },
+  { id: 'disponibilidad',label: 'Disponibilidad' },
+  { id: 'salario',       label: 'Pretensiones salariales' },
+  { id: 'motivacion',    label: 'Motivación y expectativas' },
+  { id: 'blandas',       label: 'Competencias interpersonales' },
+  { id: 'adecuacion',    label: 'Adecuación al puesto' },
+  { id: 'otros',         label: 'Otros' },
+]
 type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string }
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
@@ -23,7 +37,7 @@ type Interview = {
 }
 type AudioDeviceOption = { id: string; name: string }
 type Toast = { id: string; message: string; sub?: string; type: 'success' | 'error' | 'info' | 'warning' }
-type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'candidates' | 'settings' | 'profile'
+type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'candidates' | 'settings' | 'profile' | 'search'
 type ProfileScreenTab = 'perfil' | 'plan' | 'seguridad' | 'notif'
 type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 
@@ -34,8 +48,8 @@ const ONBOARDING_KEY = 'ct-onboarding-done'
 // ── Helpers ────────────────────────────────────────────────────────────────
 const uid = () => crypto.randomUUID()
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-const fmtDate = (iso: string) => new Date(iso).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-const fmtShort = (iso: string) => new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
+const fmtDate = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleString(locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+const fmtShort = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 const initials = (name: string) => name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
 const AVATAR_COLORS = ['#2563eb', '#10b981', '#f59e33', '#eb4566', '#8b5cf6', '#ec4899']
@@ -56,6 +70,7 @@ const ChevronRight = () => <svg width="12" height="12" viewBox="0 0 24 24" fill=
 const ChevronLeft = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
 const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
 const DownloadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+const UploadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
 const UsersIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
 const KeyIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
 const MicIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -66,7 +81,7 @@ const DocIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none
 const ClipboardIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
 const CameraIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
 
-const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const }
+const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[] }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
 
 function normalizeInterviews(arr: Interview[]): Interview[] {
@@ -86,7 +101,7 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
 }
 
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
-const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'] })
+const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [] })
 const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
@@ -118,6 +133,20 @@ const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
   return db
 }
 
+const DotFilled = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>
+const DotRing = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><circle cx="4" cy="4" r="3" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
+const SquareFilled = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><rect width="8" height="8" rx="1" fill="currentColor"/></svg>
+const WarnTriangle = ({ size = 12 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><path d="M8 1L15 14H1L8 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><circle cx="8" cy="12.5" r="0.75" fill="currentColor"/></svg>
+
+const EmptyState = ({ icon, title, sub, btnLabel, onBtn }: { icon?: React.ReactNode; title: string; sub: string; btnLabel?: string; onBtn?: () => void }) => (
+  <div className="empty-state">
+    <div className="es-circle"><span className="es-icon">{icon ?? '◎'}</span></div>
+    <h3 className="es-title">{title}</h3>
+    <p className="es-sub">{sub}</p>
+    {btnLabel && onBtn && <button type="button" className="primary-btn pill-btn es-btn" onClick={onBtn}>{btnLabel}</button>}
+  </div>
+)
+
 function App() {
   // ── Core data ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([])
@@ -137,8 +166,6 @@ function App() {
 
   // ── Interview selection ────────────────────────────────────────────────
   const [selectedInterviewId, setSelectedInterviewId] = useState<string | null>(null)
-  const [selectedTranscriptInterviewId, setSelectedTranscriptInterviewId] = useState<string | null>(null)
-  const [selectedSummaryInterviewId, setSelectedSummaryInterviewId] = useState<string | null>(null)
   const [transcriptDraft, setTranscriptDraft] = useState('')
 
   // ── Audio devices ──────────────────────────────────────────────────────
@@ -180,14 +207,24 @@ function App() {
   const [settingsPasswordNewDraft, setSettingsPasswordNewDraft] = useState('')
   const [settingsPasswordConfirmDraft, setSettingsPasswordConfirmDraft] = useState('')
   const [settingsAudioFormatDraft, setSettingsAudioFormatDraft] = useState<'mp3' | 'wav'>('mp3')
-  const [settingsChunkDurationDraft, setSettingsChunkDurationDraft] = useState(30)
+  const [settingsChunkDurationDraft, setSettingsChunkDurationDraft] = useState(600)
   const [settingsRecordingQualityDraft, setSettingsRecordingQualityDraft] = useState('high')
   const [settingsLanguageDraft, setSettingsLanguageDraft] = useState('es')
   const [settingsAutoSaveDraft, setSettingsAutoSaveDraft] = useState(true)
   const [settingsDateFormatDraft, setSettingsDateFormatDraft] = useState('DD/MM/YYYY')
+  const [autoSave, setAutoSave] = useState(true)
+  const [userRole, setUserRole] = useState('')
+  const [settingsRoleDraft, setSettingsRoleDraft] = useState('')
+  const [notifProductUpdates, setNotifProductUpdates] = useState(false)
+  const [txSearchQuery, setTxSearchQuery] = useState('')
+  const [ivSearchQuery, setIvSearchQuery] = useState('')
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('')
+  const [projDetailTab, setProjDetailTab] = useState<'perfiles' | 'analisis'>('perfiles')
+  const [showCriteriaEdit, setShowCriteriaEdit] = useState(false)
+  const [recordingsDir, setRecordingsDir] = useState('')
   const [exportFormat, setExportFormat] = useState<'pdf' | 'txt' | 'clipboard'>('clipboard')
+  const [txLang, setTxLang] = useState('auto')
   const [userPhoto, setUserPhoto] = useState('')
-  const [projDescDraft, setProjDescDraft] = useState('')
   const [candidateNotesDraft, setCandidateNotesDraft] = useState('')
 
   // ── Modals & overlays ──────────────────────────────────────────────────
@@ -200,6 +237,7 @@ function App() {
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
+  const [discardConfirming, setDiscardConfirming] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [editingInterviewId, setEditingInterviewId] = useState<string | null>(null)
   const [editingNameDraft, setEditingNameDraft] = useState('')
@@ -213,7 +251,7 @@ function App() {
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
   const [_playbackProgress, setPlaybackProgress] = useState(0)
   const [_playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
-  const [playbackRate, _setPlaybackRate] = useState(1)
+  const [playbackRate, setPlaybackRate] = useState(1)
 
   // ── Auth ───────────────────────────────────────────────────────────────
   const [session, setSession]       = useState<Session | null>(null)
@@ -257,8 +295,6 @@ function App() {
     interviews.filter(i => i.candidateId === activeCandidateId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
     [interviews, activeCandidateId])
   const selectedInterview = candidateInterviews.find(i => i.id === selectedInterviewId)
-  const selectedTranscriptInterview = candidateInterviews.find(i => i.id === selectedTranscriptInterviewId)
-  const selectedSummaryInterview = candidateInterviews.find(i => i.id === selectedSummaryInterviewId)
   const activeRecordingInterview = interviews.find(i => i.status === 'recording' || i.status === 'paused')
   const activeRecordingCandidate = activeRecordingInterview ? candidates.find(c => c.id === activeRecordingInterview.candidateId) : null
   const activeRecordingProject = activeRecordingCandidate ? projects.find(p => p.id === activeRecordingCandidate.projectId) : null
@@ -374,7 +410,23 @@ function App() {
     setScreen('dashboard')
   }
 
+  const handleChangePassword = async () => {
+    if (!settingsPasswordNewDraft.trim()) { toast('Ingresa la nueva contraseña', 'error'); return }
+    if (settingsPasswordNewDraft !== settingsPasswordConfirmDraft) { toast('Las contraseñas no coinciden', 'error'); return }
+    if (settingsPasswordNewDraft.length < 6) { toast('La contraseña debe tener al menos 6 caracteres', 'error'); return }
+    const { error } = await supabase.auth.updateUser({ password: settingsPasswordNewDraft })
+    if (error) { toast(error.message, 'error'); return }
+    toast('Contraseña actualizada correctamente')
+    setSettingsPasswordDraft(''); setSettingsPasswordNewDraft(''); setSettingsPasswordConfirmDraft('')
+  }
+
   // ── Init: load config ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (window.desktopApp?.getRecordingsDir) {
+      void window.desktopApp.getRecordingsDir().then(dir => setRecordingsDir(dir)).catch(() => {})
+    }
+  }, [])
+
   useEffect(() => {
     if (!window.desktopApp?.getConfig) { setConfigLoaded(true); return }
     void window.desktopApp.getConfig().then(cfg => {
@@ -384,6 +436,13 @@ function App() {
       setUserName(cfg.userName ?? '')
       setUserEmail(cfg.userEmail ?? '')
       setUserCompany(cfg.userCompany ?? '')
+      if (cfg.userRole)           { setUserRole(cfg.userRole); setSettingsRoleDraft(cfg.userRole) }
+      if (cfg.audioFormat)        setSettingsAudioFormatDraft(cfg.audioFormat as 'mp3' | 'wav')
+      if (cfg.recordingQuality)   setSettingsRecordingQualityDraft(cfg.recordingQuality)
+      if (cfg.chunkDuration)      setSettingsChunkDurationDraft(cfg.chunkDuration)
+      if (cfg.language)           setSettingsLanguageDraft(cfg.language)
+      if (cfg.dateFormat)         setSettingsDateFormatDraft(cfg.dateFormat)
+      if (cfg.autoSave !== undefined) { setSettingsAutoSaveDraft(cfg.autoSave); setAutoSave(cfg.autoSave) }
       setConfigLoaded(true)
     })
   }, [])
@@ -409,21 +468,73 @@ function App() {
 
   // ── Auto-select interview ──────────────────────────────────────────────
   useEffect(() => {
-    if (!activeCandidateId) { setSelectedInterviewId(null); setSelectedTranscriptInterviewId(null); setSelectedSummaryInterviewId(null); return }
+    if (!activeCandidateId) { setSelectedInterviewId(null); return }
     if (selectedInterviewId && candidateInterviews.some(i => i.id === selectedInterviewId)) return
     const first = candidateInterviews[0]?.id ?? null
-    setSelectedInterviewId(first); setSelectedTranscriptInterviewId(first); setSelectedSummaryInterviewId(first)
+    setSelectedInterviewId(first)
   }, [candidateInterviews, activeCandidateId, selectedInterviewId])
 
   // ── Sync transcript draft ──────────────────────────────────────────────
-  useEffect(() => { setTranscriptDraft(selectedTranscriptInterview?.transcriptEdited ?? '') }, [selectedTranscriptInterviewId, selectedTranscriptInterview])
+  useEffect(() => { setTranscriptDraft(selectedInterview?.transcriptEdited ?? '') }, [selectedInterviewId, selectedInterview])
+
+  // ── Auto-save transcript ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!autoSave || !selectedInterviewId) return
+    const t = setTimeout(() => {
+      updateInterview(selectedInterviewId, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() })
+    }, 2000)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcriptDraft, autoSave])
+
+  // ── Sync playback rate to active audio element ─────────────────────────
+  useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = playbackRate }, [playbackRate])
+
+  // ── Ctrl+K → open global search ──────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setScreen('search')
+        setTimeout(() => document.getElementById('global-search-input')?.focus(), 50)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // ── Recording keyboard shortcuts ─────────────────────────────────────────
+  // Space → pause / resume   |   Escape → stop
+  useEffect(() => {
+    if (!activeRecordingInterview) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (activeRecordingInterview.status === 'recording') {
+          mediaRecorderRef.current?.pause()
+          updateInterview(activeRecordingInterview.id, { status: 'paused' })
+        } else if (activeRecordingInterview.status === 'paused') {
+          mediaRecorderRef.current?.resume()
+          updateInterview(activeRecordingInterview.id, { status: 'recording' })
+        }
+      } else if (e.code === 'Escape') {
+        e.preventDefault()
+        handleStopRecording()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRecordingInterview?.id, activeRecordingInterview?.status])
 
   // ── Recording timer ────────────────────────────────────────────────────
   useEffect(() => {
-    if (!selectedInterview || selectedInterview.status !== 'recording') return
-    const id = window.setInterval(() => setInterviews(c => c.map(i => i.id === selectedInterview.id ? { ...i, durationSec: i.durationSec + 1 } : i)), 1000)
+    if (!activeRecordingInterview || activeRecordingInterview.status !== 'recording') return
+    const id = window.setInterval(() => setInterviews(c => c.map(i => i.id === activeRecordingInterview.id ? { ...i, durationSec: i.durationSec + 1 } : i)), 1000)
     return () => window.clearInterval(id)
-  }, [selectedInterview])
+  }, [activeRecordingInterview?.id, activeRecordingInterview?.status])
 
   // ── Audio devices ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -491,7 +602,8 @@ function App() {
       ctx.createMediaStreamSource(micStream).connect(dest)
       if (sysStream?.getAudioTracks().length) ctx.createMediaStreamSource(sysStream).connect(dest)
       mixedStreamRef.current = dest.stream
-      const recorder = new MediaRecorder(dest.stream)
+      const qualityBitsPerSecond = ({ high: 128000, medium: 64000, low: 32000 } as Record<string, number>)[settingsRecordingQualityDraft] ?? 128000
+      const recorder = new MediaRecorder(dest.stream, { audioBitsPerSecond: qualityBitsPerSecond })
       mediaRecorderRef.current = recorder
       activeInterviewIdRef.current = iv.id
       recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
@@ -516,6 +628,31 @@ function App() {
     setShowAudioSetupModal(true)
   }
 
+  const handleImportAudio = async () => {
+    if (!activeCandidateId || !activeCandidate || !window.desktopApp?.selectAudioFile) return
+    const filePath = await window.desktopApp.selectAudioFile()
+    if (!filePath) return
+    const fileName = filePath.split(/[\\/]/).pop() ?? filePath
+    const defaultName = `Importada ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+    const n: Interview = {
+      id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(),
+      sessionName: defaultName, status: 'stopped', durationSec: 0,
+      micDeviceId: '', outputDeviceId: '',
+      transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null,
+      recordingUrl: null, recordingFilePath: filePath,
+      captureSource: 'none', transcriptionStatus: 'pending',
+      summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
+    }
+    setInterviews(c => [n, ...c])
+    setSelectedInterviewId(n.id)
+    if (session) {
+      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: n.sessionName, status: n.status, duration_sec: 0, mic_device_id: '', output_device_id: '', transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: fileName, capture_source: 'none', transcription_status: 'pending', summary_instructions: '', summary_text: '', summary_status: 'idle', summary_type: 'resumen', created_at: n.createdAt, updated_at: n.createdAt })
+        .then(({ error }) => { if (error) toast(`Error al guardar importación en la nube: ${error.message}`, 'error') })
+    }
+    toast(`Audio importado: ${fileName}`)
+    if (autoTranscribe) void handleTranscribe(n.id)
+  }
+
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
@@ -526,9 +663,20 @@ function App() {
         .then(({ error }) => { if (error) toast(`Error al crear entrevista en la nube: ${error.message}`, 'error') })
     }
     setSelectedInterviewId(n.id)
-    setSelectedTranscriptInterviewId(n.id)
-    setSelectedSummaryInterviewId(n.id)
     void handleStartRecording(n, pendingCaptureSystem)
+  }
+
+  const handleDiscardRecording = async () => {
+    const iId = activeInterviewIdRef.current
+    pendingBlobRef.current = null
+    activeInterviewIdRef.current = null
+    setShowSessionNameModal(false)
+    setDiscardConfirming(false)
+    if (iId) {
+      setInterviews(c => c.filter(i => i.id !== iId))
+      if (session) await supabase.from('interviews').delete().eq('id', iId)
+    }
+    toast('Grabación descartada', 'info')
   }
 
   const handlePauseRecording = () => {
@@ -551,35 +699,40 @@ function App() {
   }
 
   const handleConfirmSessionName = async () => {
-    if (!sessionNameDraft.trim()) return
     const blob = pendingBlobRef.current; const iId = activeInterviewIdRef.current
     if (!blob || !iId) return
+    const defaultName = `Entrevista ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+    const finalName = sessionNameDraft.trim() || defaultName
     const iData = interviews.find(i => i.id === iId)
     const url = URL.createObjectURL(blob)
-    setShowSessionNameModal(false); updateInterview(iId, { sessionName: sessionNameDraft.trim() })
+    setShowSessionNameModal(false); setDiscardConfirming(false); updateInterview(iId, { sessionName: finalName })
     let filePath: string | null = null
     if (iData && window.desktopApp?.saveRecording) {
       try {
         const bytes = new Uint8Array(await blob.arrayBuffer())
         const cand = candidates.find(c => c.id === iData.candidateId)
-        const r = await window.desktopApp.saveRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, extension: getExt(pendingMimeTypeRef.current), audioBytes: bytes })
+        const r = await window.desktopApp.saveRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, extension: getExt(pendingMimeTypeRef.current), format: settingsAudioFormatDraft, audioBytes: bytes })
         filePath = r.filePath
       } catch { /* ignore */ }
     }
-    updateInterview(iId, { recordingUrl: url, recordingFilePath: filePath })
+    const fileName = filePath ? filePath.split(/[\\/]/).pop() ?? filePath : null
+    updateInterview(iId, { recordingUrl: url, recordingFilePath: fileName })
     pendingBlobRef.current = null; toast('Grabación guardada')
     if (autoTranscribe && filePath) void handleTranscribe(iId)
   }
 
   // ── Transcription / Summary ────────────────────────────────────────────
-  const handleTranscribe = async (interviewId: string) => {
+  const handleTranscribe = async (interviewId: string, language?: string) => {
     const interview = interviews.find(i => i.id === interviewId)
     if (!interview?.recordingFilePath || !window.desktopApp?.transcribeAudio) return
+    const fullPath = resolveAudioPath(interview.recordingFilePath)
+    if (!fullPath) return
+    const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
     try {
-      const result = await window.desktopApp.transcribeAudio({ filePath: interview.recordingFilePath })
+      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, language: language ?? txLang, candidateName })
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
-      if (selectedTranscriptInterviewId === interviewId) setTranscriptDraft(result.text)
+      if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')
     } catch (err) {
       updateInterview(interviewId, { transcriptionStatus: 'error' })
@@ -591,9 +744,12 @@ function App() {
   const handleGenerateSummary = async (interviewId: string) => {
     const interview = interviews.find(i => i.id === interviewId)
     if (!interview || !window.desktopApp?.generateSummary) return
+    const candidate = candidates.find(c => c.id === interview.candidateId)
+    const project = candidate ? projects.find(p => p.id === candidate.projectId) : null
+    const criteria = project?.evaluationCriteria ?? []
     updateInterview(interviewId, { summaryStatus: 'generating' })
     try {
-      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, instructions: interview.summaryInstructions, summaryType: interview.summaryType })
+      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
       if (notifSummary) toast('Resumen generado')
     } catch (err) {
@@ -610,7 +766,8 @@ function App() {
   }
 
   const handleTogglePlayback = (interview: Interview) => {
-    const src = interview.recordingUrl ?? (interview.recordingFilePath ? 'file:///' + interview.recordingFilePath.replace(/\\/g, '/') : null)
+    const resolved = resolveAudioPath(interview.recordingFilePath)
+    const src = interview.recordingUrl ?? (resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null)
     if (!src) return
     if (playingInterviewId === interview.id) { stopAudio(); return }
     stopAudio()
@@ -628,7 +785,7 @@ function App() {
     if (pendingDeleteId !== interviewId) { setPendingDeleteId(interviewId); return }
     setPendingDeleteId(null); if (playingInterviewId === interviewId) stopAudio()
     const interview = interviews.find(i => i.id === interviewId)
-    if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: interview.recordingFilePath })
+    if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     setInterviews(c => c.filter(i => i.id !== interviewId))
     if (session) {
       const { error } = await supabase.from('interviews').delete().eq('id', interviewId)
@@ -641,7 +798,7 @@ function App() {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
     const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
-    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) } })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId))
     setCandidates(c => c.filter(x => x.id !== candidateId))
     if (session) {
@@ -653,6 +810,22 @@ function App() {
     }
     if (activeCandidateId === candidateId) { setActiveCandidateId(null); setScreen('project-detail') }
     toast('Perfil eliminado')
+  }
+
+  const handleDeleteProject = async (projectId: string) => {
+    if (pendingDeleteId !== projectId) { setPendingDeleteId(projectId); return }
+    setPendingDeleteId(null)
+    const projCandidates = candidates.filter(c => c.projectId === projectId)
+    const projInterviewIds = interviews.filter(i => projCandidates.some(c => c.id === i.candidateId))
+    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
+    setInterviews(c => c.filter(i => !projCandidates.some(pc => pc.id === i.candidateId)))
+    setCandidates(c => c.filter(x => x.projectId !== projectId))
+    setProjects(c => c.filter(p => p.id !== projectId))
+    if (activeProjectId === projectId) { setActiveProjectId(null); setScreen('projects') }
+    if (session) {
+      await supabase.from('projects').delete().eq('id', projectId)
+    }
+    toast('Proyecto eliminado')
   }
 
   const handleCreateCandidate = async () => {
@@ -678,28 +851,37 @@ function App() {
     setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
     if (session) {
       const db: Record<string, unknown> = {}
-      if (changes.name    !== undefined) db.name    = changes.name
-      if (changes.company !== undefined) db.company = changes.company
-      if (changes.status  !== undefined) db.status  = changes.status
+      if (changes.name               !== undefined) db.name                = changes.name
+      if (changes.company            !== undefined) db.company             = changes.company
+      if (changes.status             !== undefined) db.status              = changes.status
+      if (changes.evaluationCriteria !== undefined) db.evaluation_criteria = changes.evaluationCriteria
       void supabase.from('projects').update(db).eq('id', id)
     }
   }
 
   const handleCreateProject = async () => {
     if (!projectDraft.name.trim()) return
-    const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status }
+    const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria }
     setProjects(c => [...c, p])
     setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
     if (session) {
-      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })
+      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, created_at: p.createdAt })
       if (error) { toast(`Error guardando proyecto: ${error.message}`, 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
     }
     toast(`Proyecto ${p.name} creado`)
   }
 
   const handleSaveSettings = async () => {
-    if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({ groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft, userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft })
-    setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft); setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
+    if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
+      groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft,
+      userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft,
+      userRole: settingsRoleDraft, audioFormat: settingsAudioFormatDraft, recordingQuality: settingsRecordingQualityDraft,
+      chunkDuration: settingsChunkDurationDraft, language: settingsLanguageDraft, dateFormat: settingsDateFormatDraft,
+      autoSave: settingsAutoSaveDraft,
+    })
+    setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft)
+    setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
+    setUserRole(settingsRoleDraft); setAutoSave(settingsAutoSaveDraft)
     localStorage.setItem('ct-default-mic', settingsDefaultMicDraft)
     localStorage.setItem('ct-default-output', settingsDefaultOutputDraft)
     localStorage.setItem('ct-default-system', String(settingsDefaultSystemDraft))
@@ -711,6 +893,7 @@ function App() {
   const openSettings = (tab: SettingsTab = 'api-keys') => {
     setSettingsKeyDraft(groqApiKey); setSettingsTxModelDraft(transcriptionModel); setSettingsSumModelDraft(summaryModel)
     setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany)
+    setSettingsRoleDraft(userRole)
     setSettingsDefaultMicDraft(defaultMicDeviceId); setSettingsDefaultOutputDraft(defaultOutputDeviceId); setSettingsDefaultSystemDraft(defaultCaptureSystem)
     setSettingsTab(tab); setScreen('settings')
   }
@@ -753,12 +936,92 @@ function App() {
     if (screen === 'candidates') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Perfiles' }]
     if (screen === 'settings') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Configuración' }]
     if (screen === 'profile') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Mi Perfil' }]
+    if (screen === 'search') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Buscar' }]
     return []
   }, [screen, activeProject, activeCandidate])
+
+  const resolveAudioPath = useCallback((stored: string | null): string | null => {
+    if (!stored) return null
+    if (stored.includes('/') || stored.includes('\\')) return stored // legacy absolute path
+    return recordingsDir ? `${recordingsDir}\\${stored}` : stored
+  }, [recordingsDir])
+
+  const activeDateLocale = useMemo(() => {
+    if (settingsDateFormatDraft === 'MM/DD/YYYY') return 'en-US'
+    if (settingsDateFormatDraft === 'YYYY-MM-DD') return 'sv-SE'
+    return 'es-ES'
+  }, [settingsDateFormatDraft])
+
+  const fd = useCallback((iso: string) => fmtDate(iso, activeDateLocale), [activeDateLocale])
+  const fs = useCallback((iso: string) => fmtShort(iso, activeDateLocale), [activeDateLocale])
 
   const userInitials = initials(userName || userEmail || 'U')
 
   // ════════════════════════════════════════════════════════ RENDER ══════
+
+  const renderSearch = () => {
+    const q = globalSearchQuery.trim().toLowerCase()
+    const results = q.length < 2 ? [] : interviews
+      .filter(i => i.transcriptEdited?.toLowerCase().includes(q) || i.transcriptOriginal?.toLowerCase().includes(q) || i.summaryText?.toLowerCase().includes(q))
+      .map(i => {
+        const cand = candidates.find(c => c.id === i.candidateId)
+        const proj = projects.find(p => p.id === cand?.projectId)
+        const text = i.transcriptEdited || i.transcriptOriginal || i.summaryText || ''
+        const idx = text.toLowerCase().indexOf(q)
+        const start = Math.max(0, idx - 80)
+        const end = Math.min(text.length, idx + q.length + 80)
+        const excerpt = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
+        const matchCount = (text.toLowerCase().match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+        return { interview: i, cand, proj, excerpt, matchCount, idx: idx - start }
+      })
+      .sort((a, b) => b.matchCount - a.matchCount)
+
+    const highlight = (text: string, matchStart: number) => {
+      if (matchStart < 0) return <>{text}</>
+      return <>{text.slice(0, matchStart)}<mark className="gs-mark">{text.slice(matchStart, matchStart + q.length)}</mark>{text.slice(matchStart + q.length)}</>
+    }
+
+    return (
+      <div className="screen-content">
+        <div className="gs-header">
+          <div className="gs-input-wrap">
+            <SearchIcon />
+            <input
+              id="global-search-input"
+              type="text"
+              className="gs-input"
+              placeholder="Buscar en transcripciones y resúmenes… (Ctrl+K)"
+              value={globalSearchQuery}
+              onChange={e => setGlobalSearchQuery(e.target.value)}
+              autoFocus
+            />
+            {globalSearchQuery && <button type="button" className="gs-clear" onClick={() => setGlobalSearchQuery('')}>✕</button>}
+          </div>
+          {q.length >= 2 && <p className="gs-count">{results.length} {results.length === 1 ? 'resultado' : 'resultados'}</p>}
+        </div>
+
+        {q.length < 2 ? (
+          <EmptyState icon={<SearchIcon />} title="Busca en tus entrevistas" sub="Escribe al menos 2 caracteres para buscar en todas las transcripciones y resúmenes." />
+        ) : results.length === 0 ? (
+          <EmptyState title="Sin resultados" sub={`No se encontró "${globalSearchQuery}" en ninguna transcripción.`} />
+        ) : (
+          <div className="gs-results">
+            {results.map(({ interview: iv, cand, proj, excerpt, matchCount, idx }) => (
+              <div key={iv.id} className="gs-result-card" onClick={() => { if (cand) { goToCandidate(cand.id, proj?.id); setSelectedInterviewId(iv.id); setActiveTab(iv.summaryText?.toLowerCase().includes(q) && !iv.transcriptEdited?.toLowerCase().includes(q) ? 'resumen' : 'transcripcion') } }}>
+                <div className="gs-result-meta">
+                  <span className="gs-result-name">{cand?.name ?? '—'}</span>
+                  {proj && <span className="gs-result-proj">{proj.name}</span>}
+                  <span className="gs-result-session">{iv.sessionName || fs(iv.createdAt)}</span>
+                  <span className="gs-result-count">{matchCount} {matchCount === 1 ? 'coincidencia' : 'coincidencias'}</span>
+                </div>
+                <p className="gs-result-excerpt">{highlight(excerpt, idx)}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const renderDashboard = () => {
     const recent = [...interviews]
@@ -808,18 +1071,9 @@ function App() {
 
           <div className="proj-list">
             {filteredProjects.length === 0 ? (
-              <div className="empty-state">
-                {projects.length === 0 ? (
-                  <>
-                    <div className="es-circle"><span className="es-icon">≡</span></div>
-                    <h3 className="es-title">No tienes proyectos todavía</h3>
-                    <p className="es-sub">Crea tu primer proyecto para empezar a gestionar perfiles</p>
-                    <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
-                  </>
-                ) : (
-                  <><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>Prueba otro filtro o búsqueda.</p></>
-                )}
-              </div>
+              projects.length === 0
+                ? <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
+                : <EmptyState title="Sin resultados" sub="Prueba otro filtro o búsqueda." />
             ) : filteredProjects.map(p => {
               const cCnt = candidates.filter(c => c.projectId === p.id).length
               const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
@@ -833,10 +1087,10 @@ function App() {
                     <div className="plc-top">
                       <div className="plc-info">
                         <h3 className="plc-title">{p.name}</h3>
-                        <p className="plc-meta">{p.company} · Creado {fmtShort(p.createdAt)}</p>
+                        <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
                       <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
-                        {isClosed ? '■ Cerrado' : '● Activo'}
+                        {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
                       </span>
                     </div>
                     <div className="plc-bottom">
@@ -882,7 +1136,6 @@ function App() {
             </div>
             <h3 className="ap-name">{userName || 'Usuario'}</h3>
             <p className="ap-email">{userEmail}</p>
-            <span className="ap-plan-badge">★ Pro Plan</span>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
@@ -899,8 +1152,7 @@ function App() {
           <div className="ap-divider" />
           <div className="ap-section">
             <h4>Acciones rápidas</h4>
-            <button type="button" className="primary-btn pill-btn ap-action-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
-            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { if (projects.length > 0) goToProject(projects[0].id) }}><MicIcon /> Nueva entrevista</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => setScreen('candidates')}><UsersIcon /> Ver perfiles</button>
             <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /> Exportar informes</button>
           </div>
           <div className="ap-divider" />
@@ -918,7 +1170,6 @@ function App() {
               })
             }
           </div>
-          <button type="button" className="ap-logout">Cerrar sesión</button>
         </aside>
       </div>
     )
@@ -946,38 +1197,47 @@ function App() {
         {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para "${projectSearchQuery}"` : ''}</p>}
         {filteredProjects.length === 0 ? (
           isFiltered
-            ? <div className="empty-state"><div className="empty-icon">≡</div><h3>Sin resultados</h3><p>No hay proyectos que coincidan con los filtros aplicados.</p></div>
-            : <div className="empty-state">
-                <div className="es-circle"><span className="es-icon">≡</span></div>
-                <h3 className="es-title">No tienes proyectos todavía</h3>
-                <p className="es-sub">Crea tu primer proyecto para empezar a gestionar perfiles</p>
-                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
-              </div>
+            ? <EmptyState title="Sin resultados" sub="No hay proyectos que coincidan con los filtros aplicados." />
+            : <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
         ) : (
           <div className="proj-list">
             {filteredProjects.map(p => {
               const cCnt = candidates.filter(c => c.projectId === p.id).length
               const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
               const tCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'done').length
+              const pCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'pending').length
+              const isClosed = p.status === 'closed'
               return (
-                <div key={p.id} className="proj-list-card" onClick={() => goToProject(p.id)}>
-                  <div className="proj-list-card-accent" />
-                  <div className="proj-list-card-body">
-                    <div className="proj-list-card-info">
-                      <span className="proj-list-card-title">{p.name}</span>
-                      <span className="proj-list-card-meta">{p.company}  ·  {p.status === 'active' ? 'Activo' : 'Cerrado'}  ·  {cCnt} perfil{cCnt !== 1 ? 'es' : ''}</span>
-                      <span className="proj-list-card-stats">{tCnt} transcrita{tCnt !== 1 ? 's' : ''}  ·  {iCnt} grabacion{iCnt !== 1 ? 'es' : ''}</span>
+                <div key={p.id} className={`plc${isClosed ? ' plc--closed' : ''}`}>
+                  <div className="plc-accent" />
+                  <div className="plc-body">
+                    <div className="plc-top">
+                      <div className="plc-info">
+                        <h3 className="plc-title">{p.name}</h3>
+                        <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
+                      </div>
+                      <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
+                        {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
+                      </span>
                     </div>
-                    <span className={`proj-list-card-badge${p.status === 'active' ? ' proj-list-card-badge--active' : ' proj-list-card-badge--closed'}`}>
-                      {p.status === 'active' ? '● Activo' : '■ Cerrado'}
-                    </span>
-                    <div className="proj-list-card-actions">
-                      <button type="button" className="proj-list-card-btn" onClick={e => { e.stopPropagation(); goToProject(p.id) }}>Abrir →</button>
-                      <button
-                        type="button"
-                        className={`plc-status-btn${p.status === 'closed' ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`}
-                        onClick={e => { e.stopPropagation(); updateProject(p.id, { status: p.status === 'closed' ? 'active' : 'closed' }) }}
-                      >{p.status === 'closed' ? 'Reabrir' : 'Cerrar'}</button>
+                    <div className="plc-bottom">
+                      <div className="plc-stats">
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">perfiles</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">entrevistas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">transcritas</span></div>
+                        <div className="plc-stat">
+                          <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
+                          <span className="plc-stat-lbl">pendientes</span>
+                        </div>
+                      </div>
+                      <div className="plc-actions">
+                        <button type="button" className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`} onClick={() => goToProject(p.id)}>
+                          {isClosed ? 'Ver proyecto' : 'Abrir proyecto'}
+                        </button>
+                        <button type="button" className={`plc-status-btn${isClosed ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`} onClick={e => { e.stopPropagation(); updateProject(p.id, { status: isClosed ? 'active' : 'closed' }) }}>
+                          {isClosed ? 'Reabrir' : 'Cerrar'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1004,7 +1264,7 @@ function App() {
           <div className="proj-header-body">
             <div className="proj-header-info">
               <h2 className="proj-header-title">{activeProject.name}</h2>
-              <p className="proj-header-sub">{activeProject.company} · Creado {fmtShort(activeProject.createdAt)}</p>
+              <p className="proj-header-sub">{activeProject.company} · Creado {fs(activeProject.createdAt)}</p>
             </div>
             <div className="proj-header-stats">
               <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">perfiles</span></div>
@@ -1013,10 +1273,148 @@ function App() {
             </div>
             <div className="proj-header-actions">
               <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
+              <button
+                type="button"
+                className={`btn-trash${pendingDeleteId === activeProject.id ? ' confirming' : ''}`}
+                title={pendingDeleteId === activeProject.id ? '¿Confirmar?' : 'Eliminar proyecto'}
+                onClick={() => void handleDeleteProject(activeProject.id)}
+              >
+                {pendingDeleteId === activeProject.id
+                  ? <><CheckIcon /><span className="confirming-label">Eliminar ({projectCandidates.length} perfiles)</span></>
+                  : <TrashIcon />}
+              </button>
             </div>
           </div>
         </div>
 
+        {/* Criteria row */}
+        <div className="proj-criteria-row">
+          <div className="proj-criteria-chips">
+            {activeProject.evaluationCriteria.length > 0
+              ? activeProject.evaluationCriteria.map((id, i) => {
+                  if (id.startsWith('otros:')) {
+                    const text = id.slice(6).trim()
+                    return text ? <span key={i} className="criteria-chip">Otros: {text}</span> : null
+                  }
+                  const c = EVALUATION_CRITERIA.find(x => x.id === id)
+                  return c ? <span key={id} className="criteria-chip">{c.label}</span> : null
+                })
+              : <span className="criteria-chip criteria-chip--empty">Sin criterios — el resumen usará estructura por defecto</span>
+            }
+            <button type="button" className="criteria-edit-btn" onClick={() => setShowCriteriaEdit(v => !v)}>
+              {showCriteriaEdit ? 'Cerrar' : 'Editar criterios'}
+            </button>
+          </div>
+          {showCriteriaEdit && (
+            <div className="criteria-edit-panel">
+              {renderCriteriaGrid(
+                activeProject.evaluationCriteria,
+                updated => updateProject(activeProject.id, { evaluationCriteria: updated })
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Tabs */}
+        <div className="proj-tabs">
+          <button type="button" className={`proj-tab${projDetailTab === 'perfiles' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('perfiles')}>Perfiles</button>
+          <button type="button" className={`proj-tab${projDetailTab === 'analisis' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('analisis')}>Análisis</button>
+        </div>
+
+        {projDetailTab === 'analisis' ? (() => {
+          const projInterviews = interviews.filter(i => projectCandidates.some(c => c.id === i.candidateId))
+          const total = projInterviews.length
+          const transcribed = projInterviews.filter(i => i.transcriptionStatus === 'done').length
+          const summarized = projInterviews.filter(i => i.summaryStatus === 'done').length
+          const avgDur = total > 0 ? Math.round(projInterviews.reduce((s, i) => s + i.durationSec, 0) / total) : 0
+          const pendingCands = projectCandidates.filter(c => {
+            const ci = projInterviews.filter(i => i.candidateId === c.id)
+            return ci.length > 0 && ci.every(i => i.transcriptionStatus !== 'done')
+          })
+          const noCands = projectCandidates.filter(c => !projInterviews.some(i => i.candidateId === c.id))
+          const recentActivity = [...projInterviews].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
+          const bar = (val: number, max: number) => max === 0 ? 0 : Math.round((val / max) * 100)
+
+          return (
+            <div className="pa-layout">
+              <div className="pa-stats-row">
+                <div className="pa-stat-card">
+                  <span className="pa-stat-n">{projectCandidates.length}</span>
+                  <span className="pa-stat-l">Candidatos</span>
+                </div>
+                <div className="pa-stat-card">
+                  <span className="pa-stat-n">{total}</span>
+                  <span className="pa-stat-l">Entrevistas</span>
+                </div>
+                <div className="pa-stat-card">
+                  <span className="pa-stat-n">{total > 0 ? `${Math.round((transcribed / total) * 100)}%` : '—'}</span>
+                  <span className="pa-stat-l">Transcritas</span>
+                </div>
+                <div className="pa-stat-card">
+                  <span className="pa-stat-n">{avgDur > 0 ? fmt(avgDur) : '—'}</span>
+                  <span className="pa-stat-l">Duración media</span>
+                </div>
+              </div>
+
+              <div className="pa-section">
+                <h4 className="pa-section-title">Embudo del proceso</h4>
+                {[
+                  { label: 'Grabadas', val: total, max: total, color: 'var(--primary)' },
+                  { label: 'Transcritas', val: transcribed, max: total, color: 'var(--green)' },
+                  { label: 'Resumidas', val: summarized, max: total, color: '#8b5cf6' },
+                ].map(({ label, val, max, color }) => (
+                  <div key={label} className="pa-funnel-row">
+                    <span className="pa-funnel-label">{label}</span>
+                    <div className="pa-funnel-bar-bg">
+                      <div className="pa-funnel-bar-fill" style={{ width: `${bar(val, max)}%`, background: color }} />
+                    </div>
+                    <span className="pa-funnel-val">{val} / {max}</span>
+                  </div>
+                ))}
+              </div>
+
+              {(pendingCands.length > 0 || noCands.length > 0) && (
+                <div className="pa-section">
+                  <h4 className="pa-section-title">Requieren atención</h4>
+                  {noCands.map(c => (
+                    <div key={c.id} className="pa-alert-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
+                      <div className="pa-alert-dot pa-alert-dot--gray" />
+                      <span className="pa-alert-name">{c.name}</span>
+                      <span className="pa-alert-tag">Sin entrevista</span>
+                    </div>
+                  ))}
+                  {pendingCands.map(c => (
+                    <div key={c.id} className="pa-alert-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
+                      <div className="pa-alert-dot pa-alert-dot--amber" />
+                      <span className="pa-alert-name">{c.name}</span>
+                      <span className="pa-alert-tag">Pendiente de transcribir</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {recentActivity.length > 0 && (
+                <div className="pa-section">
+                  <h4 className="pa-section-title">Actividad reciente</h4>
+                  {recentActivity.map(iv => {
+                    const cand = candidates.find(c => c.id === iv.candidateId)
+                    return (
+                      <div key={iv.id} className="pa-activity-row" onClick={() => cand && goToCandidate(cand.id, activeProject.id)}>
+                        <span className="pa-activity-icon">{iv.summaryStatus === 'done' ? <DocIcon /> : iv.transcriptionStatus === 'done' ? <ClipboardIcon /> : <MicIcon />}</span>
+                        <div className="pa-activity-info">
+                          <span className="pa-activity-name">{cand?.name ?? '—'} — {iv.sessionName || fs(iv.createdAt)}</span>
+                          <span className="pa-activity-date">{fd(iv.createdAt)}</span>
+                        </div>
+                        <span className="pa-activity-status">{iv.summaryStatus === 'done' ? 'Resumida' : iv.transcriptionStatus === 'done' ? 'Transcrita' : 'Grabada'}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })() : (
+          <>
         {/* Section header */}
         <div className="proj-section-header">
           <h3 className="proj-section-title">Perfiles del proceso</h3>
@@ -1032,13 +1430,8 @@ function App() {
 
         {filteredCandidates.length === 0 ? (
           searchQuery
-            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay perfiles que coincidan con "{searchQuery}"</p></div>
-            : <div className="empty-state">
-                <div className="es-circle"><span className="es-icon">◎</span></div>
-                <h3 className="es-title">No hay perfiles en este proyecto</h3>
-                <p className="es-sub">Añade tu primer perfil para empezar a grabar y transcribir entrevistas</p>
-                <button type="button" className="primary-btn pill-btn es-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nuevo perfil</button>
-              </div>
+            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
+            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas" btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }} />
         ) : (
           <div className="pdc-list">
             {filteredCandidates.map(c => {
@@ -1046,21 +1439,21 @@ function App() {
               const last = ci[0]
               const hasDone = ci.some(i => i.transcriptionStatus === 'done')
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
-              const statusInfo: [string, string] = last
-                ? hasDone ? ['● Transcrita', 'pdc-badge--done'] : hasPending ? ['● Pendiente', 'pdc-badge--pending'] : ['● Sin transcripción', 'pdc-badge--pending']
-                : ['○ Sin entrevista', 'pdc-badge--none']
+              const statusInfo: [React.ReactNode, string] = last
+                ? hasDone ? [<><DotFilled /> Transcrita</>, 'pdc-badge--done'] : hasPending ? [<><DotRing /> Pendiente</>, 'pdc-badge--pending'] : [<><DotRing /> Sin transcripción</>, 'pdc-badge--pending']
+                : [<><DotRing /> Sin entrevista</>, 'pdc-badge--none']
               return (
                 <div key={c.id} className="pdc-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                   <div className="pdc-row-accent" />
                   <div className="pdc-row-body">
                     <div className="pdc-row-info">
                       <span className="pdc-row-name">{c.name}</span>
-                      <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fmtShort(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
+                      <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fs(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
                       <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}</button>
+                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                       <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>Ver entrevistas</button>
                     </div>
                   </div>
@@ -1068,6 +1461,8 @@ function App() {
               )
             })}
           </div>
+        )}
+          </>
         )}
       </div>
     )
@@ -1091,8 +1486,8 @@ function App() {
         </div>
         {allCandidates.length === 0 ? (
           searchQuery
-            ? <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin resultados</h3><p>No hay perfiles que coincidan con "{searchQuery}"</p></div>
-            : <div className="empty-state"><div className="empty-icon">◎</div><h3>Sin perfiles</h3><p>Los perfiles aparecerán aquí cuando los añadas a un proyecto.</p></div>
+            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
+            : <EmptyState icon={<UsersIcon />} title="Sin perfiles" sub="Los perfiles aparecerán aquí cuando los añadas a un proyecto." />
         ) : (
           <div className="candidates-table">
             {allCandidates.map(c => {
@@ -1102,20 +1497,20 @@ function App() {
               const hasDone = ci.some(i => i.transcriptionStatus === 'done')
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
               const [statusLabel, statusCls] = last
-                ? hasDone ? ['● Transcrita', 'status-done'] : hasPending ? ['● Pendiente', 'status-pending'] : ['● Sin transcripción', 'status-pending']
-                : ['○ Sin entrevista', 'status-none']
+                ? hasDone ? [<><DotFilled /> Transcrita</>, 'status-done'] : hasPending ? [<><DotRing /> Pendiente</>, 'status-pending'] : [<><DotRing /> Sin transcripción</>, 'status-pending']
+                : [<><DotRing /> Sin entrevista</>, 'status-none']
               return (
                 <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId)}>
                   <div className="ctr-avatar">{initials(c.name)}</div>
                   <div className="ctr-info">
                     <span className="ctr-name">{c.name}</span>
-                    <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fmtShort(last.createdAt)}` : ''}</span>
+                    <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fs(last.createdAt)}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
                     <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}</button>
+                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                   </div>
                   <button type="button" className="ctr-open">Ver entrevistas →</button>
                 </div>
@@ -1158,7 +1553,7 @@ function App() {
             </div>
             <div className="cand-header-right">
               <span className={`cand-status-badge${hasError ? ' cand-status-badge--error' : transcribedCount > 0 ? ' cand-status-badge--done' : ''}`}>
-                {hasError ? '● Error' : transcribedCount > 0 ? '● Transcrita' : '○ Pendiente'}
+                {hasError ? <><WarnTriangle /> Error</> : transcribedCount > 0 ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}
               </span>
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
@@ -1190,18 +1585,42 @@ function App() {
       )}
       <div className="rec-section-header">
         <h3 className="rec-section-title">Grabaciones</h3>
-        <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
-      </div>
-      {candidateInterviews.length === 0 ? (
-        <div className="rec-empty-card">
-          <div className="rec-empty-icon-wrap"><span className="rec-empty-icon"><MicIcon /></span></div>
-          <h3 className="rec-empty-title">No hay grabaciones todavía</h3>
-          <p className="rec-empty-sub">Graba la primera entrevista con {activeCandidate?.name ?? 'el perfil'} para empezar</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {playingInterviewId && (
+            <select
+              className="cfg-select"
+              style={{ fontSize: 12, padding: '3px 6px', minWidth: 70 }}
+              value={playbackRate}
+              onChange={e => setPlaybackRate(parseFloat(e.target.value))}
+              title="Velocidad de reproducción"
+            >
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1">1×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+              <option value="2">2×</option>
+            </select>
+          )}
+          {window.desktopApp?.selectAudioFile && (
+            <button type="button" className="secondary-btn pill-btn" onClick={() => void handleImportAudio()}><UploadIcon /> Importar audio</button>
+          )}
           <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
         </div>
+      </div>
+      {candidateInterviews.length === 0 ? (
+        <EmptyState icon={<MicIcon />} title="No hay grabaciones todavía" sub={`Graba la primera entrevista con ${activeCandidate?.name ?? 'el perfil'} para empezar`} btnLabel="Nueva grabación" onBtn={handleNewRecording} />
       ) : (
+        <>
+          {candidateInterviews.length > 2 && (
+            <div className="search-bar" style={{ marginBottom: 8 }}>
+              <span className="search-icon"><SearchIcon /></span>
+              <input type="text" placeholder="Buscar grabación..." value={ivSearchQuery} onChange={e => setIvSearchQuery(e.target.value)} />
+              {ivSearchQuery && <button type="button" className="search-clear" onClick={() => setIvSearchQuery('')}>✕</button>}
+            </div>
+          )}
         <div className="rec-rows">
-          {candidateInterviews.map(iv => {
+          {candidateInterviews.filter(iv => !ivSearchQuery.trim() || iv.sessionName.toLowerCase().includes(ivSearchQuery.toLowerCase()) || fd(iv.createdAt).includes(ivSearchQuery)).map(iv => {
             const isDone = iv.transcriptionStatus === 'done'
             const isError = iv.transcriptionStatus === 'error'
             const isTranscribing = iv.transcriptionStatus === 'transcribing'
@@ -1217,25 +1636,25 @@ function App() {
                         <button type="button" className="btn-icon" onClick={() => setEditingInterviewId(null)}>✕</button>
                       </div>
                     ) : (
-                      <span className="rec-row-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
+                      <span className="rec-row-name">{iv.sessionName || fd(iv.createdAt)}</span>
                     )}
                   </div>
-                  <span className="rec-row-meta">{fmtShort(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}</span>
+                  <span className="rec-row-meta">{fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}</span>
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
-                  {isDone ? '✓ Transcrita' : isError ? '⚠ Error' : isTranscribing ? '↻ Transcribiendo' : '○ Pendiente'}
+                  {isDone ? <><DotFilled /> Transcrita</> : isError ? <><WarnTriangle /> Error</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> Transcribiendo</> : <><DotRing /> Pendiente</>}
                 </span>
                 <div className="rec-row-actions" onClick={e => e.stopPropagation()}>
                   {(iv.recordingUrl ?? iv.recordingFilePath) && (
                     <button type="button" className="btn-icon" title="Reproducir" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                   )}
-                  <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fmtDate(iv.createdAt)) }}><PencilIcon /></button>
+                  <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fd(iv.createdAt)) }}><PencilIcon /></button>
                   <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? '¿Confirmar?' : 'Eliminar'} onClick={() => handleDeleteInterview(iv.id)}>
                     {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}
                   </button>
                 </div>
                 {isDone ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={() => { setSelectedTranscriptInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={() => { setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
                 ) : iv.recordingFilePath && !isTranscribing ? (
                   <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={() => void handleTranscribe(iv.id)}>{isError ? '↺ Reintentar' : '▶ Transcribir'}</button>
                 ) : isTranscribing ? (
@@ -1245,6 +1664,7 @@ function App() {
             )
           })}
         </div>
+        </>
       )}
     </div>
   )
@@ -1257,18 +1677,24 @@ function App() {
         <aside className="trx-list-panel">
           {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
             const hasDone = iv.transcriptionStatus === 'done'
-            const isSelected = iv.id === selectedTranscriptInterviewId
+            const isSelected = iv.id === selectedInterviewId
             return (
-              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedTranscriptInterviewId(iv.id)}>
+              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedInterviewId(iv.id)}>
                 <div className="trx-list-item-info">
-                  <span className="trx-list-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
-                  <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
+                  <span className="trx-list-item-name">{iv.sessionName || fd(iv.createdAt)}</span>
+                  <span className="trx-list-item-date">{fs(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? '● Transcrita' : '○ Pendiente'}</span>
-                  {iv.recordingFilePath && !hasDone && (
-                    <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>Transcribir</button>
-                  )}
+                  <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}</span>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {(iv.recordingUrl ?? iv.recordingFilePath) && (
+                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                    )}
+                    {iv.recordingFilePath && iv.transcriptionStatus !== 'transcribing' && (
+                      <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? '↺' : 'Transcribir'}</button>
+                    )}
+                    {iv.transcriptionStatus === 'transcribing' && <span className="spinner" style={{ width: 12, height: 12 }} />}
+                  </div>
                 </div>
               </div>
             )
@@ -1276,15 +1702,47 @@ function App() {
         </aside>
         <div className="trx-separator" />
         <div className="trx-editor-panel">
-          {selectedTranscriptInterview ? (
+          {selectedInterview ? (
             <>
               <div className="trx-toolbar">
-                <div className="trx-search"><SearchIcon /><input type="text" placeholder="Buscar en transcripción..." /></div>
+                <div className="trx-search">
+                  <SearchIcon />
+                  <input type="text" placeholder="Buscar en transcripción..." value={txSearchQuery} onChange={e => setTxSearchQuery(e.target.value)} />
+                  {txSearchQuery.trim() && (() => {
+                    const count = transcriptDraft ? (transcriptDraft.toLowerCase().split(txSearchQuery.toLowerCase()).length - 1) : 0
+                    return <span style={{ fontSize: 11, color: count > 0 ? 'var(--primary)' : 'var(--text-muted)', whiteSpace: 'nowrap', marginLeft: 4 }}>{count} {count === 1 ? 'resultado' : 'resultados'}</span>
+                  })()}
+                </div>
+                <select
+                  className="trx-lang-select"
+                  value={txLang}
+                  onChange={e => setTxLang(e.target.value)}
+                  title="Idioma para transcripción"
+                >
+                  <option value="auto">🌐 Auto-detectar</option>
+                  <option value="es">🇪🇸 Español</option>
+                  <option value="en">🇬🇧 English</option>
+                  <option value="fr">🇫🇷 Français</option>
+                  <option value="de">🇩🇪 Deutsch</option>
+                  <option value="pt">🇵🇹 Português</option>
+                  <option value="it">🇮🇹 Italiano</option>
+                </select>
+                {selectedInterview.recordingFilePath && (
+                  <button
+                    type="button"
+                    className="trx-tool-btn trx-tool-btn--retranscribe"
+                    disabled={selectedInterview.transcriptionStatus === 'transcribing'}
+                    onClick={() => void handleTranscribe(selectedInterview.id)}
+                    title={selectedInterview.transcriptEdited ? 'Volver a transcribir (sobreescribe la actual)' : 'Transcribir grabación'}
+                  >
+                    {selectedInterview.transcriptionStatus === 'transcribing' ? <><span className="spinner" /> Transcribiendo...</> : selectedInterview.transcriptEdited ? '↺ Re-transcribir' : '▶ Transcribir'}
+                  </button>
+                )}
                 <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar todo</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedTranscriptInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> Descargar .txt</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> Descargar .txt</button>
               </div>
-              {selectedTranscriptInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso...</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedTranscriptInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
-              {selectedTranscriptInterview.transcriptionStatus === 'error' && (
+              {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso...</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
+              {selectedInterview.transcriptionStatus === 'error' && (
                 <div className="trx-error-card">
                   <div className="trx-error-accent" />
                   <div className="trx-error-body">
@@ -1292,13 +1750,13 @@ function App() {
                     <h3 className="trx-error-title">Error al transcribir</h3>
                     <p className="trx-error-sub1">No se pudo completar la transcripción.</p>
                     <p className="trx-error-sub2">Verifica tu clave API de Groq o inténtalo de nuevo.</p>
-                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedTranscriptInterview.id)}>↺  Reintentar</button>
+                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}>↺  Reintentar</button>
                     <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}>← Volver a grabaciones</button>
                   </div>
                 </div>
               )}
-              {selectedTranscriptInterview.transcriptionStatus !== 'transcribing' && (
-                !selectedTranscriptInterview.transcriptEdited ? (
+              {selectedInterview.transcriptionStatus !== 'transcribing' && (
+                !selectedInterview.transcriptEdited ? (
                   <div className="trx-pending-state">
                     <div className="trx-pending-icon">⊙</div>
                     <p className="trx-pending-title">Esta grabación aún no ha sido transcrita</p>
@@ -1311,8 +1769,8 @@ function App() {
               <div className="trx-footer">
                 <span className="trx-footer-info">✎ Haz clic para editar · {wordCount} palabras · {readingMin} min</span>
                 <div className="trx-footer-actions">
-                  <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedTranscriptInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
-                  <button type="button" className="trx-footer-btn" onClick={() => setTranscriptDraft(selectedTranscriptInterview.transcriptOriginal)}>Restaurar original</button>
+                  <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
+                  <button type="button" className="trx-footer-btn" onClick={() => { const orig = selectedInterview.transcriptOriginal; setTranscriptDraft(orig); updateInterview(selectedInterview.id, { transcriptEdited: orig, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción restaurada') }}>Restaurar original</button>
                 </div>
               </div>
             </>
@@ -1340,21 +1798,24 @@ function App() {
       if (cur) sections.push({ title: cur.title, content: cur.lines.join('\n').trim(), color: cur.color })
       return sections.filter(s => s.title || s.content)
     }
-    const summarySections = selectedSummaryInterview?.summaryText ? parseSections(selectedSummaryInterview.summaryText) : []
+    const summarySections = selectedInterview?.summaryText ? parseSections(selectedInterview.summaryText) : []
     return (
       <div className="transcript-layout-v2">
         <aside className="trx-list-panel">
           {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
             const hasSummary = iv.summaryStatus === 'done' || !!iv.summaryText
-            const isSelected = iv.id === selectedSummaryInterviewId
+            const isSelected = iv.id === selectedInterviewId
             return (
-              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedSummaryInterviewId(iv.id)}>
+              <div key={iv.id} className={`trx-list-item${isSelected ? ' is-selected' : ''}`} onClick={() => setSelectedInterviewId(iv.id)}>
                 <div className="trx-list-item-info">
-                  <span className="trx-list-item-name">{iv.sessionName || fmtDate(iv.createdAt)}</span>
-                  <span className="trx-list-item-date">{fmtShort(iv.createdAt)}</span>
+                  <span className="trx-list-item-name">{iv.sessionName || fd(iv.createdAt)}</span>
+                  <span className="trx-list-item-date">{fs(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? '★ Con resumen' : '○ Sin resumen'}</span>
+                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? <><DotFilled /> Con resumen</> : <><DotRing /> Sin resumen</>}</span>
+                  {(iv.recordingUrl ?? iv.recordingFilePath) && (
+                    <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                  )}
                 </div>
               </div>
             )
@@ -1362,27 +1823,33 @@ function App() {
         </aside>
         <div className="trx-separator" />
         <div className="trx-editor-panel">
-          {selectedSummaryInterview ? (
+          {selectedInterview ? (
             <>
               <div className="trx-toolbar">
-                <select className={`sum-type-select${selectedSummaryInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`} value={selectedSummaryInterview.summaryType} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}>
+                <select className={`sum-type-select${selectedInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`} value={selectedInterview.summaryType} onChange={e => updateInterview(selectedInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}>
                   <option value="resumen">Resumen descriptivo ⌄</option>
                   <option value="listado">Listado por puntos ⌄</option>
                 </select>
-                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedSummaryInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedSummaryInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey || selectedSummaryInterview.transcriptionStatus !== 'done' || selectedSummaryInterview.summaryStatus === 'generating'}>★ Regenerar</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!groqApiKey || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating'}>{selectedInterview.summaryText ? '↺ Regenerar' : '★ Generar'}</button>
               </div>
               {!groqApiKey && <p className="warning-note">Configura tu API key de Groq en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
-              {selectedSummaryInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
-              {selectedSummaryInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
-              {selectedSummaryInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
-              <div className="sum-instructions">
-                <textarea value={selectedSummaryInterview.summaryInstructions} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryInstructions: e.target.value })} rows={2} placeholder={selectedSummaryInterview.summaryType === 'listado' ? 'Ej: Trayectoria, Habilidades, Pretensiones salariales' : 'Ej: Perfil para puesto administrativo'} />
-              </div>
-              {selectedSummaryInterview.summaryText ? (
-                selectedSummaryInterview.summaryType === 'resumen' ? (
+              {selectedInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
+              {selectedInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
+              {selectedInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
+              {(() => {
+                const cand = candidates.find(c => c.id === selectedInterview.candidateId)
+                const proj = cand ? projects.find(p => p.id === cand.projectId) : null
+                const crit = proj?.evaluationCriteria ?? []
+                const labels = crit.map(id => EVALUATION_CRITERIA.find(c => c.id === id)?.label).filter(Boolean)
+                return labels.length > 0
+                  ? <p className="sum-criteria-hint">Criterios del proyecto: <strong>{labels.join(', ')}</strong></p>
+                  : <p className="sum-criteria-hint sum-criteria-hint--empty">Sin criterios definidos — configúralos en el proyecto para enfocar el resumen</p>
+              })()}
+              {selectedInterview.summaryText ? (
+                selectedInterview.summaryType === 'resumen' ? (
                   <div className="sum-prose-card">
-                    <p className="sum-prose-text">{selectedSummaryInterview.summaryText}</p>
+                    <p className="sum-prose-text">{selectedInterview.summaryText}</p>
                   </div>
                 ) : summarySections.length > 1 ? (
                   <div className="sum-sections">
@@ -1394,11 +1861,11 @@ function App() {
                     ))}
                   </div>
                 ) : (
-                  <div className="summary-result"><textarea value={selectedSummaryInterview.summaryText} onChange={e => updateInterview(selectedSummaryInterview.id, { summaryText: e.target.value })} rows={10} /></div>
+                  <div className="summary-result"><textarea value={selectedInterview.summaryText} onChange={e => updateInterview(selectedInterview.id, { summaryText: e.target.value })} rows={10} /></div>
                 )
               ) : (
-                selectedSummaryInterview.transcriptionStatus === 'done' && selectedSummaryInterview.summaryStatus !== 'generating' && (
-                  <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedSummaryInterview.id)} disabled={!groqApiKey}>
+                selectedInterview.transcriptionStatus === 'done' && selectedInterview.summaryStatus !== 'generating' && (
+                  <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!groqApiKey}>
                     ★ Generar resumen con IA
                   </button>
                 )
@@ -1442,7 +1909,6 @@ function App() {
                   <select className="modal-input modal-select" value={settingsTxModelDraft} onChange={e => setSettingsTxModelDraft(e.target.value)}>
                     <option value="whisper-large-v3">whisper-large-v3 — Mayor precisión</option>
                     <option value="whisper-large-v3-turbo">whisper-large-v3-turbo — Rápido y preciso</option>
-                    <option value="distil-whisper-large-v3-en">distil-whisper-large-v3-en — Solo inglés</option>
                   </select>
                 </label>
                 <label className="modal-label">Resumen IA (LLM)
@@ -1606,7 +2072,7 @@ function App() {
                   <label className="modal-label">Nombre<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder="Tu nombre" /></label>
                   <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder="tu@email.com" /></label>
                   <label className="modal-label">Empresa<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder="Nombre de la empresa" /></label>
-                  <label className="modal-label">Cargo<input type="text" className="modal-input" placeholder="Tu cargo" /></label>
+                  <label className="modal-label">Cargo<input type="text" className="modal-input" value={settingsRoleDraft} onChange={e => setSettingsRoleDraft(e.target.value)} placeholder="Tu cargo" /></label>
                 </div>
               </div>
               <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
@@ -1622,11 +2088,11 @@ function App() {
               <div className="settings-sections">
                 <div className="settings-section">
                   <div className="prof-plan-card">
-                    <p className="prof-plan-label">Plan actual</p>
-                    <div className="prof-plan-badge">★ Pro Plan</div>
+                    <p className="prof-plan-label">Cuenta</p>
+                    <div className="prof-plan-badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>Plan gratuito</div>
                     <div className="prof-plan-card-divider" />
                     <p className="prof-plan-email">{userEmail || 'usuario'}</p>
-                    <p className="prof-plan-since">Miembro desde mayo 2026</p>
+                    <p className="prof-plan-since">Miembro desde {session?.user.created_at ? new Date(session.user.created_at).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : '—'}</p>
                   </div>
                 </div>
                 <div className="settings-section">
@@ -1660,7 +2126,7 @@ function App() {
                   <input type="password" className="sec-input" value={settingsPasswordConfirmDraft} onChange={e => setSettingsPasswordConfirmDraft(e.target.value)} placeholder="••••••••" />
                 </div>
                 <div className="sec-bottom-divider" />
-                <div className="settings-save"><button type="button" className="primary-btn pill-btn sec-update-btn" onClick={() => { toast('Contraseña actualizada'); setSettingsPasswordDraft(''); setSettingsPasswordNewDraft(''); setSettingsPasswordConfirmDraft('') }}>Actualizar contraseña</button></div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn sec-update-btn" onClick={() => void handleChangePassword()}>Actualizar contraseña</button></div>
               </div>
             </>
           )}
@@ -1689,7 +2155,7 @@ function App() {
                 <div className="notif-divider" />
                 <div className="notif-row">
                   <div><span className="toggle-label">Novedades del producto</span><span className="notif-sub">Actualizaciones y nuevas funcionalidades</span></div>
-                  <button type="button" className="toggle-btn"><span className="toggle-circle" /></button>
+                  <button type="button" className={`toggle-btn${notifProductUpdates ? ' on' : ''}`} onClick={() => setNotifProductUpdates(t => !t)}><span className="toggle-circle" /></button>
                 </div>
                 <div className="notif-divider" />
               </div>
@@ -1702,6 +2168,57 @@ function App() {
   )
 
   // ── Overlays ───────────────────────────────────────────────────────────
+
+  const renderCriteriaGrid = (
+    criteria: string[],
+    onChange: (updated: string[]) => void
+  ) => {
+    const otrosChecked = criteria.some(c => c.startsWith('otros:'))
+    const otrosText = criteria.find(c => c.startsWith('otros:'))?.slice(6) ?? ''
+    return (
+      <>
+        <div className="criteria-grid">
+          {EVALUATION_CRITERIA.map(c => {
+            const isOtros = c.id === 'otros'
+            const checked = isOtros ? otrosChecked : criteria.includes(c.id)
+            return (
+              <label key={c.id} className="criteria-checkbox">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={e => {
+                    if (isOtros) {
+                      onChange(e.target.checked
+                        ? [...criteria.filter(x => !x.startsWith('otros:')), 'otros:']
+                        : criteria.filter(x => !x.startsWith('otros:')))
+                    } else {
+                      onChange(e.target.checked
+                        ? [...criteria, c.id]
+                        : criteria.filter(x => x !== c.id))
+                    }
+                  }}
+                />
+                <span>{c.label}</span>
+              </label>
+            )
+          })}
+        </div>
+        {otrosChecked && (
+          <input
+            type="text"
+            className="modal-input modal-input--figma criteria-otros-input"
+            placeholder="Describe el criterio personalizado..."
+            value={otrosText}
+            onChange={e => onChange([
+              ...criteria.filter(x => !x.startsWith('otros:')),
+              `otros:${e.target.value}`,
+            ])}
+            autoFocus
+          />
+        )}
+      </>
+    )
+  }
 
   const renderRecordingScreen = () => {
     if (!activeRecordingInterview) return null
@@ -1756,7 +2273,7 @@ function App() {
         <div className="modal-box proc-modal">
           <h2>Procesando grabación...</h2>
           <p>Esto puede tardar unos segundos</p>
-          {cand && <p className="proc-candidate">{cand.name} — {transcribingInterview.sessionName || fmtDate(transcribingInterview.createdAt)}</p>}
+          {cand && <p className="proc-candidate">{cand.name} — {transcribingInterview.sessionName || fd(transcribingInterview.createdAt)}</p>}
           <div className="proc-steps">
             {step('Subiendo audio', false, true)}
             {step('Transcribiendo', true, false)}
@@ -1779,7 +2296,7 @@ function App() {
       if (ci.length === 0) return `# ${cand.name}\nSin entrevistas transcritas.`
       return `# ${cand.name}\n${cand.role ? `Puesto: ${cand.role}\n` : ''}${cand.email ? `Email: ${cand.email}\n` : ''}\n` +
         ci.map(i => {
-          let out = `## ${i.sessionName || fmtDate(i.createdAt)}\n`
+          let out = `## ${i.sessionName || fd(i.createdAt)}\n`
           if (i.summaryText) out += `### Resumen IA\n${i.summaryText}\n`
           if (i.transcriptEdited) out += `### Transcripción\n${i.transcriptEdited}\n`
           return out
@@ -1796,7 +2313,12 @@ function App() {
         const a = document.createElement('a'); a.href = url; a.download = 'exportacion.txt'; a.click(); URL.revokeObjectURL(url)
         toast('Archivo descargado', 'success'); setShowExport(false)
       } else {
-        toast('Exportación PDF no disponible en esta versión', 'warning'); setShowExport(false)
+        if (!window.desktopApp?.exportPdf) { toast('PDF no disponible fuera de la app de escritorio', 'warning'); return }
+        const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Exportación Call Transcriber</title><style>body{font-family:Arial,sans-serif;max-width:820px;margin:0 auto;padding:24px;color:#1a1a1a}h1{color:#2563eb;border-bottom:2px solid #2563eb;padding-bottom:8px;margin-top:32px}h2{color:#333;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:6px}h3{color:#555;margin-top:20px}p{line-height:1.7;margin:6px 0}hr{border:none;border-top:2px solid #eee;margin:32px 0}pre{white-space:pre-wrap;font-family:inherit}</style></head><body>${exportText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>').replace(/^# (.+)$/gm,'<h1>$1</h1>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^====<br>$/gm,'<hr>')}</body></html>`
+        const candidateName = allCandidatesToExport[0]?.name ?? 'exportacion'
+        const result = await window.desktopApp.exportPdf({ html, fileName: `${candidateName}.pdf` })
+        if (result.ok) { toast('PDF guardado correctamente', 'success'); setShowExport(false) }
+        else if (!result.cancelled) toast('Error al generar el PDF', 'error')
       }
     }
 
@@ -1869,9 +2391,7 @@ function App() {
         </div>
       </header>
 
-      {activeRecordingInterview && renderRecordingScreen()}
-
-      <div className="app-body" style={activeRecordingInterview ? { display: 'none' } : undefined}>
+      <div className="app-body">
         {/* Sidebar */}
         {screen === 'candidate-detail' && activeProject ? (
           <aside className="sidebar sidebar--cands">
@@ -1897,6 +2417,7 @@ function App() {
               <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>Inicio</span></button>
               <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>Proyectos</span></button>
               <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>Perfiles</span></button>
+              <button type="button" className={`nav-item${screen === 'search' ? ' is-active' : ''}`} onClick={() => { setScreen('search'); setTimeout(() => document.getElementById('global-search-input')?.focus(), 50) }}><SearchIcon /><span>Buscar</span></button>
             </nav>
             <div className="sidebar-bottom">
               <button type="button" className="sidebar-user" onClick={() => setShowProfilePopup(p => !p)}>
@@ -1907,9 +2428,6 @@ function App() {
                   <span className="sidebar-user-name">{userName || session?.user.email?.split('@')[0] || 'Usuario'}</span>
                   <span className="sidebar-user-email">{userEmail || session?.user.email || ''}</span>
                 </div>
-              </button>
-              <button type="button" className="sidebar-signout" title="Cerrar sesión" onClick={() => void handleSignOut()}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
               </button>
             </div>
           </aside>
@@ -1930,13 +2448,18 @@ function App() {
             </header>
           )}
           <main className="content-area">
-            {screen === 'dashboard' && renderDashboard()}
-            {screen === 'projects' && renderProjects()}
-            {screen === 'project-detail' && renderProjectDetail()}
-            {screen === 'candidates' && renderCandidates()}
-            {screen === 'candidate-detail' && renderCandidateDetail()}
-            {screen === 'settings' && renderSettings()}
-            {screen === 'profile' && renderProfile()}
+            {activeRecordingInterview ? renderRecordingScreen() : (
+              <>
+                {screen === 'dashboard' && renderDashboard()}
+                {screen === 'projects' && renderProjects()}
+                {screen === 'project-detail' && renderProjectDetail()}
+                {screen === 'candidates' && renderCandidates()}
+                {screen === 'candidate-detail' && renderCandidateDetail()}
+                {screen === 'settings' && renderSettings()}
+                {screen === 'profile' && renderProfile()}
+                {screen === 'search' && renderSearch()}
+              </>
+            )}
           </main>
         </div>
       </div>
@@ -1954,7 +2477,7 @@ function App() {
           <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi perfil</button>
           <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> Configuración</button>
           <div className="pp-divider" />
-          <button type="button" className="pp-item pp-item--danger" onClick={() => setShowProfilePopup(false)}>→ Cerrar sesión</button>
+          <button type="button" className="pp-item pp-item--danger" onClick={() => { setShowProfilePopup(false); void handleSignOut() }}>→ Cerrar sesión</button>
         </div>
       )}
 
@@ -1983,10 +2506,19 @@ function App() {
           <div className="modal-box" onClick={e => e.stopPropagation()}>
             <h2>Nombrar sesión</h2>
             <p>¿Cómo quieres llamar a esta sesión?</p>
-            <label className="modal-label">Nombre<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && sessionNameDraft.trim()) void handleConfirmSessionName() }} placeholder="Ej: Primera entrevista técnica" autoFocus /></label>
+            <label className="modal-label">Nombre<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder="Ej: Primera entrevista técnica (opcional)" autoFocus /></label>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>Si lo dejas en blanco se usará la fecha y hora como nombre.</p>
             <div className="modal-actions">
-              <button type="button" className="primary-btn" onClick={() => void handleConfirmSessionName()} disabled={!sessionNameDraft.trim()}>Guardar</button>
-              <button type="button" onClick={() => { pendingBlobRef.current = null; setShowSessionNameModal(false) }}>Descartar grabación</button>
+              <button type="button" className="primary-btn" onClick={() => void handleConfirmSessionName()}>Guardar</button>
+              {discardConfirming ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: 'var(--error)' }}>¿Seguro? El audio se perderá.</span>
+                  <button type="button" style={{ color: 'var(--error)', fontWeight: 600 }} onClick={() => void handleDiscardRecording()}>Sí, descartar</button>
+                  <button type="button" onClick={() => setDiscardConfirming(false)}>Cancelar</button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setDiscardConfirming(true)}>Descartar grabación</button>
+              )}
             </div>
           </div>
         </div>
@@ -2017,6 +2549,10 @@ function App() {
                 <span className="modal-field-label">Teléfono</span>
                 <input type="text" className="modal-input modal-input--figma" value={candidateDraft.phone} onChange={e => setCandidateDraft(d => ({ ...d, phone: e.target.value }))} placeholder="+34 600 000 000" />
               </div>
+            </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Cargo</span>
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder="Ej: Desarrollador Frontend" />
             </div>
             <div className="modal-field">
               <span className="modal-field-label">Notas previas (opcional)</span>
@@ -2089,14 +2625,14 @@ function App() {
 
       {/* Project modal */}
       {showNewProject && (
-        <div className="modal-overlay" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>
+        <div className="modal-overlay" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2 className="modal-title">Nuevo proyecto</h2>
                 <p className="modal-subtitle">Define el proceso de selección que vas a gestionar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>✕</button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -2114,12 +2650,16 @@ function App() {
               </div>
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Descripción (opcional)</span>
-              <textarea className="modal-input modal-input--figma modal-textarea" value={projDescDraft} onChange={e => setProjDescDraft(e.target.value)} placeholder="Añade contexto sobre el proceso de selección..." rows={3} />
+              <span className="modal-field-label">Criterios de evaluación del resumen</span>
+              <p className="modal-field-hint">Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato</p>
+              {renderCriteriaGrid(
+                projectDraft.evaluationCriteria,
+                updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
+              )}
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT); setProjDescDraft('') }}>Cancelar</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>Crear proyecto</button>
             </div>
           </div>

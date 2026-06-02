@@ -6,6 +6,7 @@ const {
   app,
   BrowserWindow,
   desktopCapturer,
+  dialog,
   ipcMain,
   session,
   shell,
@@ -88,20 +89,47 @@ async function readConfig() {
   }
 }
 
+function convertToFormat(inputPath, outputPath, format) {
+  return new Promise((resolve, reject) => {
+    const args = format === 'wav'
+      ? ['-i', inputPath, '-vn', '-ar', '44100', '-ac', '2', '-y', outputPath]
+      : ['-i', inputPath, '-vn', '-ar', '44100', '-ac', '2', '-b:a', '128k', '-y', outputPath]
+    const proc = spawn(ffmpegPath, args)
+    let stderr = ''
+    proc.stderr.on('data', d => { stderr += d.toString() })
+    proc.on('error', err => reject(new Error(`ffmpeg conversion failed: ${err.message}`)))
+    proc.on('close', code => {
+      if (code === 0) resolve()
+      else reject(new Error(`ffmpeg conversion failed: ${stderr.slice(-300)}`))
+    })
+  })
+}
+
 ipcMain.handle('recording:save', async (_event, payload) => {
   const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
   await fs.mkdir(recordingsDir, { recursive: true })
 
-  const extension = payload.extension || 'webm'
+  const rawExtension = payload.extension || 'webm'
+  const desiredFormat = payload.format || null
   const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
   const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
-  const fileName = `${candidateSafe}_${createdSafe}_${payload.interviewId}.${extension}`
-  const filePath = path.join(recordingsDir, fileName)
-
   const buffer = Buffer.from(payload.audioBytes)
-  await fs.writeFile(filePath, buffer)
 
-  return { filePath }
+  const rawPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}.${rawExtension}`)
+  await fs.writeFile(rawPath, buffer)
+
+  if (desiredFormat && desiredFormat !== rawExtension) {
+    const convertedPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}.${desiredFormat}`)
+    try {
+      await convertToFormat(rawPath, convertedPath, desiredFormat)
+      await fs.unlink(rawPath).catch(() => {})
+      return { filePath: convertedPath }
+    } catch {
+      // If conversion fails, keep the raw file
+    }
+  }
+
+  return { filePath: rawPath }
 })
 
 ipcMain.handle('config:get', async () => {
@@ -114,7 +142,7 @@ ipcMain.handle('config:save', async (_event, payload) => {
 })
 
 const GROQ_MAX_BYTES = 24 * 1024 * 1024
-const CHUNK_DURATION_SEC = 600 // 10 minutos por chunk
+const DEFAULT_CHUNK_DURATION_SEC = 600 // 10 minutos por chunk
 
 function getAudioDurationSec(filePath) {
   return new Promise((resolve) => {
@@ -213,15 +241,15 @@ async function transcribeChunk(filePath, groqApiKey, model, language) {
   return data.text || ''
 }
 
-async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
-  const numChunks = Math.ceil(durationSec / CHUNK_DURATION_SEC)
+async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
+  const numChunks = Math.ceil(durationSec / chunkDurationSec)
   const chunkPaths = []
 
   for (let i = 0; i < numChunks; i++) {
-    const start = i * CHUNK_DURATION_SEC
+    const start = i * chunkDurationSec
     const chunkPath = path.join(tmpDir, `chunk_${i}.mp3`)
     await new Promise((resolve, reject) => {
-      const args = ['-i', mp3Path, '-ss', String(start), '-t', String(CHUNK_DURATION_SEC), '-c', 'copy', '-y', chunkPath]
+      const args = ['-i', mp3Path, '-ss', String(start), '-t', String(chunkDurationSec), '-c', 'copy', '-y', chunkPath]
       const proc = spawn(ffmpegPath, args)
       let stderr = ''
       proc.stderr.on('data', (d) => { stderr += d.toString() })
@@ -237,7 +265,7 @@ async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir) {
   return chunkPaths
 }
 
-async function transcribeAudio(filePath, groqApiKey, model, language) {
+async function transcribeAudio(filePath, groqApiKey, model, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
 
   try {
@@ -253,7 +281,7 @@ async function transcribeAudio(filePath, groqApiKey, model, language) {
     const durationSec = await getAudioDurationSec(mp3Path)
     if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
 
-    const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir)
+    const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
     const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
     return texts.join('\n\n')
   } finally {
@@ -261,8 +289,11 @@ async function transcribeAudio(filePath, groqApiKey, model, language) {
   }
 }
 
-async function identifySpeakers(transcript, groqApiKey, summaryModel) {
+async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateName) {
   if (!transcript || !groqApiKey) return transcript
+  const candidateHint = candidateName
+    ? `El nombre del candidato es "${candidateName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [Candidato].`
+    : ''
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
@@ -272,12 +303,24 @@ async function identifySpeakers(transcript, groqApiKey, summaryModel) {
         {
           role: 'system',
           content:
-            'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista. ' +
-            'Tu tarea es identificar los turnos de conversación y etiquetarlos con [Entrevistador]: y [Candidato]:. ' +
-            'Basa tu decisión en el contexto: el entrevistador hace preguntas y conduce la conversación; ' +
-            'el candidato responde sobre sí mismo, su trayectoria y experiencia laboral. ' +
-            'Conserva el texto EXACTAMENTE como está, solo añade las etiquetas al inicio de cada turno. ' +
-            'Responde ÚNICAMENTE con la transcripción etiquetada, sin explicaciones ni texto adicional.',
+            'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista ' +
+            '(puede venir con etiquetas genéricas como [Hablante 1] / [Hablante 2] o sin etiquetas).\n' +
+            'Tu tarea es reetiquétar CADA turno de conversación con exactamente una de estas etiquetas: [Entrevistador]: o [Candidato]:\n\n' +
+            'SEÑALES para identificar al entrevistador:\n' +
+            '- Hace preguntas sobre el historial, experiencia o motivaciones del candidato\n' +
+            '- Presenta la empresa, el puesto o el proceso de selección\n' +
+            '- Conduce y estructura la conversación\n' +
+            '- Habla en nombre de la empresa ("nosotros buscamos...", "el equipo es...")\n\n' +
+            'SEÑALES para identificar al candidato:\n' +
+            '- Habla de su propia trayectoria, empresas donde ha trabajado, estudios\n' +
+            '- Usa primera persona para describir su experiencia ("yo estuve en...", "llevo X años...")\n' +
+            '- Responde preguntas sobre sí mismo\n' +
+            (candidateHint ? candidateHint + '\n\n' : '') +
+            'REGLAS:\n' +
+            '- Conserva el texto EXACTAMENTE como está; solo sustituye o añade la etiqueta al inicio de cada turno\n' +
+            '- Agrupa frases consecutivas del mismo hablante bajo una sola etiqueta\n' +
+            '- Si un fragmento es completamente ambiguo, asígnalo al hablante más probable por contexto\n' +
+            '- Responde ÚNICAMENTE con la transcripción etiquetada, sin explicaciones ni texto adicional',
         },
         { role: 'user', content: transcript },
       ],
@@ -290,28 +333,61 @@ async function identifySpeakers(transcript, groqApiKey, summaryModel) {
   return data.choices?.[0]?.message?.content || transcript
 }
 
-ipcMain.handle('transcription:run', async (_event, { filePath }) => {
+ipcMain.handle('transcription:run', async (_event, { filePath, language, candidateName }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
   }
-  const model = config.transcriptionModel || 'whisper-large-v3'
-  let text = await transcribeAudio(filePath, config.groqApiKey, model, 'es')
+  const VALID_MODELS = ['whisper-large-v3', 'whisper-large-v3-turbo']
+  const savedModel = config.transcriptionModel || 'whisper-large-v3'
+  const model = VALID_MODELS.includes(savedModel) ? savedModel : 'whisper-large-v3'
+  const chunkDuration = (config.chunkDuration && config.chunkDuration >= 5) ? config.chunkDuration : DEFAULT_CHUNK_DURATION_SEC
+  let text = await transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration)
 
-  // If Groq diarization didn't find multiple speakers, use LLM to identify them
-  const hasMultipleSpeakers = /\[Hablante [2-9]\]|\[Hablante [2-9]\]:/.test(text)
-  if (!hasMultipleSpeakers && text.trim().length > 0) {
-    text = await identifySpeakers(text, config.groqApiKey, config.summaryModel || 'llama-3.3-70b-versatile').catch(() => text)
+  if (text.trim().length > 0) {
+    text = await identifySpeakers(text, config.groqApiKey, config.summaryModel || 'llama-3.3-70b-versatile', candidateName || '').catch(() => text)
   }
 
   return { text }
 })
 
-ipcMain.handle('summary:generate', async (_event, { transcript, instructions, summaryType }) => {
+const CRITERIA_LABELS = {
+  experiencia:    'Experiencia laboral',
+  formacion:      'Formación académica',
+  situacion:      'Situación personal',
+  habilidades:    'Habilidades técnicas',
+  idiomas:        'Idiomas',
+  disponibilidad: 'Disponibilidad',
+  salario:        'Pretensiones salariales',
+  motivacion:     'Motivación y expectativas',
+  blandas:        'Competencias interpersonales',
+  adecuacion:     'Adecuación al puesto',
+}
+
+ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
   }
+
+  const criteriaList = Array.isArray(criteria) && criteria.length > 0
+    ? criteria.map(id => {
+        if (id.startsWith('otros:')) {
+          const text = id.slice(6).trim()
+          return text || null
+        }
+        return CRITERIA_LABELS[id] || null
+      }).filter(Boolean)
+    : null
+  const effectiveCriteria = criteriaList && criteriaList.length > 0 ? criteriaList : null
+
+  const fidelityRules =
+    'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
+    '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Extrae información solo de lo que dice el [Candidato]: salvo que se indique lo contrario.\n' +
+    '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
+    '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
+    '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
+    'Responde en español.'
 
   let systemPrompt
   let userPrompt
@@ -319,39 +395,30 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
   if (summaryType === 'listado') {
     systemPrompt =
       'Eres un asistente experto en análisis de entrevistas de trabajo. ' +
-      'Genera un listado estructurado por secciones basándote en los temas indicados. ' +
-      'Para cada sección usa un título en negrita seguido de bullets con la información extraída.\n\n' +
-      'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
-      '- La transcripción puede incluir etiquetas de hablante como [Hablante 1] y [Hablante 2]. Generalmente [Hablante 1] es el entrevistador y [Hablante 2] es la candidata, aunque puede variar. Úsalas para atribuir correctamente cada dato a quien lo dice.\n' +
-      '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
-      '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
-      '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
-      '- Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".\n' +
-      'Responde en español.'
+      'Genera un listado estructurado por secciones basándote en los criterios indicados. ' +
+      'Para cada sección usa un título en negrita seguido de bullets con la información extraída. ' +
+      'Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".\n\n' +
+      fidelityRules
 
-    userPrompt = instructions
-      ? `Secciones a resumir:\n${instructions}\n\nTranscripción:\n${transcript}`
+    userPrompt = effectiveCriteria
+      ? `Secciones a analizar:\n${effectiveCriteria.join('\n')}\n\nTranscripción:\n${transcript}`
       : `Transcripción:\n${transcript}`
   } else {
+    const topicSentence = effectiveCriteria
+      ? `Cubre específicamente los siguientes aspectos (en este orden si aplican): ${effectiveCriteria.join(', ')}.`
+      : 'Organiza el contenido en párrafos temáticos: situación actual y disponibilidad, trayectoria profesional, competencias técnicas y habilidades clave, y adecuación al puesto.'
+
     systemPrompt =
       'Eres un experto en selección de personal. Tu tarea es redactar un informe narrativo del candidato ' +
       'basado en la transcripción de una entrevista de trabajo. ' +
       'Escribe en tercera persona, con prosa fluida y densa en información relevante. ' +
-      'Organiza el contenido en párrafos temáticos: situación actual y disponibilidad, trayectoria profesional, ' +
-      'competencias técnicas y habilidades clave, y adecuación al puesto. ' +
+      `${topicSentence} ` +
       'NO uses listas con guiones o puntos. ' +
       'NO incluyas frases como "el entrevistador preguntó" o "el candidato respondió". ' +
       'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación.\n\n' +
-      'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
-      '- La transcripción puede incluir etiquetas de hablante como [Hablante 1] y [Hablante 2]. Generalmente [Hablante 1] es el entrevistador y [Hablante 2] es la candidata, aunque puede variar. Úsalas para atribuir correctamente cada dato a quien lo dice.\n' +
-      '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
-      '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
-      '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
-      'Responde en español.'
+      fidelityRules
 
-    userPrompt = instructions
-      ? `Contexto del proceso: ${instructions}\n\nTranscripción:\n${transcript}`
-      : `Transcripción:\n${transcript}`
+    userPrompt = `Transcripción:\n${transcript}`
   }
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -377,6 +444,43 @@ ipcMain.handle('summary:generate', async (_event, { transcript, instructions, su
 
   const data = await response.json()
   return { text: data.choices[0].message.content }
+})
+
+ipcMain.handle('export:pdf', async (_event, { html, fileName }) => {
+  const { BrowserWindow, dialog } = require('electron')
+  const { defaultPath } = await dialog.showSaveDialog({
+    title: 'Guardar PDF',
+    defaultPath: fileName || 'exportacion.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  })
+  if (!defaultPath) return { ok: false, cancelled: true }
+
+  const win = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true } })
+  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  await new Promise(resolve => win.webContents.once('did-finish-load', resolve))
+  const pdfBuffer = await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { top: 1, bottom: 1, left: 1, right: 1 } })
+  win.destroy()
+  await fs.writeFile(defaultPath, pdfBuffer)
+  return { ok: true, filePath: defaultPath }
+})
+
+ipcMain.handle('recordings:get-dir', async () => {
+  const dir = path.join(app.getPath('documents'), 'CallTranscriber')
+  await fs.mkdir(dir, { recursive: true })
+  return dir
+})
+
+ipcMain.handle('dialog:select-audio', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Importar grabación de audio',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Audio', extensions: ['mp3', 'mp4', 'm4a', 'wav', 'ogg', 'webm', 'flac', 'aac', 'opus', 'wma'] },
+      { name: 'Todos los archivos', extensions: ['*'] },
+    ],
+  })
+  if (result.cancelled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
 })
 
 ipcMain.handle('recording:delete', async (_event, { filePath }) => {

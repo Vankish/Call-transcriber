@@ -27,7 +27,7 @@ export interface DbProfile {
 
 export interface DbProject {
   id: string; user_id: string; name: string; company: string
-  status: string; created_at: string
+  status: string; created_at: string; evaluation_criteria?: string[]
 }
 
 export interface DbCandidate {
