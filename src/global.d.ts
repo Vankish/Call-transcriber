@@ -25,6 +25,7 @@ type GetConfigResult = {
   language?: string
   dateFormat?: string
   autoSave?: boolean
+  autoTranscribe?: boolean
 }
 
 type SaveConfigPayload = {
@@ -41,6 +42,7 @@ type SaveConfigPayload = {
   language?: string
   dateFormat?: string
   autoSave?: boolean
+  autoTranscribe?: boolean
 }
 
 type SaveConfigResult = {
@@ -80,6 +82,7 @@ interface Window {
     openOAuthWindow: (url: string) => Promise<string | null>
     exportPdf: (payload: { html: string; fileName: string }) => Promise<{ ok: boolean; cancelled?: boolean; filePath?: string }>
     getRecordingsDir: () => Promise<string>
+    openRecordingsFolder: () => Promise<void>
     selectAudioFile: () => Promise<string | null>
   }
 }

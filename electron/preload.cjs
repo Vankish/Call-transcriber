@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('desktopApp', {
   openOAuthWindow: (url) => ipcRenderer.invoke('auth:open-oauth-window', url),
   exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
   getRecordingsDir: () => ipcRenderer.invoke('recordings:get-dir'),
+  openRecordingsFolder: () => ipcRenderer.invoke('shell:open-recordings-folder'),
   selectAudioFile: () => ipcRenderer.invoke('dialog:select-audio'),
 })
