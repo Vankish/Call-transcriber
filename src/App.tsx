@@ -21,7 +21,7 @@ const EVALUATION_CRITERIA = [
   { id: 'adecuacion',    label: 'Adecuación al puesto' },
   { id: 'otros',         label: 'Otros' },
 ]
-type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string }
+type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista' }
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
 type Interview = {
@@ -102,7 +102,7 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
 
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
 const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [] })
-const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role })
+const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente' })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
   sessionName: r.session_name, status: r.status as RecordingStatus,
@@ -226,14 +226,18 @@ function App() {
   const [txLang, setTxLang] = useState('auto')
   const [userPhoto, setUserPhoto] = useState('')
   const [candidateNotesDraft, setCandidateNotesDraft] = useState('')
+  const [candidateStatusDraft, setCandidateStatusDraft] = useState<Candidate['candidateStatus']>('pendiente')
+  const [retranscribeConfirmId, setRetranscribeConfirmId] = useState<string | null>(null)
 
   // ── Modals & overlays ──────────────────────────────────────────────────
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingKeyDraft, setOnboardingKeyDraft] = useState('')
   const [showNewProject, setShowNewProject] = useState(false)
+  const [showEditProject, setShowEditProject] = useState(false)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showNewCandidate, setShowNewCandidate] = useState(false)
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
-  const [projectDraft, setProjectDraft] = useState(EMPTY_PROJECT)
+  const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[] }>(EMPTY_PROJECT)
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
@@ -443,6 +447,7 @@ function App() {
       if (cfg.language)           setSettingsLanguageDraft(cfg.language)
       if (cfg.dateFormat)         setSettingsDateFormatDraft(cfg.dateFormat)
       if (cfg.autoSave !== undefined) { setSettingsAutoSaveDraft(cfg.autoSave); setAutoSave(cfg.autoSave) }
+      if (cfg.autoTranscribe !== undefined) setAutoTranscribe(cfg.autoTranscribe)
       setConfigLoaded(true)
     })
   }, [])
@@ -830,11 +835,11 @@ function App() {
 
   const handleCreateCandidate = async () => {
     if (!candidateDraft.name.trim() || !activeProjectId) return
-    const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() }
+    const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft }
     setCandidates(curr => [...curr, c])
-    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE)
+    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente')
     if (session) {
-      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, created_at: new Date().toISOString() })
+      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, created_at: new Date().toISOString() })
       if (error) { toast(`Error guardando perfil: ${error.message}`, 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
     }
     toast(`Perfil ${c.name} creado`)
@@ -842,8 +847,8 @@ function App() {
 
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
-    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim() } : x))
-    if (session) void supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft }).eq('id', editingCandidateId)
+    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft } : x))
+    if (session) void supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft }).eq('id', editingCandidateId)
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Perfil actualizado')
   }
 
@@ -871,13 +876,20 @@ function App() {
     toast(`Proyecto ${p.name} creado`)
   }
 
+  const handleSaveEditProject = () => {
+    if (!editingProjectId || !projectDraft.name.trim()) return
+    updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria })
+    setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT)
+    toast('Proyecto actualizado')
+  }
+
   const handleSaveSettings = async () => {
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
       groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft,
       userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft,
       userRole: settingsRoleDraft, audioFormat: settingsAudioFormatDraft, recordingQuality: settingsRecordingQualityDraft,
       chunkDuration: settingsChunkDurationDraft, language: settingsLanguageDraft, dateFormat: settingsDateFormatDraft,
-      autoSave: settingsAutoSaveDraft,
+      autoSave: settingsAutoSaveDraft, autoTranscribe,
     })
     setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft)
     setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
@@ -1089,9 +1101,12 @@ function App() {
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
-                      <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
-                        {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
-                      </span>
+                      <div className="plc-top-right">
+                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
+                          {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
+                        </span>
+                      </div>
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
@@ -1216,9 +1231,12 @@ function App() {
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
-                      <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
-                        {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
-                      </span>
+                      <div className="plc-top-right">
+                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
+                          {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
+                        </span>
+                      </div>
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
@@ -1451,8 +1469,15 @@ function App() {
                       <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fs(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
+                    {c.candidateStatus !== 'pendiente' && (() => {
+                      const st = c.candidateStatus
+                      const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
+                      const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
+                      const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
+                      return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
+                    })()}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
-                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                       <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                       <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>Ver entrevistas</button>
                     </div>
@@ -1507,9 +1532,16 @@ function App() {
                     <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fs(last.createdAt)}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
+                  {c.candidateStatus !== 'pendiente' && (() => {
+                    const st = c.candidateStatus
+                    const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
+                    const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
+                    const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
+                    return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
+                  })()}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
-                    <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                    <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                     <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                   </div>
                   <button type="button" className="ctr-open">Ver entrevistas →</button>
@@ -1536,6 +1568,7 @@ function App() {
             <div className="cand-header-main">
               <h2 className="cand-header-name">{activeCandidate.name}</h2>
               {subtitleParts.length > 0 && <p className="cand-header-sub">{subtitleParts.join('  ·  ')}</p>}
+              {activeCandidate.notes && <p className="cand-header-sub" style={{ marginTop: 4, fontStyle: 'italic', opacity: 0.75 }}>{activeCandidate.notes}</p>}
             </div>
             <div className="cand-header-stats">
               <div className="cand-hstat">
@@ -1555,9 +1588,16 @@ function App() {
               <span className={`cand-status-badge${hasError ? ' cand-status-badge--error' : transcribedCount > 0 ? ' cand-status-badge--done' : ''}`}>
                 {hasError ? <><WarnTriangle /> Error</> : transcribedCount > 0 ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}
               </span>
+              {activeCandidate.candidateStatus !== 'pendiente' && (() => {
+                const st = activeCandidate.candidateStatus
+                const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
+                const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
+                const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
+                return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
+              })()}
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
-                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
               </div>
             </div>
           </div>
@@ -1730,12 +1770,24 @@ function App() {
                 {selectedInterview.recordingFilePath && (
                   <button
                     type="button"
-                    className="trx-tool-btn trx-tool-btn--retranscribe"
+                    className={`trx-tool-btn${retranscribeConfirmId === selectedInterview.id ? ' trx-tool-btn--retranscribe' : ' trx-tool-btn--retranscribe'}`}
                     disabled={selectedInterview.transcriptionStatus === 'transcribing'}
-                    onClick={() => void handleTranscribe(selectedInterview.id)}
+                    style={retranscribeConfirmId === selectedInterview.id ? { background: 'var(--warning, #f59e0b)', color: '#fff' } : undefined}
+                    onClick={() => {
+                      if (selectedInterview.transcriptEdited && retranscribeConfirmId !== selectedInterview.id) {
+                        setRetranscribeConfirmId(selectedInterview.id)
+                      } else {
+                        setRetranscribeConfirmId(null)
+                        void handleTranscribe(selectedInterview.id)
+                      }
+                    }}
                     title={selectedInterview.transcriptEdited ? 'Volver a transcribir (sobreescribe la actual)' : 'Transcribir grabación'}
                   >
-                    {selectedInterview.transcriptionStatus === 'transcribing' ? <><span className="spinner" /> Transcribiendo...</> : selectedInterview.transcriptEdited ? '↺ Re-transcribir' : '▶ Transcribir'}
+                    {selectedInterview.transcriptionStatus === 'transcribing'
+                      ? <><span className="spinner" /> Transcribiendo...</>
+                      : retranscribeConfirmId === selectedInterview.id
+                        ? '⚠ ¿Confirmar?'
+                        : selectedInterview.transcriptEdited ? '↺ Re-transcribir' : '▶ Transcribir'}
                   </button>
                 )}
                 <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar todo</button>
@@ -1984,6 +2036,16 @@ function App() {
                     <div><span className="toggle-label">Transcripción automática</span><span className="notif-sub">Transcribir automáticamente al terminar cada grabación</span></div>
                     <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(t => !t)}><span className="toggle-circle" /></button>
                   </div>
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-label">ARCHIVOS</div>
+                  <div className="settings-section-divider" />
+                  <p className="cfg-field-desc">Las grabaciones se guardan en <code style={{ fontSize: 11, background: 'var(--surface-2)', padding: '1px 6px', borderRadius: 4 }}>Documentos/CallTranscriber</code></p>
+                  {window.desktopApp?.openRecordingsFolder && (
+                    <button type="button" className="outline-btn pill-btn" style={{ marginTop: 10 }} onClick={() => void window.desktopApp!.openRecordingsFolder!()}>
+                      <FolderIcon /> Abrir carpeta de grabaciones
+                    </button>
+                  )}
                 </div>
                 <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
               </div>
@@ -2526,14 +2588,14 @@ function App() {
 
       {/* Candidate modal */}
       {(showNewCandidate || editingCandidateId !== null) && (
-        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>
+        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2 className="modal-title">{editingCandidateId ? 'Editar perfil' : 'Nuevo perfil'}</h2>
                 <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>✕</button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -2558,9 +2620,18 @@ function App() {
               <span className="modal-field-label">Notas previas (opcional)</span>
               <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder="Puntos a tratar, perfil del CV, observaciones..." rows={3} />
             </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Estado</span>
+              <select className="modal-input modal-input--figma modal-select" value={candidateStatusDraft} onChange={e => setCandidateStatusDraft(e.target.value as Candidate['candidateStatus'])}>
+                <option value="pendiente">⬜ Pendiente</option>
+                <option value="apto">✅ Apto</option>
+                <option value="finalista">⭐ Finalista</option>
+                <option value="descartado">❌ Descartado</option>
+              </select>
+            </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft('') }}>Cancelar</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir perfil</>}</button>
             </div>
           </div>
@@ -2661,6 +2732,52 @@ function App() {
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>Crear proyecto</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit project modal */}
+      {showEditProject && (
+        <div className="modal-overlay" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>
+          <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">Editar proyecto</h2>
+                <p className="modal-subtitle">Modifica los datos y criterios del proyecto</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>✕</button>
+            </div>
+            <div className="modal-header-divider" />
+            <div className="modal-field">
+              <span className="modal-field-label">Nombre del proyecto *</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Administrativo/a Seguros" autoFocus />
+            </div>
+            <div className="modal-row-2">
+              <div className="modal-field">
+                <span className="modal-field-label">Empresa / Cliente</span>
+                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder="Ej: Cosmobrok" />
+              </div>
+              <div className="modal-field">
+                <span className="modal-field-label">Estado</span>
+                <select className="modal-input modal-input--figma modal-select" value={projectDraft.status} onChange={e => setProjectDraft(d => ({ ...d, status: e.target.value as 'active' | 'closed' }))}>
+                  <option value="active">Activo</option>
+                  <option value="closed">Cerrado</option>
+                </select>
+              </div>
+            </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Criterios de evaluación del resumen</span>
+              <p className="modal-field-hint">Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato</p>
+              {renderCriteriaGrid(
+                projectDraft.evaluationCriteria,
+                updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
+              )}
+            </div>
+            <div className="modal-footer-divider" />
+            <div className="modal-actions modal-actions--figma">
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>Cancelar</button>
+              <button type="button" className="modal-action-btn" onClick={handleSaveEditProject} disabled={!projectDraft.name.trim()}>Guardar cambios</button>
             </div>
           </div>
         </div>

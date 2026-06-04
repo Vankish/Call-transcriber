@@ -33,6 +33,7 @@ export interface DbProject {
 export interface DbCandidate {
   id: string; user_id: string; project_id: string
   name: string; email: string; phone: string; role: string; notes: string
+  candidate_status: string
   created_at: string
 }
 

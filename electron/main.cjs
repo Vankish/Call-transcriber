@@ -470,6 +470,12 @@ ipcMain.handle('recordings:get-dir', async () => {
   return dir
 })
 
+ipcMain.handle('shell:open-recordings-folder', async () => {
+  const dir = path.join(app.getPath('documents'), 'CallTranscriber')
+  await fs.mkdir(dir, { recursive: true })
+  shell.openPath(dir)
+})
+
 ipcMain.handle('dialog:select-audio', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Importar grabación de audio',
