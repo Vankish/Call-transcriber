@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('desktopApp', {
   getRecordingsDir: () => ipcRenderer.invoke('recordings:get-dir'),
   openRecordingsFolder: () => ipcRenderer.invoke('shell:open-recordings-folder'),
   selectAudioFile: () => ipcRenderer.invoke('dialog:select-audio'),
+  onMagicLinkTokens: (cb) => ipcRenderer.on('auth:magic-link-tokens', (_e, data) => cb(data)),
 })

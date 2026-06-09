@@ -1,6 +1,7 @@
 const path = require('node:path')
 const fs = require('node:fs/promises')
 const os = require('node:os')
+const http = require('node:http')
 const { spawn } = require('node:child_process')
 const {
   app,
@@ -14,6 +15,47 @@ const {
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
 
 const isDev = process.env.ELECTRON_DEV === '1'
+
+let mainWindowRef = null
+
+function startAuthCallbackServer() {
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Autenticando...</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f0f4ff}
+.box{background:#fff;border-radius:12px;padding:2rem 3rem;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
+h2{color:#2563eb;margin:0 0 .5rem}p{color:#555;margin:0}</style></head>
+<body><div class="box"><h2>Iniciando sesión...</h2><p>Puedes cerrar esta ventana.</p></div>
+<script>
+const hash = window.location.hash.substring(1)
+const params = new URLSearchParams(hash)
+const data = {}
+for (const [k,v] of params) data[k]=v
+fetch('/auth-callback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  .then(()=>{document.querySelector('h2').textContent='✓ Sesión iniciada'})
+  .catch(()=>{})
+</script></body></html>`)
+      return
+    }
+    if (req.method === 'POST' && req.url === '/auth-callback') {
+      let body = ''
+      req.on('data', chunk => { body += chunk })
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body)
+          if (mainWindowRef && !mainWindowRef.isDestroyed()) {
+            mainWindowRef.webContents.send('auth:magic-link-tokens', data)
+          }
+        } catch {}
+        res.writeHead(200); res.end('ok')
+      })
+      return
+    }
+    res.writeHead(404); res.end()
+  })
+  server.listen(3000, '127.0.0.1')
+}
 
 function sanitizeName(value) {
   return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim()
@@ -34,6 +76,7 @@ function createWindow() {
     },
   })
 
+  mainWindowRef = mainWindow
   mainWindow.maximize()
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -53,6 +96,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  startAuthCallbackServer()
+
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
       const sources = await desktopCapturer.getSources({
@@ -364,7 +409,7 @@ const CRITERIA_LABELS = {
   adecuacion:     'Adecuación al puesto',
 }
 
-ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType }) => {
+ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, candidateName }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
@@ -392,12 +437,15 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   let systemPrompt
   let userPrompt
 
+  const candidateRef = candidateName ? `El candidato/a se llama ${candidateName}. Refiérete a él/ella por su nombre en el informe.` : ''
+
   if (summaryType === 'listado') {
     systemPrompt =
       'Eres un asistente experto en análisis de entrevistas de trabajo. ' +
       'Genera un listado estructurado por secciones basándote en los criterios indicados. ' +
       'Para cada sección usa un título en negrita seguido de bullets con la información extraída. ' +
       'Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".\n\n' +
+      (candidateRef ? candidateRef + '\n\n' : '') +
       fidelityRules
 
     userPrompt = effectiveCriteria
@@ -416,6 +464,7 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
       'NO uses listas con guiones o puntos. ' +
       'NO incluyas frases como "el entrevistador preguntó" o "el candidato respondió". ' +
       'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación.\n\n' +
+      (candidateRef ? candidateRef + '\n\n' : '') +
       fidelityRules
 
     userPrompt = `Transcripción:\n${transcript}`
