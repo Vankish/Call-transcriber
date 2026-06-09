@@ -63,6 +63,7 @@ type GenerateSummaryPayload = {
   transcript: string
   criteria: string[]
   summaryType: 'resumen' | 'listado'
+  candidateName?: string
 }
 
 type GenerateSummaryResult = {
@@ -84,6 +85,7 @@ interface Window {
     getRecordingsDir: () => Promise<string>
     openRecordingsFolder: () => Promise<void>
     selectAudioFile: () => Promise<string | null>
+    onMagicLinkTokens: (cb: (data: Record<string, string>) => void) => void
   }
 }
 

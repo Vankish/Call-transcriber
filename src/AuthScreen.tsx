@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 
-type Mode = 'login' | 'register'
+type Mode = 'login' | 'register' | 'forgot'
 
 const COUNTRIES = [
   'Afganistán', 'Albania', 'Alemania', 'Andorra', 'Angola', 'Arabia Saudita',
@@ -41,6 +41,20 @@ export function AuthScreen() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     reset()
+    if (mode === 'forgot') {
+      if (!email.trim()) { setError('Introduce tu email.'); return }
+      setLoading(true)
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: 'http://localhost:3000' })
+        if (error) throw error
+        setInfo('Te hemos enviado un email. Haz clic en el enlace con la app abierta y podrás poner una nueva contraseña.')
+      } catch (err: unknown) {
+        setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
     if (!email.trim() || !password.trim()) { setError('Introduce email y contraseña.'); return }
     if (mode === 'register') {
       if (!name.trim())                    { setError('Introduce tu nombre completo.'); return }
@@ -61,31 +75,6 @@ export function AuthScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
       }
-    } catch (err: unknown) {
-      setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleGoogle = async () => {
-    reset()
-    setLoading(true)
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo: 'http://localhost', skipBrowserRedirect: true },
-      })
-      if (error) throw error
-      if (!data.url) throw new Error('No se pudo generar URL de Google')
-      if (!window.desktopApp?.openOAuthWindow) { setError('OAuth no disponible en esta versión.'); return }
-      const callbackUrl = await window.desktopApp.openOAuthWindow(data.url)
-      if (!callbackUrl) { setLoading(false); return }
-      const parsed = new URL(callbackUrl)
-      const code = parsed.searchParams.get('code')
-      if (!code) throw new Error('No se recibió código de autorización')
-      const { error: sessErr } = await supabase.auth.exchangeCodeForSession(code)
-      if (sessErr) throw sessErr
     } catch (err: unknown) {
       setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
     } finally {
@@ -143,25 +132,15 @@ export function AuthScreen() {
           )}
 
           <h2 className="auth-title">
-            {mode === 'login' ? 'Bienvenido de vuelta' : 'Crear cuenta'}
+            {mode === 'login' ? 'Bienvenido de vuelta' : mode === 'register' ? 'Crear cuenta' : 'Recuperar contraseña'}
           </h2>
           <p className="auth-sub">
             {mode === 'login'
               ? 'Inicia sesión para acceder a tus entrevistas desde cualquier dispositivo.'
-              : 'Crea una cuenta para sincronizar tus entrevistas entre dispositivos.'}
+              : mode === 'register'
+              ? 'Crea una cuenta para sincronizar tus entrevistas entre dispositivos.'
+              : 'Introduce tu email y te enviaremos un enlace para restablecer tu contraseña.'}
           </p>
-
-          <button
-            type="button"
-            className="auth-google-btn"
-            onClick={handleGoogle}
-            disabled={loading || !isSupabaseConfigured}
-          >
-            <GoogleLogoIcon />
-            {mode === 'login' ? 'Continuar con Google' : 'Registrarse con Google'}
-          </button>
-
-          <div className="auth-divider"><span>o</span></div>
 
           <form onSubmit={handleSubmit} className="auth-form">
             {mode === 'register' && (
@@ -190,17 +169,19 @@ export function AuthScreen() {
               />
             </label>
 
-            <label className="auth-label">Contraseña
-              <input
-                type="password"
-                className="auth-input"
-                value={password}
-                onChange={e => setPass(e.target.value)}
-                placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
-                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                disabled={loading}
-              />
-            </label>
+            {mode !== 'forgot' && (
+              <label className="auth-label">Contraseña
+                <input
+                  type="password"
+                  className="auth-input"
+                  value={password}
+                  onChange={e => setPass(e.target.value)}
+                  placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
+                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                  disabled={loading}
+                />
+              </label>
+            )}
 
             {mode === 'register' && (
               <>
@@ -242,35 +223,31 @@ export function AuthScreen() {
             >
               {loading
                 ? <span className="spinner" />
-                : mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta'}
+                : mode === 'login' ? 'Iniciar sesión' : mode === 'register' ? 'Crear cuenta' : 'Enviar enlace'}
             </button>
           </form>
 
           <p className="auth-switch">
-            {mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}
+            {mode === 'forgot' ? '¿Recuerdas tu contraseña?' : mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}
             {' '}
             <button
               type="button"
               className="link-btn"
-              onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
+              onClick={() => switchMode(mode === 'forgot' ? 'login' : mode === 'login' ? 'register' : 'login')}
             >
-              {mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
+              {mode === 'forgot' ? 'Inicia sesión' : mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
             </button>
           </p>
+          {mode === 'login' && (
+            <p className="auth-switch" style={{ marginTop: 4 }}>
+              <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
+                ¿Olvidaste tu contraseña?
+              </button>
+            </p>
+          )}
         </div>
       </div>
     </div>
-  )
-}
-
-function GoogleLogoIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 48 48" style={{ flexShrink: 0 }}>
-      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-      <path fill="#FBBC05" d="M10.53 28.58c-.5-1.45-.76-2.99-.76-4.58s.27-3.14.76-4.58V13.23l-7.98-6.19C.92 9.99 0 14.88 0 20c0 5.12.92 10.01 2.55 12.96l7.98-6.38z"/>
-      <path fill="#EA4335" d="M24 9.52c3.52 0 6.67 1.21 9.16 3.58l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.55 13.23l7.98 6.19C12.43 13.74 17.74 9.52 24 9.52z"/>
-    </svg>
   )
 }
 

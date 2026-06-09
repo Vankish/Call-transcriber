@@ -44,6 +44,16 @@ type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 // ── Storage ────────────────────────────────────────────────────────────────
 const V2_KEY = 'call-transcriber-v2'
 const ONBOARDING_KEY = 'ct-onboarding-done'
+const CRITERIA_KEY = 'ct-criteria-cache'
+
+const getCriteriaCache = (): Record<string, string[]> => {
+  try { return JSON.parse(localStorage.getItem(CRITERIA_KEY) ?? '{}') } catch { return {} }
+}
+const saveCriteriaCache = (projectId: string, criteria: string[]) => {
+  const cache = getCriteriaCache()
+  cache[projectId] = criteria
+  localStorage.setItem(CRITERIA_KEY, JSON.stringify(cache))
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const uid = () => crypto.randomUUID()
@@ -260,6 +270,11 @@ function App() {
   // ── Auth ───────────────────────────────────────────────────────────────
   const [session, setSession]       = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [recoveryMode, setRecoveryMode] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+  const [recoveryLoading, setRecoveryLoading] = useState(false)
+  const [recoveryError, setRecoveryError] = useState('')
 
   // ── Toasts ─────────────────────────────────────────────────────────────
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -276,6 +291,7 @@ function App() {
   const pendingMimeTypeRef = useRef<string>('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
+  const localDataLoaded = useRef(false)
 
   // ── Derived ────────────────────────────────────────────────────────────
   const activeProject = projects.find(p => p.id === activeProjectId) ?? null
@@ -329,6 +345,14 @@ function App() {
       setSession(session)
       if (event === 'SIGNED_OUT') { setProjects([]); setCandidates([]); setInterviews([]) }
     })
+
+    window.desktopApp?.onMagicLinkTokens?.((data: Record<string, string>) => {
+      if (data.access_token && data.refresh_token) {
+        void supabase.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
+          .then(() => { if (data.type === 'recovery') setRecoveryMode(true) })
+      }
+    })
+
     return () => subscription.unsubscribe()
   }, [])
 
@@ -348,7 +372,24 @@ function App() {
         if (cRes.error) { toast(`Error cargando perfiles: ${cRes.error.message}`, 'error'); return }
         const hasRemote = (pRes.data?.length ?? 0) > 0 || (cRes.data?.length ?? 0) > 0
         if (hasRemote) {
-          setProjects((pRes.data ?? []).map(projFromDb))
+          const criteriaCache = getCriteriaCache()
+          const updatedCache: Record<string, string[]> = {}
+          const loadedProjects = (pRes.data ?? []).map(r => {
+            const p = projFromDb(r)
+            if (p.evaluationCriteria.length > 0) {
+              // Supabase tiene datos: es la fuente de verdad, actualizamos cache
+              updatedCache[p.id] = p.evaluationCriteria
+              return p
+            }
+            // Supabase devuelve vacío (columna sin datos o no existe): usamos cache local
+            const cached = criteriaCache[p.id]
+            return cached ? { ...p, evaluationCriteria: cached } : p
+          })
+          // Persistir el cache actualizado desde Supabase
+          if (Object.keys(updatedCache).length > 0) {
+            localStorage.setItem(CRITERIA_KEY, JSON.stringify({ ...criteriaCache, ...updatedCache }))
+          }
+          setProjects(loadedProjects)
           setCandidates((cRes.data ?? []).map(candFromDb))
           if (iRes.error) {
             toast(`Error cargando entrevistas: ${iRes.error.message}`, 'error')
@@ -408,6 +449,26 @@ function App() {
     void load()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user.id])
+
+  // ── LocalStorage fallback when no Supabase session ────────────────────
+  useEffect(() => {
+    if (authLoading || session || localDataLoaded.current) return
+    localDataLoaded.current = true
+    try {
+      const raw = localStorage.getItem(V2_KEY)
+      if (raw) {
+        const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
+        setProjects(d.projects ?? [])
+        setCandidates(d.candidates ?? [])
+        setInterviews(normalizeInterviews(d.interviews ?? []))
+      }
+    } catch { /* ignore */ }
+  }, [authLoading, session])
+
+  useEffect(() => {
+    if (!localDataLoaded.current || session) return
+    localStorage.setItem(V2_KEY, JSON.stringify({ projects, candidates, interviews }))
+  }, [projects, candidates, interviews, session])
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -754,7 +815,7 @@ function App() {
     const criteria = project?.evaluationCriteria ?? []
     updateInterview(interviewId, { summaryStatus: 'generating' })
     try {
-      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType })
+      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, candidateName: candidate?.name ?? '' })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
       if (notifSummary) toast('Resumen generado')
     } catch (err) {
@@ -848,19 +909,21 @@ function App() {
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
     setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft } : x))
-    if (session) void supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft }).eq('id', editingCandidateId)
+    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft }).eq('id', editingCandidateId).then(() => {}, () => {})
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Perfil actualizado')
   }
 
   const updateProject = (id: string, changes: Partial<Project>) => {
     setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
+    if (changes.evaluationCriteria !== undefined) saveCriteriaCache(id, changes.evaluationCriteria)
     if (session) {
       const db: Record<string, unknown> = {}
       if (changes.name               !== undefined) db.name                = changes.name
       if (changes.company            !== undefined) db.company             = changes.company
       if (changes.status             !== undefined) db.status              = changes.status
       if (changes.evaluationCriteria !== undefined) db.evaluation_criteria = changes.evaluationCriteria
-      void supabase.from('projects').update(db).eq('id', id)
+      supabase.from('projects').update(db).eq('id', id)
+        .then(({ error }) => { if (error) toast(`Error sincronizando proyecto: ${error.message}`, 'error') }, () => {})
     }
   }
 
@@ -898,7 +961,7 @@ function App() {
     localStorage.setItem('ct-default-output', settingsDefaultOutputDraft)
     localStorage.setItem('ct-default-system', String(settingsDefaultSystemDraft))
     setDefaultMicDeviceId(settingsDefaultMicDraft); setDefaultOutputDeviceId(settingsDefaultOutputDraft); setDefaultCaptureSystem(settingsDefaultSystemDraft)
-    if (session) void supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, groq_api_key: settingsKeyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id)
+    if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, groq_api_key: settingsKeyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
     toast('Configuración guardada')
   }
 
@@ -924,7 +987,7 @@ function App() {
       const dataUrl = reader.result as string
       setUserPhoto(dataUrl)
       localStorage.setItem('ct-user-photo', dataUrl)
-      if (session) void supabase.from('profiles').update({ photo: dataUrl, updated_at: new Date().toISOString() }).eq('id', session.user.id)
+      if (session) supabase.from('profiles').update({ photo: dataUrl, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
       toast('Foto de perfil actualizada', 'success')
     }
     reader.readAsDataURL(file)
@@ -2434,6 +2497,38 @@ function App() {
   )
 
   if (!session) return <AuthScreen />
+
+  if (recoveryMode) return (
+    <div className="auth-root">
+      <div className="auth-right" style={{ width: '100%' }}>
+        <div className="auth-card">
+          <h2 className="auth-title">Nueva contraseña</h2>
+          <p className="auth-sub">Elige una contraseña nueva para tu cuenta.</p>
+          <div className="auth-form">
+            <label className="auth-label">Nueva contraseña
+              <input type="password" className="auth-input" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Mínimo 6 caracteres" autoFocus />
+            </label>
+            <label className="auth-label">Confirmar contraseña
+              <input type="password" className="auth-input" value={newPasswordConfirm} onChange={e => setNewPasswordConfirm(e.target.value)} placeholder="Repetir contraseña" />
+            </label>
+            {recoveryError && <p className="auth-error">{recoveryError}</p>}
+            <button className="auth-submit-btn" disabled={recoveryLoading} onClick={async () => {
+              setRecoveryError('')
+              if (newPassword.length < 6) { setRecoveryError('La contraseña debe tener al menos 6 caracteres.'); return }
+              if (newPassword !== newPasswordConfirm) { setRecoveryError('Las contraseñas no coinciden.'); return }
+              setRecoveryLoading(true)
+              const { error } = await supabase.auth.updateUser({ password: newPassword })
+              setRecoveryLoading(false)
+              if (error) { setRecoveryError(error.message); return }
+              setRecoveryMode(false)
+            }}>
+              {recoveryLoading ? <span className="spinner" /> : 'Guardar contraseña'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="app-shell">
