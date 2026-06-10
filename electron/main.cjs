@@ -13,10 +13,52 @@ const {
   shell,
 } = require('electron')
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
+const { autoUpdater } = require('electron-updater')
+const log = require('electron-log')
 
 const isDev = process.env.ELECTRON_DEV === '1'
 
 let mainWindowRef = null
+
+// ── Auto-actualización (electron-updater + GitHub Releases) ───────────────────
+function sendUpdaterEvent(payload) {
+  if (mainWindowRef && !mainWindowRef.isDestroyed()) {
+    mainWindowRef.webContents.send('updater:event', payload)
+  }
+}
+
+function setupAutoUpdater() {
+  log.transports.file.level = 'info'
+  autoUpdater.logger = log
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => sendUpdaterEvent({ status: 'checking' }))
+  autoUpdater.on('update-available', (info) => sendUpdaterEvent({ status: 'available', version: info?.version }))
+  autoUpdater.on('update-not-available', () => sendUpdaterEvent({ status: 'not-available' }))
+  autoUpdater.on('error', (err) => sendUpdaterEvent({ status: 'error', message: String(err?.message || err) }))
+  autoUpdater.on('download-progress', (p) => sendUpdaterEvent({ status: 'downloading', percent: Math.round(p?.percent || 0) }))
+  autoUpdater.on('update-downloaded', (info) => sendUpdaterEvent({ status: 'downloaded', version: info?.version }))
+
+  // No bloquear el arranque; comprobar tras un breve margen.
+  if (!isDev) {
+    setTimeout(() => { autoUpdater.checkForUpdates().catch((e) => log.warn('checkForUpdates failed', e)) }, 4000)
+  }
+}
+
+ipcMain.handle('updates:check', async () => {
+  if (isDev) return { ok: false, dev: true }
+  try {
+    const r = await autoUpdater.checkForUpdates()
+    return { ok: true, version: r?.updateInfo?.version }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) }
+  }
+})
+
+ipcMain.handle('updates:install', () => {
+  autoUpdater.quitAndInstall()
+})
 
 function startAuthCallbackServer() {
   const server = http.createServer((req, res) => {
@@ -39,6 +81,14 @@ fetch('/auth-callback',{method:'POST',headers:{'Content-Type':'application/json'
       return
     }
     if (req.method === 'POST' && req.url === '/auth-callback') {
+      // Seguridad: solo aceptar el callback de la propia página servida en localhost:3000.
+      // Una web externa que intente inyectar tokens traerá su propio Origin → se rechaza.
+      const origin = req.headers.origin
+      const allowed = ['http://localhost:3000', 'http://127.0.0.1:3000']
+      if (origin && !allowed.includes(origin)) {
+        res.writeHead(403); res.end('forbidden')
+        return
+      }
       let body = ''
       req.on('data', chunk => { body += chunk })
       req.on('end', () => {
@@ -115,6 +165,7 @@ app.whenReady().then(() => {
   )
 
   createWindow()
+  setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

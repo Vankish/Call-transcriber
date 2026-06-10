@@ -22,7 +22,7 @@ export const isSupabaseConfigured = !!isConfigured
 // ── DB row types (snake_case) ─────────────────────────────────────────────────
 export interface DbProfile {
   id: string; name: string; email: string; company: string; photo: string
-  country: string; groq_api_key: string; tx_model: string; sum_model: string
+  country: string; tx_model: string; sum_model: string
 }
 
 export interface DbProject {
@@ -34,6 +34,7 @@ export interface DbCandidate {
   id: string; user_id: string; project_id: string
   name: string; email: string; phone: string; role: string; notes: string
   candidate_status: string
+  consent_given?: boolean; consent_at?: string | null
   created_at: string
 }
 

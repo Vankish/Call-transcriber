@@ -29,6 +29,86 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   overflow: hidden;
 }
 
+/* ── Banner de actualización ─────────────────────────────────────────────── */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  color: #fff;
+  background: #2563eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 50;
+}
+.update-banner--downloading {
+  background: #475569;
+}
+.update-banner__btn {
+  margin-left: auto;
+  background: #fff;
+  color: #2563eb;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.update-banner__btn:hover {
+  background: #eef2ff;
+}
+.update-banner__dismiss {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.update-banner__dismiss:hover {
+  opacity: 1;
+}
+
+/* ── Consentimiento (GDPR) ───────────────────────────────────────────────── */
+.consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #475569;
+  cursor: pointer;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.consent-check input[type="checkbox"] {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+.consent-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.consent-badge--ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+.consent-badge--missing {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 /* ── Global top bar ──────────────────────────────────────────────────────── */
 .global-top-bar {
   height: 60px;

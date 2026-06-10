@@ -1,7 +1,9 @@
 {
   "name": "call-transcriber-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Graba, transcribe y resume entrevistas de trabajo con IA.",
+  "author": "Call Transcriber",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -10,8 +12,9 @@
     "electron:dev": "wait-on http-get://localhost:5173 && cross-env ELECTRON_DEV=1 electron .",
     "build": "tsc -b && vite build",
     "desktop:build": "npm run build && electron .",
-    "dist:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --icon=build/icon.ico",
-    "package:win": "npm run build && electron-packager . \"Call Transcriber\" --platform=win32 --arch=x64 --overwrite --out=release --prune=true --icon=build/icon.ico",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "package:win": "npm run build && electron-builder --win --publish never",
+    "release:win": "npm run build && electron-builder --win --publish always",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -32,7 +35,15 @@
     ],
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ],
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "publisherName": "Call Transcriber"
+      }
     },
     "nsis": {
       "oneClick": false,
@@ -40,10 +51,19 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Call Transcriber"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Vankish",
+        "repo": "Call-transcriber"
+      }
+    ]
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.1",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.3.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"

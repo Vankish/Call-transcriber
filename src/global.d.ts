@@ -86,7 +86,17 @@ interface Window {
     openRecordingsFolder: () => Promise<void>
     selectAudioFile: () => Promise<string | null>
     onMagicLinkTokens: (cb: (data: Record<string, string>) => void) => void
+    checkForUpdates: () => Promise<{ ok: boolean; dev?: boolean; version?: string; error?: string }>
+    installUpdate: () => Promise<void>
+    onUpdaterEvent: (cb: (data: UpdaterEvent) => void) => void
   }
+}
+
+type UpdaterEvent = {
+  status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
 }
 
 // ─── Tipos para el Agente 3 (uso en App.tsx) ────────────────────────────────
