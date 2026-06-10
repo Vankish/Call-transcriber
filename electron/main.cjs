@@ -60,6 +60,8 @@ ipcMain.handle('updates:install', () => {
   autoUpdater.quitAndInstall()
 })
 
+ipcMain.handle('app:get-version', () => app.getVersion())
+
 function startAuthCallbackServer() {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET') {

@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld('desktopApp', {
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   onUpdaterEvent: (cb) => ipcRenderer.on('updater:event', (_e, data) => cb(data)),
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 })

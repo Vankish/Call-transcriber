@@ -1,7 +1,7 @@
 {
   "name": "call-transcriber-app",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Graba, transcribe y resume entrevistas de trabajo con IA.",
   "author": "Call Transcriber",
   "main": "electron/main.cjs",

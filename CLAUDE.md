@@ -1,5 +1,8 @@
 # Call Transcriber App — Contexto del Proyecto
 
+> ⚡ **Estado actual / lanzamiento:** lee primero `docs/ESTADO_LANZAMIENTO.md`. Resume qué está
+> hecho (auto-update, GDPR, v1.0.0 publicada) y el test de auto-update en curso entre dispositivos.
+
 ## Qué es esta app
 Aplicación de escritorio (React + Electron + Vite + TypeScript) para grabar, transcribir y resumir entrevistas de selección de personal. Usa Groq para transcripción y resumen con IA.
 

@@ -282,8 +282,10 @@ function App() {
 
   // ── Auto-actualización ─────────────────────────────────────────────────
   const [updateStatus, setUpdateStatus] = useState<UpdaterEvent | null>(null)
+  const [appVersion, setAppVersion] = useState('')
   useEffect(() => {
     window.desktopApp?.onUpdaterEvent?.((data) => setUpdateStatus(data))
+    window.desktopApp?.getAppVersion?.().then(setAppVersion).catch(() => {})
   }, [])
 
   // ── Refs ───────────────────────────────────────────────────────────────
@@ -2563,6 +2565,7 @@ function App() {
             <rect x="61" y="31" width="7" height="18" rx="2" fill="#ffffff"/>
           </svg>
           <span className="gtb-title">Call Transcriber</span>
+          {appVersion && <span className="gtb-version">v{appVersion}</span>}
         </div>
       </header>
 
