@@ -24,25 +24,34 @@ dispositivos**.
 - **Supabase**: `supabase-migration-launch.sql` **ya ejecutado** en el proyecto
   `jqbtrduafmmdnyayewvc` (añadió `candidates.consent_given/consent_at`, borró `profiles.groq_api_key`).
 
-## En curso 🔄 — Test de auto-update entre dispositivos
+## Test de auto-update — RESULTADO ✅ (parcial, bloqueado por firma)
 
-Objetivo: confirmar que una app instalada se actualiza sola desde GitHub Releases.
+Test ejecutado el 2026-06-10 en el mismo equipo de desarrollo (sin segundo dispositivo disponible).
 
-Estado: **v1.0.0 y v1.0.1 AMBAS publicadas** en GitHub Releases (v1.0.1 = latest). La v1.0.1
-añade un badge de versión visible (`vX.Y.Z`, clase `gtb-version`) junto al título; la v1.0.0 no
-lo tiene, así que ver "v1.0.1" tras actualizar = prueba de que el update funcionó.
+**Lo que funcionó:**
+- La v1.0.0 instalada detectó la v1.0.1 en ~4 s ✅
+- Descargó el diff (solo 975 KB de 120 MB) ✅
+- El mecanismo de update completo funciona técnicamente ✅
 
-### Falta SOLO: ejecutar la prueba en el dispositivo "cliente"
+**Dónde falló:**
+- `electron-updater` rechazó aplicar el update porque el instalador no está firmado digitalmente.
+- Error en logs (`AppData\Roaming\call-transcriber-app\logs\main.log`):
+  `"New version 1.0.1 is not signed by the application owner"`
+- El banner azul de `src/App.tsx` nunca llegó a mostrarse porque el proceso falla antes.
 
-En el otro equipo (NO requiere git ni código, solo navegador):
+**Conclusión:** el auto-update funciona, está bloqueado SOLO por la falta de certificado de firma.
 
-1. Abrir https://github.com/Vankish/Call-transcriber/releases
-2. En la release **v1.0.0** → Assets → descargar `Call-Transcriber-Setup-1.0.0.exe` (la VIEJA, a propósito).
-3. Instalar (SmartScreen → "Más información" → "Ejecutar de todas formas") y abrir la app.
-4. A los ~4 s aparece el banner azul "Reiniciar e instalar" (detecta la 1.0.1). Pulsarlo →
-   la app se reinicia y muestra **`v1.0.1`** en la barra superior. ✅ Test superado.
+### Próximos pasos (en orden)
 
-Si el test pasa, el auto-update queda 100% validado. Siguiente trabajo real: certificado de firma y legal.
+1. **Decidir**: ¿desactivar verificación de firma para terminar el test? (útil para desarrollo,
+   no apto para producción). Se haría en `electron/main.cjs` con `autoUpdater.allowPrerelease` /
+   desactivando `verifyUpdateCodeSignature`. O bien ir directo al certificado.
+2. **Certificado OV/EV** (~200-400€/año): quita SmartScreen Y permite que electron-updater
+   aplique updates. Es la solución definitiva.
+3. **Groq API key en Supabase**: pendiente de reimplementar — se eliminó por seguridad pero
+   tiene sentido vincularla a la cuenta del usuario (protegida por RLS) para que no haya que
+   reintroducirla en cada dispositivo. Requiere: migración SQL (añadir columna `groq_api_key`
+   a `profiles`) + actualizar `src/App.tsx` (Ajustes) para leer/escribir desde Supabase.
 
 ### Cómo publicar futuras versiones (desde un equipo de desarrollo)
 
