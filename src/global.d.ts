@@ -89,6 +89,7 @@ interface Window {
     checkForUpdates: () => Promise<{ ok: boolean; dev?: boolean; version?: string; error?: string }>
     installUpdate: () => Promise<void>
     onUpdaterEvent: (cb: (data: UpdaterEvent) => void) => void
+    getAppVersion: () => Promise<string>
   }
 }
 
