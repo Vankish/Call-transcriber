@@ -28,32 +28,34 @@ dispositivos**.
 
 Objetivo: confirmar que una app instalada se actualiza sola desde GitHub Releases.
 
-1. La rama `main` ya tiene el código bumpeado a **v1.0.1** con un cambio visible: un badge de
-   versión (`vX.Y.Z`) junto al título en la barra superior (`gtb-version`). La v1.0.0 NO lo tiene,
-   así que ver aparecer "v1.0.1" tras actualizar = prueba de que el update funcionó.
-2. **Falta publicar la Release v1.0.1** para que el dispositivo con la v1.0.0 la detecte.
+Estado: **v1.0.0 y v1.0.1 AMBAS publicadas** en GitHub Releases (v1.0.1 = latest). La v1.0.1
+añade un badge de versión visible (`vX.Y.Z`, clase `gtb-version`) junto al título; la v1.0.0 no
+lo tiene, así que ver "v1.0.1" tras actualizar = prueba de que el update funcionó.
 
-### Cómo publicar la v1.0.1 (desde el dispositivo de desarrollo)
+### Falta SOLO: ejecutar la prueba en el dispositivo "cliente"
 
-Requisitos del equipo de build: Windows x64, **Modo de desarrollador activado** (necesario para que
-electron-builder cree symlinks de winCodeSign), Node + dependencias (`npm install`).
+En el otro equipo (NO requiere git ni código, solo navegador):
+
+1. Abrir https://github.com/Vankish/Call-transcriber/releases
+2. En la release **v1.0.0** → Assets → descargar `Call-Transcriber-Setup-1.0.0.exe` (la VIEJA, a propósito).
+3. Instalar (SmartScreen → "Más información" → "Ejecutar de todas formas") y abrir la app.
+4. A los ~4 s aparece el banner azul "Reiniciar e instalar" (detecta la 1.0.1). Pulsarlo →
+   la app se reinicia y muestra **`v1.0.1`** en la barra superior. ✅ Test superado.
+
+Si el test pasa, el auto-update queda 100% validado. Siguiente trabajo real: certificado de firma y legal.
+
+### Cómo publicar futuras versiones (desde un equipo de desarrollo)
+
+Requisitos de build: Windows x64, **Modo de desarrollador activado** (para los symlinks de
+winCodeSign), `npm install`. Subir `version` en package.json, luego:
 
 ```powershell
-# 1) Crear un Personal Access Token clásico en github.com/settings/tokens con scope "repo".
-#    Guardarlo en gh_token.txt en la raíz del proyecto (gitignored / borrar tras usar).
-# 2) Publicar:
+# PAT clásico (scope repo) guardado en gh_token.txt en la raíz (gitignored / borrar tras usar)
 $env:GH_TOKEN = (Get-Content .\gh_token.txt -Raw).Trim()
 npm run release:win
 Remove-Item .\gh_token.txt -Force
-# 3) En github.com/Vankish/Call-transcriber/releases: editar el borrador v1.0.1 y "Publish release".
+# Luego en github.com/Vankish/Call-transcriber/releases: editar el borrador y "Publish release".
 ```
-
-### Cómo probar en el otro dispositivo
-
-1. Descargar e instalar la v1.0.0 desde
-   https://github.com/Vankish/Call-transcriber/releases (botón Run anyway en SmartScreen — aún sin firmar).
-2. Abrir la app. Tras unos segundos (o al reabrir, una vez publicada la v1.0.1) aparece el banner azul
-   "Reiniciar e instalar". Al pulsarlo, la app se actualiza y el badge pasa a **v1.0.1**.
 
 ## Pendiente (acciones externas) ⏳
 
