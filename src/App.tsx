@@ -21,7 +21,7 @@ const EVALUATION_CRITERIA = [
   { id: 'adecuacion',    label: 'Adecuación al puesto' },
   { id: 'otros',         label: 'Otros' },
 ]
-type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista' }
+type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null }
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
 type Interview = {
@@ -112,7 +112,7 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
 
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
 const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [] })
-const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente' })
+const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
   sessionName: r.session_name, status: r.status as RecordingStatus,
@@ -237,6 +237,7 @@ function App() {
   const [userPhoto, setUserPhoto] = useState('')
   const [candidateNotesDraft, setCandidateNotesDraft] = useState('')
   const [candidateStatusDraft, setCandidateStatusDraft] = useState<Candidate['candidateStatus']>('pendiente')
+  const [candidateConsentDraft, setCandidateConsentDraft] = useState(false)
   const [retranscribeConfirmId, setRetranscribeConfirmId] = useState<string | null>(null)
 
   // ── Modals & overlays ──────────────────────────────────────────────────
@@ -278,6 +279,12 @@ function App() {
 
   // ── Toasts ─────────────────────────────────────────────────────────────
   const [toasts, setToasts] = useState<Toast[]>([])
+
+  // ── Auto-actualización ─────────────────────────────────────────────────
+  const [updateStatus, setUpdateStatus] = useState<UpdaterEvent | null>(null)
+  useEffect(() => {
+    window.desktopApp?.onUpdaterEvent?.((data) => setUpdateStatus(data))
+  }, [])
 
   // ── Refs ───────────────────────────────────────────────────────────────
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -404,7 +411,7 @@ function App() {
               const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
               const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
               if (projs.length || cands.length) {
-                if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, created_at: p.createdAt })))
+                if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], created_at: p.createdAt })))
                 if (cands.length) await supabase.from('candidates').insert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: '' })))
                 for (const iv of ivs) {
                   const cand = cands.find(c => c.id === iv.candidateId)
@@ -423,24 +430,7 @@ function App() {
           if (p.name)          setUserName(p.name)
           if (p.company)       setUserCompany(p.company)
           if (p.photo)         setUserPhoto(p.photo)
-          if (p.groq_api_key)  {
-            setGroqApiKey(p.groq_api_key); setSettingsKeyDraft(p.groq_api_key)
-            // sync to local config so main.cjs always has the key
-            if (window.desktopApp?.getConfig && window.desktopApp?.saveConfig) {
-              window.desktopApp.getConfig().then(cfg => {
-                if (!cfg.groqApiKey && window.desktopApp?.saveConfig) {
-                  void window.desktopApp.saveConfig({
-                    groqApiKey: p.groq_api_key,
-                    transcriptionModel: cfg.transcriptionModel ?? 'whisper-large-v3',
-                    summaryModel: cfg.summaryModel ?? 'llama-3.3-70b-versatile',
-                    userName: cfg.userName ?? '',
-                    userEmail: cfg.userEmail ?? '',
-                    userCompany: cfg.userCompany ?? '',
-                  })
-                }
-              }).catch(() => {})
-            }
-          }
+          // La Groq API key ya NO se lee de la nube: vive solo en el config.json local (ver setGroqApiKey desde cfg más abajo).
           if (p.tx_model)      setTranscriptionModel(p.tx_model)
           if (p.sum_model)     setSummaryModel(p.sum_model)
         }
@@ -654,6 +644,11 @@ function App() {
   const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
+    const ivCandidate = candidates.find(c => c.id === iv.candidateId)
+    if (ivCandidate && !ivCandidate.consentGiven) {
+      const proceed = window.confirm(`${ivCandidate.name || 'Este candidato'} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?`)
+      if (!proceed) return
+    }
     try {
       setRecordingMessage('Solicitando permisos...')
       chunkRef.current = []
@@ -896,11 +891,12 @@ function App() {
 
   const handleCreateCandidate = async () => {
     if (!candidateDraft.name.trim() || !activeProjectId) return
-    const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft }
+    const consentAt = candidateConsentDraft ? new Date().toISOString() : null
+    const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt }
     setCandidates(curr => [...curr, c])
-    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente')
+    setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false)
     if (session) {
-      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, created_at: new Date().toISOString() })
+      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: new Date().toISOString() })
       if (error) { toast(`Error guardando perfil: ${error.message}`, 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
     }
     toast(`Perfil ${c.name} creado`)
@@ -908,9 +904,11 @@ function App() {
 
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
-    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft } : x))
-    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft }).eq('id', editingCandidateId).then(() => {}, () => {})
-    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); toast('Perfil actualizado')
+    const prev = candidates.find(x => x.id === editingCandidateId)
+    const consentAt = candidateConsentDraft ? (prev?.consentAt ?? new Date().toISOString()) : null
+    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt } : x))
+    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt }).eq('id', editingCandidateId).then(() => {}, () => {})
+    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast('Perfil actualizado')
   }
 
   const updateProject = (id: string, changes: Partial<Project>) => {
@@ -961,7 +959,8 @@ function App() {
     localStorage.setItem('ct-default-output', settingsDefaultOutputDraft)
     localStorage.setItem('ct-default-system', String(settingsDefaultSystemDraft))
     setDefaultMicDeviceId(settingsDefaultMicDraft); setDefaultOutputDeviceId(settingsDefaultOutputDraft); setDefaultCaptureSystem(settingsDefaultSystemDraft)
-    if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, groq_api_key: settingsKeyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
+    // NOTE: la Groq API key NO se sincroniza a la nube por seguridad — vive solo en el config.json local.
+    if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
     toast('Configuración guardada')
   }
 
@@ -1499,7 +1498,7 @@ function App() {
         {/* Section header */}
         <div className="proj-section-header">
           <h3 className="proj-section-title">Perfiles del proceso</h3>
-          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }}>Nuevo perfil</button>
+          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>Nuevo perfil</button>
         </div>
 
         {/* Search */}
@@ -1512,7 +1511,7 @@ function App() {
         {filteredCandidates.length === 0 ? (
           searchQuery
             ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
-            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas" btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setShowNewCandidate(true) }} />
+            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas" btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
         ) : (
           <div className="pdc-list">
             {filteredCandidates.map(c => {
@@ -1540,7 +1539,7 @@ function App() {
                       return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
                     })()}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
-                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                       <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                       <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>Ver entrevistas</button>
                     </div>
@@ -1604,7 +1603,7 @@ function App() {
                   })()}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
-                    <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                    <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                     <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                   </div>
                   <button type="button" className="ctr-open">Ver entrevistas →</button>
@@ -1651,6 +1650,9 @@ function App() {
               <span className={`cand-status-badge${hasError ? ' cand-status-badge--error' : transcribedCount > 0 ? ' cand-status-badge--done' : ''}`}>
                 {hasError ? <><WarnTriangle /> Error</> : transcribedCount > 0 ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}
               </span>
+              <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? `Consentimiento registrado el ${new Date(activeCandidate.consentAt).toLocaleString('es-ES')}` : 'Sin consentimiento registrado'}>
+                {activeCandidate.consentGiven ? '🔒 Consentimiento ✓' : '⚠ Sin consentimiento'}
+              </span>
               {activeCandidate.candidateStatus !== 'pendiente' && (() => {
                 const st = activeCandidate.candidateStatus
                 const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
@@ -1660,7 +1662,7 @@ function App() {
               })()}
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
-                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
               </div>
             </div>
           </div>
@@ -2532,6 +2534,22 @@ function App() {
 
   return (
     <div className="app-shell">
+      {/* Banner de actualización */}
+      {updateStatus && (updateStatus.status === 'downloaded' || updateStatus.status === 'downloading') && (
+        <div className={`update-banner update-banner--${updateStatus.status}`}>
+          {updateStatus.status === 'downloading' ? (
+            <span>Descargando actualización… {updateStatus.percent ?? 0}%</span>
+          ) : (
+            <>
+              <span>Hay una nueva versión{updateStatus.version ? ` (${updateStatus.version})` : ''} lista para instalar.</span>
+              <button type="button" className="update-banner__btn" onClick={() => void window.desktopApp?.installUpdate?.()}>
+                Reiniciar e instalar
+              </button>
+              <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar">✕</button>
+            </>
+          )}
+        </div>
+      )}
       {/* Global top bar */}
       <header className="global-top-bar">
         <div className="gtb-accent" />
@@ -2683,14 +2701,14 @@ function App() {
 
       {/* Candidate modal */}
       {(showNewCandidate || editingCandidateId !== null) && (
-        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>
+        <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2 className="modal-title">{editingCandidateId ? 'Editar perfil' : 'Nuevo perfil'}</h2>
                 <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>✕</button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -2724,9 +2742,15 @@ function App() {
                 <option value="descartado">❌ Descartado</option>
               </select>
             </div>
+            <div className="modal-field">
+              <label className="consent-check">
+                <input type="checkbox" checked={candidateConsentDraft} onChange={e => setCandidateConsentDraft(e.target.checked)} />
+                <span>El candidato ha sido informado y <strong>consiente</strong> la grabación, transcripción y tratamiento de la entrevista (incluido su envío a servicios de IA en EE.&nbsp;UU.) conforme a la política de privacidad.</span>
+              </label>
+            </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente') }}>Cancelar</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir perfil</>}</button>
             </div>
           </div>

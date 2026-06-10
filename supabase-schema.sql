@@ -3,6 +3,9 @@
 
 -- Profiles (extends auth.users)
 -- If already applied, run: ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS country text not null default '';
+-- Nota de seguridad: la Groq API key NO se almacena en la nube. Vive solo en el
+-- config.json local del equipo del usuario. Si una instalación antigua tenía la
+-- columna groq_api_key, elimínala (ver supabase-migration-launch.sql).
 create table public.profiles (
   id              uuid references auth.users on delete cascade primary key,
   name            text    not null default '',
@@ -10,7 +13,6 @@ create table public.profiles (
   company         text    not null default '',
   photo           text    not null default '',
   country         text    not null default '',
-  groq_api_key    text    not null default '',
   tx_model        text    not null default 'whisper-large-v3',
   sum_model       text    not null default 'llama-3.3-70b-versatile',
   created_at      timestamptz not null default now(),
@@ -32,16 +34,21 @@ create table public.projects (
 
 -- Candidates
 create table public.candidates (
-  id          text primary key,
-  user_id     uuid references auth.users on delete cascade not null,
-  project_id  text references public.projects(id) on delete cascade not null,
-  name        text not null default '',
-  email       text not null default '',
-  phone       text not null default '',
-  role        text not null default '',
-  notes       text not null default '',
-  created_at  timestamptz not null default now()
+  id            text primary key,
+  user_id       uuid references auth.users on delete cascade not null,
+  project_id    text references public.projects(id) on delete cascade not null,
+  name          text not null default '',
+  email         text not null default '',
+  phone         text not null default '',
+  role          text not null default '',
+  notes         text not null default '',
+  consent_given boolean not null default false,
+  consent_at    timestamptz,
+  created_at    timestamptz not null default now()
 );
+-- Migration (run if table already exists):
+-- ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS consent_given boolean not null default false;
+-- ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS consent_at timestamptz;
 
 -- Interviews
 create table public.interviews (
