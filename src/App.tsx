@@ -371,6 +371,27 @@ function App() {
     const userId = session.user.id
     const load = async () => {
       try {
+        // ── Merge: no descartar los datos locales de este dispositivo ──────────
+        // Si aquí se crearon datos sin sesión (guardados en localStorage), los
+        // subimos a la nube con upsert (por id, sin duplicar) ANTES de cargar.
+        // Antes, si la nube ya tenía datos, los locales se descartaban en silencio
+        // → "datos que se pierden de dispositivo a dispositivo".
+        try {
+          const rawLocal = localStorage.getItem(V2_KEY)
+          if (rawLocal) {
+            const d = JSON.parse(rawLocal) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
+            const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
+            if (projs.length) await supabase.from('projects').upsert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], created_at: p.createdAt })), { onConflict: 'id' })
+            if (cands.length) await supabase.from('candidates').upsert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: c.notes ?? '', candidate_status: c.candidateStatus ?? 'pendiente', consent_given: c.consentGiven ?? false, consent_at: c.consentAt ?? null })), { onConflict: 'id' })
+            for (const iv of ivs) {
+              const cand = cands.find(c => c.id === iv.candidateId)
+              if (!cand) continue
+              await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
+            }
+            if (projs.length || cands.length || ivs.length) { localStorage.removeItem(V2_KEY); toast('Datos de este equipo sincronizados a la nube ✓') }
+          }
+        } catch { /* si el merge falla, seguimos y cargamos lo que haya en la nube */ }
+
         const [pRes, cRes, iRes, prRes] = await Promise.all([
           supabase.from('projects').select('*').eq('user_id', userId).order('created_at'),
           supabase.from('candidates').select('*').eq('user_id', userId).order('created_at'),
@@ -909,7 +930,8 @@ function App() {
     const prev = candidates.find(x => x.id === editingCandidateId)
     const consentAt = candidateConsentDraft ? (prev?.consentAt ?? new Date().toISOString()) : null
     setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt } : x))
-    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt }).eq('id', editingCandidateId).then(() => {}, () => {})
+    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt }).eq('id', editingCandidateId)
+      .then(({ error }) => { if (error) toast(`Error sincronizando perfil: ${error.message}`, 'error') }, () => {})
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast('Perfil actualizado')
   }
 
