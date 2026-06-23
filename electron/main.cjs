@@ -147,7 +147,23 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
 }
 
-app.whenReady().then(() => {
+// ── Instancia única ───────────────────────────────────────────────────────────
+// Sin esto, cada vez que se abre el acceso directo se lanza una app nueva (varias
+// ventanas + choque del servidor de login en el puerto 3000). Con el lock, la
+// segunda apertura simplemente enfoca la ventana que ya está abierta.
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const w = mainWindowRef
+    if (w && !w.isDestroyed()) {
+      if (w.isMinimized()) w.restore()
+      w.focus()
+    }
+  })
+
+  app.whenReady().then(() => {
   startAuthCallbackServer()
 
   session.defaultSession.setDisplayMediaRequestHandler(
@@ -174,7 +190,8 @@ app.whenReady().then(() => {
       createWindow()
     }
   })
-})
+  })
+}
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'call-transcriber-config.json')
 
