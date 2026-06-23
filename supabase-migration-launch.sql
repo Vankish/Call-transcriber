@@ -10,6 +10,13 @@ alter table public.candidates
 alter table public.candidates
   add column if not exists consent_at timestamptz;
 
+-- 1b) Estado del candidato ───────────────────────────────────────────────────
+--    La app escribe y lee candidate_status, pero la columna faltaba en el
+--    esquema. Sin ella, crear/editar candidatos fallaba en silencio y los datos
+--    NO llegaban a la nube (no aparecían en otros dispositivos).
+alter table public.candidates
+  add column if not exists candidate_status text not null default 'pendiente';
+
 -- 2) Purga de la Groq API key huérfana ───────────────────────────────────────
 --    La key ya NO se sincroniza a la nube (vive solo en el config.json local).
 --    Esta columna pudo quedar con claves en texto plano de versiones antiguas.

@@ -40,13 +40,15 @@ create table public.candidates (
   name          text not null default '',
   email         text not null default '',
   phone         text not null default '',
-  role          text not null default '',
-  notes         text not null default '',
-  consent_given boolean not null default false,
-  consent_at    timestamptz,
-  created_at    timestamptz not null default now()
+  role             text not null default '',
+  notes            text not null default '',
+  candidate_status text not null default 'pendiente',
+  consent_given    boolean not null default false,
+  consent_at       timestamptz,
+  created_at       timestamptz not null default now()
 );
 -- Migration (run if table already exists):
+-- ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS candidate_status text not null default 'pendiente';
 -- ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS consent_given boolean not null default false;
 -- ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS consent_at timestamptz;
 
