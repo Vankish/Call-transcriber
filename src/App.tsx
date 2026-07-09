@@ -29,6 +29,7 @@ type Interview = {
   status: RecordingStatus; durationSec: number; micDeviceId: string; outputDeviceId: string
   transcriptOriginal: string; transcriptEdited: string; transcriptUpdatedAt: string | null
   recordingUrl: string | null; recordingFilePath: string | null
+  videoFilePath: string | null
   captureSource: 'none' | 'mic' | 'mic+system'
   transcriptionStatus: 'pending' | 'transcribing' | 'done' | 'error'
   summaryInstructions: string; summaryText: string
@@ -100,6 +101,7 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
     sessionName: i.sessionName ?? '',
     recordingUrl: null,
     recordingFilePath: i.recordingFilePath ?? null,
+    videoFilePath: i.videoFilePath ?? null,
     captureSource: i.captureSource ?? 'none',
     transcriptionStatus: i.transcriptionStatus === 'transcribing' ? 'error'
       : i.transcriptionStatus ?? (i.transcriptOriginal && !i.transcriptOriginal.startsWith('Transcripcion pendiente') ? 'done' : 'pending'),
@@ -118,7 +120,7 @@ const ivFromDb    = (r: DbInterview): Interview => ({
   sessionName: r.session_name, status: r.status as RecordingStatus,
   durationSec: r.duration_sec, micDeviceId: r.mic_device_id, outputDeviceId: r.output_device_id,
   transcriptOriginal: r.transcript_original, transcriptEdited: r.transcript_edited,
-  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path,
+  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path, videoFilePath: null,
   captureSource: r.capture_source as Interview['captureSource'],
   transcriptionStatus: r.transcription_status as Interview['transcriptionStatus'],
   summaryInstructions: r.summary_instructions, summaryText: r.summary_text,
@@ -185,13 +187,17 @@ function App() {
   const [defaultMicDeviceId, setDefaultMicDeviceId] = useState('')
   const [defaultOutputDeviceId, setDefaultOutputDeviceId] = useState('')
   const [defaultCaptureSystem, setDefaultCaptureSystem] = useState(false)
+  const [defaultRecordVideo, setDefaultRecordVideo] = useState(false)
+  const [defaultVideoQuality, setDefaultVideoQuality] = useState<'720p' | '1080p'>('1080p')
   const [settingsDefaultMicDraft, setSettingsDefaultMicDraft] = useState('')
   const [settingsDefaultOutputDraft, setSettingsDefaultOutputDraft] = useState('')
   const [settingsDefaultSystemDraft, setSettingsDefaultSystemDraft] = useState(false)
+  const [settingsRecordVideoDraft, setSettingsRecordVideoDraft] = useState(false)
+  const [settingsVideoQualityDraft, setSettingsVideoQualityDraft] = useState<'720p' | '1080p'>('1080p')
   const [showAudioSetupModal, setShowAudioSetupModal] = useState(false)
   const [pendingMicId, setPendingMicId] = useState('')
   const [pendingOutputId, setPendingOutputId] = useState('')
-  const [pendingCaptureSystem, setPendingCaptureSystem] = useState(false)
+  const [pendingRecordVideo, setPendingRecordVideo] = useState(false)
 
   // ── Config ─────────────────────────────────────────────────────────────
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -298,6 +304,15 @@ function App() {
   const activeInterviewIdRef = useRef<string | null>(null)
   const pendingBlobRef = useRef<Blob | null>(null)
   const pendingMimeTypeRef = useRef<string>('')
+  const videoMediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const videoChunkRef = useRef<Blob[]>([])
+  const pendingVideoBlobRef = useRef<Blob | null>(null)
+  const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
+  const [captureWindowLabel, setCaptureWindowLabel] = useState('')
+  const pipVideoRef = useRef<HTMLVideoElement | null>(null)
+  const [captureSources, setCaptureSources] = useState<CaptureSourceOption[] | null>(null)
+  const [videoPlaybackRate, setVideoPlaybackRate] = useState(1)
+  const [videoVolume, setVideoVolume] = useState(1)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const localDataLoaded = useRef(false)
@@ -615,6 +630,21 @@ function App() {
     return () => window.clearInterval(id)
   }, [activeRecordingInterview?.id, activeRecordingInterview?.status])
 
+  // ── Live video preview (PiP) ───────────────────────────────────────────
+  useEffect(() => {
+    if (pipVideoRef.current) pipVideoRef.current.srcObject = livePreviewStream
+  }, [livePreviewStream])
+
+  // ── Screen/window picker (Electron getDisplayMedia) ────────────────────
+  useEffect(() => {
+    window.desktopApp?.onCaptureSources?.(sources => setCaptureSources(sources))
+  }, [])
+
+  const pickCaptureSource = (sourceId: string | null) => {
+    setCaptureSources(null)
+    void window.desktopApp?.pickCaptureSource(sourceId)
+  }
+
   // ── Audio devices ──────────────────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
@@ -629,14 +659,20 @@ function App() {
         const savedMic = localStorage.getItem('ct-default-mic') ?? ''
         const savedOut = localStorage.getItem('ct-default-output') ?? ''
         const savedSystem = localStorage.getItem('ct-default-system') === 'true'
+        const savedRecordVideo = localStorage.getItem('ct-default-record-video') === 'true'
+        const savedVideoQuality = (localStorage.getItem('ct-default-video-quality') as '720p' | '1080p') || '1080p'
         const resolvedMic = savedMic && mics.some(m => m.id === savedMic) ? savedMic : mics[0]?.id ?? ''
         const resolvedOut = savedOut && outs.some(o => o.id === savedOut) ? savedOut : outs[0]?.id ?? ''
         setDefaultMicDeviceId(resolvedMic)
         setDefaultOutputDeviceId(resolvedOut)
         setDefaultCaptureSystem(savedSystem)
+        setDefaultRecordVideo(savedRecordVideo)
+        setDefaultVideoQuality(savedVideoQuality)
         setSettingsDefaultMicDraft(resolvedMic)
         setSettingsDefaultOutputDraft(resolvedOut)
         setSettingsDefaultSystemDraft(savedSystem)
+        setSettingsRecordVideoDraft(savedRecordVideo)
+        setSettingsVideoQualityDraft(savedVideoQuality)
       } catch { setRecordingMessage('No se pudieron cargar dispositivos de audio.') }
     }
     void load()
@@ -656,15 +692,17 @@ function App() {
 
   const cleanupRecording = () => {
     mediaRecorderRef.current = null
+    videoMediaRecorderRef.current = null
     micStreamRef.current?.getTracks().forEach(t => t.stop())
     systemStreamRef.current?.getTracks().forEach(t => t.stop())
     mixedStreamRef.current?.getTracks().forEach(t => t.stop())
     micStreamRef.current = systemStreamRef.current = mixedStreamRef.current = null
     if (audioContextRef.current) { void audioContextRef.current.close(); audioContextRef.current = null }
+    setLivePreviewStream(null); setCaptureWindowLabel('')
   }
 
   // ── Recording ──────────────────────────────────────────────────────────
-  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false) => {
+  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
     const ivCandidate = candidates.find(c => c.id === iv.candidateId)
@@ -675,6 +713,7 @@ function App() {
     try {
       setRecordingMessage('Solicitando permisos...')
       chunkRef.current = []
+      videoChunkRef.current = []
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId } } })
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
@@ -690,13 +729,37 @@ function App() {
       const recorder = new MediaRecorder(dest.stream, { audioBitsPerSecond: qualityBitsPerSecond })
       mediaRecorderRef.current = recorder
       activeInterviewIdRef.current = iv.id
+
+      const videoTrack = sysStream?.getVideoTracks()[0] ?? null
+      let videoRecorder: MediaRecorder | null = null
+      if (recordVideo && videoTrack) {
+        // Incluye la pista de audio YA MEZCLADA (mic + sistema) para que el vídeo lleve audio sincronizado.
+        const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
+        const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
+        try {
+          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: 'video/webm', videoBitsPerSecond, audioBitsPerSecond: qualityBitsPerSecond })
+          videoRecorder.ondataavailable = e => { if (e.data.size > 0) videoChunkRef.current.push(e.data) }
+          videoMediaRecorderRef.current = videoRecorder
+          videoRecorder.start(1000)
+          setLivePreviewStream(videoWithAudioStream)
+          setCaptureWindowLabel(videoTrack.label || 'pantalla compartida')
+        } catch { videoRecorder = null }
+      }
+
       recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
       recorder.onstop = () => {
         const blob = new Blob(chunkRef.current, { type: recorder.mimeType })
         const src = sysStream?.getAudioTracks().length ? 'mic+system' : 'mic'
         pendingBlobRef.current = blob; pendingMimeTypeRef.current = recorder.mimeType
         if (activeInterviewIdRef.current) updateInterview(activeInterviewIdRef.current, { status: 'stopped', captureSource: src })
-        setSessionNameDraft(''); setShowSessionNameModal(true); cleanupRecording()
+        const vr = videoMediaRecorderRef.current
+        if (vr && vr.state !== 'inactive') {
+          vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); cleanupRecording() }
+          vr.stop()
+        } else {
+          cleanupRecording()
+        }
+        setSessionNameDraft(''); setShowSessionNameModal(true)
       }
       recorder.start(1000)
       updateInterview(iv.id, { status: 'recording', captureSource: sysStream?.getAudioTracks().length ? 'mic+system' : 'mic' })
@@ -708,7 +771,7 @@ function App() {
     if (!activeCandidateId || !activeCandidate) return
     setPendingMicId(defaultMicDeviceId || micDevices[0]?.id || '')
     setPendingOutputId(defaultOutputDeviceId || outputDevices[0]?.id || '')
-    setPendingCaptureSystem(defaultCaptureSystem)
+    setPendingRecordVideo(defaultRecordVideo)
     setShowAudioSetupModal(true)
   }
 
@@ -723,7 +786,7 @@ function App() {
       sessionName: defaultName, status: 'stopped', durationSec: 0,
       micDeviceId: '', outputDeviceId: '',
       transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null,
-      recordingUrl: null, recordingFilePath: filePath,
+      recordingUrl: null, recordingFilePath: filePath, videoFilePath: null,
       captureSource: 'none', transcriptionStatus: 'pending',
       summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
     }
@@ -740,14 +803,14 @@ function App() {
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
         .then(({ error }) => { if (error) toast(`Error al crear entrevista en la nube: ${error.message}`, 'error') })
     }
     setSelectedInterviewId(n.id)
-    void handleStartRecording(n, pendingCaptureSystem)
+    void handleStartRecording(n, true, pendingRecordVideo)
   }
 
   const handleDiscardRecording = async () => {
@@ -802,6 +865,18 @@ function App() {
     const fileName = filePath ? filePath.split(/[\\/]/).pop() ?? filePath : null
     updateInterview(iId, { recordingUrl: url, recordingFilePath: fileName })
     pendingBlobRef.current = null; toast('Grabación guardada')
+
+    const videoBlob = pendingVideoBlobRef.current
+    if (iData && videoBlob && window.desktopApp?.saveVideoRecording) {
+      try {
+        const videoBytes = new Uint8Array(await videoBlob.arrayBuffer())
+        const cand = candidates.find(c => c.id === iData.candidateId)
+        const vr = await window.desktopApp.saveVideoRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, videoBytes })
+        updateInterview(iId, { videoFilePath: vr.filePath.split(/[\\/]/).pop() ?? vr.filePath })
+      } catch { /* ignore */ }
+    }
+    pendingVideoBlobRef.current = null
+
     if (autoTranscribe && filePath) void handleTranscribe(iId)
   }
 
@@ -870,6 +945,7 @@ function App() {
     setPendingDeleteId(null); if (playingInterviewId === interviewId) stopAudio()
     const interview = interviews.find(i => i.id === interviewId)
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+    if (interview?.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     setInterviews(c => c.filter(i => i.id !== interviewId))
     if (session) {
       const { error } = await supabase.from('interviews').delete().eq('id', interviewId)
@@ -882,7 +958,7 @@ function App() {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
     const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
-    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) } })
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) } })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId))
     setCandidates(c => c.filter(x => x.id !== candidateId))
     if (session) {
@@ -901,7 +977,7 @@ function App() {
     setPendingDeleteId(null)
     const projCandidates = candidates.filter(c => c.projectId === projectId)
     const projInterviewIds = interviews.filter(i => projCandidates.some(c => c.id === i.candidateId))
-    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }) })
+    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }) })
     setInterviews(c => c.filter(i => !projCandidates.some(pc => pc.id === i.candidateId)))
     setCandidates(c => c.filter(x => x.projectId !== projectId))
     setProjects(c => c.filter(p => p.id !== projectId))
@@ -982,7 +1058,10 @@ function App() {
     localStorage.setItem('ct-default-mic', settingsDefaultMicDraft)
     localStorage.setItem('ct-default-output', settingsDefaultOutputDraft)
     localStorage.setItem('ct-default-system', String(settingsDefaultSystemDraft))
+    localStorage.setItem('ct-default-record-video', String(settingsRecordVideoDraft))
+    localStorage.setItem('ct-default-video-quality', settingsVideoQualityDraft)
     setDefaultMicDeviceId(settingsDefaultMicDraft); setDefaultOutputDeviceId(settingsDefaultOutputDraft); setDefaultCaptureSystem(settingsDefaultSystemDraft)
+    setDefaultRecordVideo(settingsRecordVideoDraft); setDefaultVideoQuality(settingsVideoQualityDraft)
     // NOTE: la Groq API key NO se sincroniza a la nube por seguridad — vive solo en el config.json local.
     if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
     toast('Configuración guardada')
@@ -993,6 +1072,7 @@ function App() {
     setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany)
     setSettingsRoleDraft(userRole)
     setSettingsDefaultMicDraft(defaultMicDeviceId); setSettingsDefaultOutputDraft(defaultOutputDeviceId); setSettingsDefaultSystemDraft(defaultCaptureSystem)
+    setSettingsRecordVideoDraft(defaultRecordVideo); setSettingsVideoQualityDraft(defaultVideoQuality)
     setSettingsTab(tab); setScreen('settings')
   }
 
@@ -1043,6 +1123,11 @@ function App() {
     if (stored.includes('/') || stored.includes('\\')) return stored // legacy absolute path
     return recordingsDir ? `${recordingsDir}\\${stored}` : stored
   }, [recordingsDir])
+
+  const resolveVideoUrl = useCallback((stored: string | null): string | null => {
+    const resolved = resolveAudioPath(stored)
+    return resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null
+  }, [resolveAudioPath])
 
   const activeDateLocale = useMemo(() => {
     if (settingsDateFormatDraft === 'MM/DD/YYYY') return 'en-US'
@@ -1754,7 +1839,8 @@ function App() {
             const isError = iv.transcriptionStatus === 'error'
             const isTranscribing = iv.transcriptionStatus === 'transcribing'
             return (
-              <div key={iv.id} className="rec-row">
+              <div key={iv.id}>
+              <div className="rec-row">
                 <div className="rec-row-accent" />
                 <div className="rec-row-info">
                   <div className="rec-row-top">
@@ -1768,7 +1854,7 @@ function App() {
                       <span className="rec-row-name">{iv.sessionName || fd(iv.createdAt)}</span>
                     )}
                   </div>
-                  <span className="rec-row-meta">{fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}</span>
+                  <span className="rec-row-meta">{fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}{iv.videoFilePath ? '  ·  🎥 vídeo' : ''}</span>
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
                   {isDone ? <><DotFilled /> Transcrita</> : isError ? <><WarnTriangle /> Error</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> Transcribiendo</> : <><DotRing /> Pendiente</>}
@@ -1789,6 +1875,34 @@ function App() {
                 ) : isTranscribing ? (
                   <div className="rec-row-spinner"><span className="spinner" /></div>
                 ) : null}
+              </div>
+              {iv.videoFilePath && (
+                <div className="video-player-card">
+                  <div className="video-player-title">🎥 Vídeo de la grabación</div>
+                  <video
+                    className="video-player-el"
+                    controls
+                    src={resolveVideoUrl(iv.videoFilePath) ?? undefined}
+                    ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume } }}
+                  />
+                  <div className="video-player-controls">
+                    <label className="video-player-ctrl">Velocidad
+                      <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
+                        <option value="0.5">0.5×</option>
+                        <option value="0.75">0.75×</option>
+                        <option value="1">1×</option>
+                        <option value="1.25">1.25×</option>
+                        <option value="1.5">1.5×</option>
+                        <option value="2">2×</option>
+                      </select>
+                    </label>
+                    <label className="video-player-ctrl">Volumen
+                      <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
+                    </label>
+                  </div>
+                  <span className="video-player-sub">🎥 Vídeo con audio  ·  {fs(iv.createdAt)}  ·  {fmt(iv.durationSec)}  ·  guardado en tu equipo</span>
+                </div>
+              )}
               </div>
             )
           })}
@@ -2094,6 +2208,20 @@ function App() {
                   </select>
                 </div>
                 <div className="settings-section">
+                  <div className="settings-section-label">VÍDEO</div>
+                  <div className="settings-section-divider" />
+                  <div className="toggle-row">
+                    <div><span className="toggle-label">Grabar vídeo de la reunión</span><span className="notif-sub">El vídeo se guarda en tu equipo, no en la nube (ocupa más espacio).</span></div>
+                    <button type="button" className={`toggle-btn${settingsRecordVideoDraft ? ' on' : ''}`} onClick={() => setSettingsRecordVideoDraft(t => !t)}><span className="toggle-circle" /></button>
+                  </div>
+                  <label className="modal-label" style={{ marginTop: 12 }}>Calidad de vídeo
+                    <select className="modal-input modal-select" value={settingsVideoQualityDraft} onChange={e => setSettingsVideoQualityDraft(e.target.value as '720p' | '1080p')}>
+                      <option value="1080p">1080p (Full HD)</option>
+                      <option value="720p">720p (HD)</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="settings-section">
                   <div className="settings-section-label">DISPOSITIVOS PREDETERMINADOS</div>
                   <div className="settings-section-divider" />
                   <p className="cfg-field-desc">Se usarán automáticamente al iniciar una grabación</p>
@@ -2377,6 +2505,15 @@ function App() {
     const contextLabel = [activeRecordingCandidate?.name, activeRecordingProject ? `Proyecto: ${activeRecordingProject.name}` : null].filter(Boolean).join('  ·  ')
     return (
       <div className="rec-screen">
+        {livePreviewStream && (
+          <div className="rec-pip">
+            <div className="rec-pip-video-wrap">
+              <video ref={pipVideoRef} className="rec-pip-video" autoPlay muted playsInline />
+              <span className="rec-pip-live-badge">● EN VIVO</span>
+            </div>
+            <span className="rec-pip-caption">🎥 Grabando ventana: {captureWindowLabel}</span>
+          </div>
+        )}
         <div className="rec-screen-content">
           <div className={`rec-badge${isRecording ? '' : ' rec-badge--paused'}`}>
             {isRecording ? '● EN GRABACIÓN' : '‖ EN PAUSA'}
@@ -2788,14 +2925,37 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">Configurar grabación</h2>
-                <p className="modal-subtitle">Selecciona los dispositivos de audio para esta sesión</p>
+                <h2 className="modal-title">Nueva grabación</h2>
+                <p className="modal-subtitle">Elige qué quieres grabar</p>
               </div>
               <button type="button" className="modal-close" onClick={() => setShowAudioSetupModal(false)}>✕</button>
             </div>
             <div className="modal-header-divider" />
-            <div className="modal-field">
-              <span className="modal-field-label">Entrada de audio (micrófono)</span>
+            <div className="rec-option-cards">
+              <button
+                type="button"
+                className={`rec-option-card${!pendingRecordVideo ? ' rec-option-card--active' : ''}`}
+                onClick={() => setPendingRecordVideo(false)}
+              >
+                <span className="rec-option-icon">🎙️</span>
+                <span className="rec-option-title">Solo audio</span>
+                <span className="rec-option-desc">Graba solo el sonido: tu micro + el audio de la llamada.</span>
+              </button>
+              <button
+                type="button"
+                className={`rec-option-card${pendingRecordVideo ? ' rec-option-card--active' : ''}`}
+                onClick={() => setPendingRecordVideo(true)}
+              >
+                <span className="rec-option-icon">🎥</span>
+                <span className="rec-option-title">Llamada entera (vídeo + audio)</span>
+                <span className="rec-option-desc">Graba también la pantalla. Al empezar eliges qué ventana.</span>
+              </button>
+            </div>
+            {pendingRecordVideo && (
+              <div className="rec-video-banner">🎥 Al empezar se te pedirá elegir qué pantalla o ventana grabar.</div>
+            )}
+            <div className="modal-field" style={{ marginTop: 16 }}>
+              <span className="modal-field-label">Micrófono</span>
               <select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingMicId}
@@ -2808,7 +2968,7 @@ function App() {
               </select>
             </div>
             <div className="modal-field" style={{ marginTop: 12 }}>
-              <span className="modal-field-label">Salida de audio</span>
+              <span className="modal-field-label">Altavoces / audio de la llamada</span>
               <select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingOutputId}
@@ -2820,19 +2980,44 @@ function App() {
                 }
               </select>
             </div>
-            <div className="modal-field" style={{ marginTop: 16 }}>
-              <div className="toggle-row" style={{ padding: '12px 14px', background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
-                <div>
-                  <span className="toggle-label">Capturar audio del sistema</span>
-                  <span className="notif-sub">Graba también el audio de altavoces (llamadas, vídeos...)</span>
-                </div>
-                <button type="button" className={`toggle-btn${pendingCaptureSystem ? ' on' : ''}`} onClick={() => setPendingCaptureSystem(t => !t)}><span className="toggle-circle" /></button>
-              </div>
-            </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => setShowAudioSetupModal(false)}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={handleConfirmRecordingSetup} disabled={!pendingMicId}><MicIcon /> Iniciar grabación</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Capture source picker (screen/window) */}
+      {captureSources && (
+        <div className="modal-overlay" onClick={() => pickCaptureSource(null)}>
+          <div className="modal-box modal-box--figma source-picker-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">Elige qué compartir</h2>
+                <p className="modal-subtitle">Selecciona la ventana o pantalla que quieres grabar</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => pickCaptureSource(null)}>✕</button>
+            </div>
+            <div className="modal-header-divider" />
+            {captureSources.length === 0 ? (
+              <p className="tab-note">No se encontraron ventanas o pantallas disponibles.</p>
+            ) : (
+              <div className="source-picker-grid">
+                {captureSources.map(s => (
+                  <button key={s.id} type="button" className="source-picker-item" onClick={() => pickCaptureSource(s.id)}>
+                    <span className="source-picker-thumb">
+                      {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback">🖥️</span>}
+                    </span>
+                    <span className="source-picker-name">{s.name || 'Sin nombre'}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="modal-footer-divider" />
+            <div className="modal-actions modal-actions--figma">
+              <button type="button" className="modal-cancel-btn" onClick={() => pickCaptureSource(null)}>Cancelar</button>
             </div>
           </div>
         </div>

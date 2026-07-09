@@ -3951,12 +3951,58 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 /* ── Recording screen (white page, replaces app-body when recording) ─────── */
 .rec-screen {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #ffffff;
   overflow: hidden;
+}
+
+/* Live PiP video preview */
+.rec-pip {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  z-index: 5;
+}
+
+.rec-pip-video-wrap {
+  position: relative;
+  width: 320px;
+  height: 180px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1e293b;
+}
+
+.rec-pip-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rec-pip-live-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.rec-pip-caption {
+  font-size: 12px;
+  color: #6b7380;
 }
 
 .rec-screen-content {
@@ -4604,3 +4650,88 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .gs-result-count { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 .gs-result-excerpt { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 0; white-space: pre-wrap; word-break: break-word; }
 .gs-mark { background: #fef08a; color: var(--text); border-radius: 2px; padding: 0 1px; font-style: normal; }
+
+/* ── Nueva grabación — tarjetas de opción (audio vs vídeo) ───────────────── */
+.rec-option-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.rec-option-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #f9fbff;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.rec-option-card--active { background: #eff6ff; border-color: var(--primary); }
+.rec-option-icon { font-size: 20px; }
+.rec-option-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.rec-option-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+
+.rec-video-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #eff6ff;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+/* ── Reproductor de vídeo (detalle de candidato) ─────────────────────────── */
+.video-player-card {
+  margin: 8px 0 16px;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.video-player-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.video-player-el { width: 100%; max-height: 360px; border-radius: 8px; background: #1e293b; }
+.video-player-sub { font-size: 12px; color: var(--text-muted); }
+
+.video-player-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.video-player-ctrl { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.video-player-ctrl select { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 12px; background: #fff; cursor: pointer; }
+.video-player-ctrl input[type="range"] { accent-color: var(--primary); cursor: pointer; }
+
+/* ── Selector de ventana/pantalla a compartir ────────────────────────────── */
+.source-picker-box { width: 620px; max-width: 94vw; }
+.source-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.source-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.source-picker-item:hover { border-color: var(--primary); background: #eff6ff; }
+.source-picker-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 120px;
+  background: #1e293b;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.source-picker-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.source-picker-thumb-fallback { font-size: 28px; }
+.source-picker-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
