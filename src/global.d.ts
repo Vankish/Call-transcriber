@@ -11,6 +11,19 @@ type SaveRecordingResult = {
   filePath: string
 }
 
+type SaveVideoRecordingPayload = {
+  interviewId: string
+  candidateName: string
+  createdAt: string
+  videoBytes: Uint8Array
+}
+
+type CaptureSourceOption = {
+  id: string
+  name: string
+  thumbnail: string | null
+}
+
 type GetConfigResult = {
   groqApiKey: string | null
   transcriptionModel?: string
@@ -75,6 +88,9 @@ interface Window {
     platform: string
     isDesktop: boolean
     saveRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
+    saveVideoRecording: (payload: SaveVideoRecordingPayload) => Promise<SaveRecordingResult>
+    onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
+    pickCaptureSource: (sourceId: string | null) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>
     saveConfig: (payload: SaveConfigPayload) => Promise<SaveConfigResult>
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>

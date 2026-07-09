@@ -19,6 +19,7 @@ const log = require('electron-log')
 const isDev = process.env.ELECTRON_DEV === '1'
 
 let mainWindowRef = null
+let pendingCaptureSourceResolve = null
 
 // ── Auto-actualización (electron-updater + GitHub Releases) ───────────────────
 function sendUpdaterEvent(payload) {
@@ -169,13 +170,23 @@ if (!gotTheLock) {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
       const sources = await desktopCapturer.getSources({
-        types: ['screen'],
+        types: ['window', 'screen'],
+        thumbnailSize: { width: 300, height: 200 },
+        fetchWindowIcons: true,
       })
 
-      callback({
-        video: sources[0],
-        audio: 'loopback',
-      })
+      if (mainWindowRef && !mainWindowRef.isDestroyed()) {
+        mainWindowRef.webContents.send('capture:sources', sources.map((s) => ({
+          id: s.id,
+          name: s.name,
+          thumbnail: s.thumbnail.isEmpty() ? null : s.thumbnail.toDataURL(),
+        })))
+      }
+
+      const chosenId = await new Promise((resolve) => { pendingCaptureSourceResolve = resolve })
+      const chosen = sources.find((s) => s.id === chosenId)
+      if (!chosen) { callback({}); return }
+      callback({ video: chosen, audio: 'loopback' })
     },
     {
       useSystemPicker: false,
@@ -245,6 +256,25 @@ ipcMain.handle('recording:save', async (_event, payload) => {
   }
 
   return { filePath: rawPath }
+})
+
+ipcMain.handle('capture:pick-source', (_event, sourceId) => {
+  if (pendingCaptureSourceResolve) { pendingCaptureSourceResolve(sourceId); pendingCaptureSourceResolve = null }
+  return { ok: true }
+})
+
+ipcMain.handle('recording:save-video', async (_event, payload) => {
+  const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
+  await fs.mkdir(recordingsDir, { recursive: true })
+
+  const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
+  const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
+  const buffer = Buffer.from(payload.videoBytes)
+
+  const videoPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}_video.webm`)
+  await fs.writeFile(videoPath, buffer)
+
+  return { filePath: videoPath }
 })
 
 ipcMain.handle('config:get', async () => {
