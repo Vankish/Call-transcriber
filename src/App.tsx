@@ -30,6 +30,7 @@ type Interview = {
   transcriptOriginal: string; transcriptEdited: string; transcriptUpdatedAt: string | null
   recordingUrl: string | null; recordingFilePath: string | null
   videoFilePath: string | null
+  systemAudioFilePath: string | null
   captureSource: 'none' | 'mic' | 'mic+system'
   transcriptionStatus: 'pending' | 'transcribing' | 'done' | 'error'
   summaryInstructions: string; summaryText: string
@@ -54,6 +55,33 @@ const saveCriteriaCache = (projectId: string, criteria: string[]) => {
   const cache = getCriteriaCache()
   cache[projectId] = criteria
   localStorage.setItem(CRITERIA_KEY, JSON.stringify(cache))
+}
+
+// El vídeo de una entrevista solo se guarda en local (nunca sube a Supabase, pesa
+// demasiado), así que su ruta también hay que cachearla en local: si no, se pierde
+// cada vez que la app recarga las entrevistas desde la nube (que no sabe de vídeos).
+const VIDEO_PATH_KEY = 'ct-video-paths'
+const getVideoPathCache = (): Record<string, string> => {
+  try { return JSON.parse(localStorage.getItem(VIDEO_PATH_KEY) ?? '{}') } catch { return {} }
+}
+const saveVideoPathCache = (interviewId: string, videoFilePath: string | null) => {
+  const cache = getVideoPathCache()
+  if (videoFilePath) cache[interviewId] = videoFilePath
+  else delete cache[interviewId]
+  localStorage.setItem(VIDEO_PATH_KEY, JSON.stringify(cache))
+}
+
+// Igual que el vídeo: el audio del sistema (pista del interlocutor) tampoco sube
+// a Supabase, así que su ruta se pierde al reabrir la app si no se cachea aquí.
+const SYSTEM_AUDIO_PATH_KEY = 'ct-system-audio-paths'
+const getSystemAudioPathCache = (): Record<string, string> => {
+  try { return JSON.parse(localStorage.getItem(SYSTEM_AUDIO_PATH_KEY) ?? '{}') } catch { return {} }
+}
+const saveSystemAudioPathCache = (interviewId: string, systemAudioFilePath: string | null) => {
+  const cache = getSystemAudioPathCache()
+  if (systemAudioFilePath) cache[interviewId] = systemAudioFilePath
+  else delete cache[interviewId]
+  localStorage.setItem(SYSTEM_AUDIO_PATH_KEY, JSON.stringify(cache))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -102,6 +130,7 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
     recordingUrl: null,
     recordingFilePath: i.recordingFilePath ?? null,
     videoFilePath: i.videoFilePath ?? null,
+    systemAudioFilePath: i.systemAudioFilePath ?? null,
     captureSource: i.captureSource ?? 'none',
     transcriptionStatus: i.transcriptionStatus === 'transcribing' ? 'error'
       : i.transcriptionStatus ?? (i.transcriptOriginal && !i.transcriptOriginal.startsWith('Transcripcion pendiente') ? 'done' : 'pending'),
@@ -120,7 +149,7 @@ const ivFromDb    = (r: DbInterview): Interview => ({
   sessionName: r.session_name, status: r.status as RecordingStatus,
   durationSec: r.duration_sec, micDeviceId: r.mic_device_id, outputDeviceId: r.output_device_id,
   transcriptOriginal: r.transcript_original, transcriptEdited: r.transcript_edited,
-  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path, videoFilePath: null,
+  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path, videoFilePath: null, systemAudioFilePath: null,
   captureSource: r.capture_source as Interview['captureSource'],
   transcriptionStatus: r.transcription_status as Interview['transcriptionStatus'],
   summaryInstructions: r.summary_instructions, summaryText: r.summary_text,
@@ -270,6 +299,7 @@ function App() {
 
   // ── Playback ───────────────────────────────────────────────────────────
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
+  const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null)
   const [_playbackProgress, setPlaybackProgress] = useState(0)
   const [_playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
@@ -307,6 +337,9 @@ function App() {
   const videoMediaRecorderRef = useRef<MediaRecorder | null>(null)
   const videoChunkRef = useRef<Blob[]>([])
   const pendingVideoBlobRef = useRef<Blob | null>(null)
+  const systemMediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const systemChunkRef = useRef<Blob[]>([])
+  const pendingSystemBlobRef = useRef<Blob | null>(null)
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -439,7 +472,16 @@ function App() {
           if (iRes.error) {
             toast(`Error cargando entrevistas: ${iRes.error.message}`, 'error')
           } else {
-            setInterviews(normalizeInterviews((iRes.data ?? []).map(ivFromDb)))
+            const videoPathCache = getVideoPathCache()
+            const systemAudioPathCache = getSystemAudioPathCache()
+            setInterviews(normalizeInterviews((iRes.data ?? []).map(r => {
+              const iv = ivFromDb(r)
+              return {
+                ...iv,
+                videoFilePath: videoPathCache[iv.id] ?? iv.videoFilePath,
+                systemAudioFilePath: systemAudioPathCache[iv.id] ?? iv.systemAudioFilePath,
+              }
+            })))
           }
         } else {
           // First login: migrate localStorage data to Supabase
@@ -693,6 +735,7 @@ function App() {
   const cleanupRecording = () => {
     mediaRecorderRef.current = null
     videoMediaRecorderRef.current = null
+    systemMediaRecorderRef.current = null
     micStreamRef.current?.getTracks().forEach(t => t.stop())
     systemStreamRef.current?.getTracks().forEach(t => t.stop())
     mixedStreamRef.current?.getTracks().forEach(t => t.stop())
@@ -713,6 +756,7 @@ function App() {
     try {
       setRecordingMessage('Solicitando permisos...')
       chunkRef.current = []
+      systemChunkRef.current = []
       videoChunkRef.current = []
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId } } })
       micStreamRef.current = micStream
@@ -720,20 +764,35 @@ function App() {
       if (captureSystem) {
         try { sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }); systemStreamRef.current = sysStream } catch { /* silent */ }
       }
-      const ctx = new AudioContext(); audioContextRef.current = ctx
-      const dest = ctx.createMediaStreamDestination()
-      ctx.createMediaStreamSource(micStream).connect(dest)
-      if (sysStream?.getAudioTracks().length) ctx.createMediaStreamSource(sysStream).connect(dest)
-      mixedStreamRef.current = dest.stream
+      const hasSystemAudio = !!sysStream?.getAudioTracks().length
       const qualityBitsPerSecond = ({ high: 128000, medium: 64000, low: 32000 } as Record<string, number>)[settingsRecordingQualityDraft] ?? 128000
-      const recorder = new MediaRecorder(dest.stream, { audioBitsPerSecond: qualityBitsPerSecond })
+
+      // Mic y sistema se graban en pistas SEPARADAS (no mezcladas) para poder
+      // transcribir cada una por su lado y saber con certeza quién dijo qué,
+      // sin depender de que una IA lo adivine por el texto.
+      const recorder = new MediaRecorder(micStream, { audioBitsPerSecond: qualityBitsPerSecond })
       mediaRecorderRef.current = recorder
       activeInterviewIdRef.current = iv.id
+
+      let systemRecorder: MediaRecorder | null = null
+      if (hasSystemAudio) {
+        try {
+          const systemAudioOnlyStream = new MediaStream([sysStream!.getAudioTracks()[0]])
+          systemRecorder = new MediaRecorder(systemAudioOnlyStream, { audioBitsPerSecond: qualityBitsPerSecond })
+          systemRecorder.ondataavailable = e => { if (e.data.size > 0) systemChunkRef.current.push(e.data) }
+          systemMediaRecorderRef.current = systemRecorder
+        } catch { systemRecorder = null }
+      }
 
       const videoTrack = sysStream?.getVideoTracks()[0] ?? null
       let videoRecorder: MediaRecorder | null = null
       if (recordVideo && videoTrack) {
-        // Incluye la pista de audio YA MEZCLADA (mic + sistema) para que el vídeo lleve audio sincronizado.
+        // El vídeo sí lleva mic+sistema MEZCLADOS en una sola pista, para que se oiga todo al reproducirlo.
+        const ctx = new AudioContext(); audioContextRef.current = ctx
+        const dest = ctx.createMediaStreamDestination()
+        ctx.createMediaStreamSource(micStream).connect(dest)
+        if (hasSystemAudio) ctx.createMediaStreamSource(sysStream!).connect(dest)
+        mixedStreamRef.current = dest.stream
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
         const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
         try {
@@ -749,21 +808,32 @@ function App() {
       recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
       recorder.onstop = () => {
         const blob = new Blob(chunkRef.current, { type: recorder.mimeType })
-        const src = sysStream?.getAudioTracks().length ? 'mic+system' : 'mic'
+        const src = hasSystemAudio ? 'mic+system' : 'mic'
         pendingBlobRef.current = blob; pendingMimeTypeRef.current = recorder.mimeType
         if (activeInterviewIdRef.current) updateInterview(activeInterviewIdRef.current, { status: 'stopped', captureSource: src })
-        const vr = videoMediaRecorderRef.current
-        if (vr && vr.state !== 'inactive') {
-          vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); cleanupRecording() }
-          vr.stop()
+
+        const finishStop = () => {
+          const vr = videoMediaRecorderRef.current
+          if (vr && vr.state !== 'inactive') {
+            vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); cleanupRecording() }
+            vr.stop()
+          } else {
+            cleanupRecording()
+          }
+        }
+        const sr = systemMediaRecorderRef.current
+        if (sr && sr.state !== 'inactive') {
+          sr.onstop = () => { pendingSystemBlobRef.current = new Blob(systemChunkRef.current, { type: sr.mimeType }); finishStop() }
+          sr.stop()
         } else {
-          cleanupRecording()
+          finishStop()
         }
         setSessionNameDraft(''); setShowSessionNameModal(true)
       }
       recorder.start(1000)
-      updateInterview(iv.id, { status: 'recording', captureSource: sysStream?.getAudioTracks().length ? 'mic+system' : 'mic' })
-      setRecordingMessage(sysStream ? 'Grabando micrófono + sistema.' : 'Grabando solo micrófono.')
+      systemRecorder?.start(1000)
+      updateInterview(iv.id, { status: 'recording', captureSource: hasSystemAudio ? 'mic+system' : 'mic' })
+      setRecordingMessage(hasSystemAudio ? 'Grabando micrófono + sistema.' : 'Grabando solo micrófono.')
     } catch { setRecordingMessage('No se pudo iniciar la grabación.'); cleanupRecording() }
   }
 
@@ -786,7 +856,7 @@ function App() {
       sessionName: defaultName, status: 'stopped', durationSec: 0,
       micDeviceId: '', outputDeviceId: '',
       transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null,
-      recordingUrl: null, recordingFilePath: filePath, videoFilePath: null,
+      recordingUrl: null, recordingFilePath: filePath, videoFilePath: null, systemAudioFilePath: null,
       captureSource: 'none', transcriptionStatus: 'pending',
       summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
     }
@@ -803,7 +873,7 @@ function App() {
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
@@ -872,10 +942,25 @@ function App() {
         const videoBytes = new Uint8Array(await videoBlob.arrayBuffer())
         const cand = candidates.find(c => c.id === iData.candidateId)
         const vr = await window.desktopApp.saveVideoRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, videoBytes })
-        updateInterview(iId, { videoFilePath: vr.filePath.split(/[\\/]/).pop() ?? vr.filePath })
+        const videoFileName = vr.filePath.split(/[\\/]/).pop() ?? vr.filePath
+        updateInterview(iId, { videoFilePath: videoFileName })
+        saveVideoPathCache(iId, videoFileName)
       } catch { /* ignore */ }
     }
     pendingVideoBlobRef.current = null
+
+    const systemBlob = pendingSystemBlobRef.current
+    if (iData && systemBlob && window.desktopApp?.saveSystemRecording) {
+      try {
+        const systemBytes = new Uint8Array(await systemBlob.arrayBuffer())
+        const cand = candidates.find(c => c.id === iData.candidateId)
+        const sr = await window.desktopApp.saveSystemRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, extension: getExt(systemBlob.type), audioBytes: systemBytes })
+        const systemFileName = sr.filePath.split(/[\\/]/).pop() ?? sr.filePath
+        updateInterview(iId, { systemAudioFilePath: systemFileName })
+        saveSystemAudioPathCache(iId, systemFileName)
+      } catch { /* ignore */ }
+    }
+    pendingSystemBlobRef.current = null
 
     if (autoTranscribe && filePath) void handleTranscribe(iId)
   }
@@ -887,9 +972,10 @@ function App() {
     const fullPath = resolveAudioPath(interview.recordingFilePath)
     if (!fullPath) return
     const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
+    const systemFullPath = interview.systemAudioFilePath ? resolveAudioPath(interview.systemAudioFilePath) : null
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
     try {
-      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, language: language ?? txLang, candidateName })
+      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemFullPath ?? undefined, language: language ?? txLang, candidateName })
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')
@@ -946,6 +1032,9 @@ function App() {
     const interview = interviews.find(i => i.id === interviewId)
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     if (interview?.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+    if (interview?.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+    saveVideoPathCache(interviewId, null)
+    saveSystemAudioPathCache(interviewId, null)
     setInterviews(c => c.filter(i => i.id !== interviewId))
     if (session) {
       const { error } = await supabase.from('interviews').delete().eq('id', interviewId)
@@ -958,7 +1047,7 @@ function App() {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
     const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
-    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) } })
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null) })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId))
     setCandidates(c => c.filter(x => x.id !== candidateId))
     if (session) {
@@ -977,7 +1066,7 @@ function App() {
     setPendingDeleteId(null)
     const projCandidates = candidates.filter(c => c.projectId === projectId)
     const projInterviewIds = interviews.filter(i => projCandidates.some(c => c.id === i.candidateId))
-    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }) })
+    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }); if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.systemAudioFilePath }); saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null) })
     setInterviews(c => c.filter(i => !projCandidates.some(pc => pc.id === i.candidateId)))
     setCandidates(c => c.filter(x => x.projectId !== projectId))
     setProjects(c => c.filter(p => p.id !== projectId))
@@ -1840,7 +1929,10 @@ function App() {
             const isTranscribing = iv.transcriptionStatus === 'transcribing'
             return (
               <div key={iv.id}>
-              <div className="rec-row">
+              <div
+                className={`rec-row${iv.videoFilePath ? ' rec-row--expandable' : ''}`}
+                onClick={() => { if (iv.videoFilePath) setExpandedVideoId(id => id === iv.id ? null : iv.id) }}
+              >
                 <div className="rec-row-accent" />
                 <div className="rec-row-info">
                   <div className="rec-row-top">
@@ -1854,7 +1946,15 @@ function App() {
                       <span className="rec-row-name">{iv.sessionName || fd(iv.createdAt)}</span>
                     )}
                   </div>
-                  <span className="rec-row-meta">{fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}{iv.videoFilePath ? '  ·  🎥 vídeo' : ''}</span>
+                  <span className="rec-row-meta">
+                    {fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}
+                    {iv.videoFilePath ? <> · 🎥 vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
+                  </span>
+                  {iv.captureSource === 'mic' && (
+                    <span className="rec-row-warning" title="No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.">
+                      ⚠ Sin audio del interlocutor
+                    </span>
+                  )}
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
                   {isDone ? <><DotFilled /> Transcrita</> : isError ? <><WarnTriangle /> Error</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> Transcribiendo</> : <><DotRing /> Pendiente</>}
@@ -1869,15 +1969,15 @@ function App() {
                   </button>
                 </div>
                 {isDone ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={() => { setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={e => { e.stopPropagation(); setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
                 ) : iv.recordingFilePath && !isTranscribing ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={() => void handleTranscribe(iv.id)}>{isError ? '↺ Reintentar' : '▶ Transcribir'}</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{isError ? '↺ Reintentar' : '▶ Transcribir'}</button>
                 ) : isTranscribing ? (
                   <div className="rec-row-spinner"><span className="spinner" /></div>
                 ) : null}
               </div>
-              {iv.videoFilePath && (
-                <div className="video-player-card">
+              {iv.videoFilePath && expandedVideoId === iv.id && (
+                <div className="video-player-card" onClick={e => e.stopPropagation()}>
                   <div className="video-player-title">🎥 Vídeo de la grabación</div>
                   <video
                     className="video-player-el"

@@ -64,6 +64,7 @@ type SaveConfigResult = {
 
 type TranscribeAudioPayload = {
   filePath: string
+  systemFilePath?: string
   language?: string
   candidateName?: string
 }
@@ -89,6 +90,7 @@ interface Window {
     isDesktop: boolean
     saveRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
     saveVideoRecording: (payload: SaveVideoRecordingPayload) => Promise<SaveRecordingResult>
+    saveSystemRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
     onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
     pickCaptureSource: (sourceId: string | null) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>

@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   isDesktop: true,
   saveRecording: (payload) => ipcRenderer.invoke('recording:save', payload),
   saveVideoRecording: (payload) => ipcRenderer.invoke('recording:save-video', payload),
+  saveSystemRecording: (payload) => ipcRenderer.invoke('recording:save-system', payload),
   onCaptureSources: (cb) => ipcRenderer.on('capture:sources', (_e, sources) => cb(sources)),
   pickCaptureSource: (sourceId) => ipcRenderer.invoke('capture:pick-source', sourceId),
   getConfig: () => ipcRenderer.invoke('config:get'),
