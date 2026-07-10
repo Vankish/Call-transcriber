@@ -258,6 +258,21 @@ ipcMain.handle('recording:save', async (_event, payload) => {
   return { filePath: rawPath }
 })
 
+ipcMain.handle('recording:save-system', async (_event, payload) => {
+  const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
+  await fs.mkdir(recordingsDir, { recursive: true })
+
+  const rawExtension = payload.extension || 'webm'
+  const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
+  const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
+  const buffer = Buffer.from(payload.audioBytes)
+
+  const filePath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}_system.${rawExtension}`)
+  await fs.writeFile(filePath, buffer)
+
+  return { filePath }
+})
+
 ipcMain.handle('capture:pick-source', (_event, sourceId) => {
   if (pendingCaptureSourceResolve) { pendingCaptureSourceResolve(sourceId); pendingCaptureSourceResolve = null }
   return { ok: true }
@@ -316,37 +331,6 @@ function convertToMp3(inputPath, outputPath) {
   })
 }
 
-function formatDiarizedTranscript(segments) {
-  const speakerMap = {}
-  let speakerCount = 0
-  let result = ''
-  let currentSpeaker = null
-
-  for (const segment of segments) {
-    const rawSpeaker = segment.speaker ?? null
-    if (!rawSpeaker) continue
-
-    if (!(rawSpeaker in speakerMap)) {
-      speakerCount++
-      speakerMap[rawSpeaker] = `Hablante ${speakerCount}`
-    }
-
-    const speaker = speakerMap[rawSpeaker]
-    const text = (segment.text || '').trim()
-    if (!text) continue
-
-    if (speaker !== currentSpeaker) {
-      if (result) result += '\n'
-      result += `[${speaker}]: ${text}`
-      currentSpeaker = speaker
-    } else {
-      result += ' ' + text
-    }
-  }
-
-  return result
-}
-
 async function transcribeChunk(filePath, groqApiKey, model, language) {
   const audioBuffer = await fs.readFile(filePath)
   const ext = path.extname(filePath).slice(1) || 'mp3'
@@ -356,7 +340,6 @@ async function transcribeChunk(filePath, groqApiKey, model, language) {
   formData.append('model', model || 'whisper-large-v3')
   if (language && language !== 'auto') formData.append('language', language)
   formData.append('response_format', 'verbose_json')
-  formData.append('diarize', 'true')
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 120000)
@@ -378,12 +361,7 @@ async function transcribeChunk(filePath, groqApiKey, model, language) {
   }
 
   const data = await response.json()
-
-  if (data.segments && data.segments.some((s) => s.speaker !== undefined)) {
-    return formatDiarizedTranscript(data.segments)
-  }
-
-  return data.text || ''
+  return { text: data.text || '', segments: Array.isArray(data.segments) ? data.segments : [] }
 }
 
 async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
@@ -427,11 +405,41 @@ async function transcribeAudio(filePath, groqApiKey, model, language, chunkDurat
     if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
-    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
-    return texts.join('\n\n')
+    const results = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
+    const text = results.map((r) => r.text).join('\n\n')
+    const segments = results.flatMap((r, i) => r.segments.map((s) => ({
+      ...s,
+      start: (s.start ?? 0) + i * chunkDurationSec,
+      end: (s.end ?? 0) + i * chunkDurationSec,
+    })))
+    return { text, segments }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
+}
+
+function mergeDualTrackSegments(tracks) {
+  const all = []
+  for (const { label, segments } of tracks) {
+    for (const segment of segments) {
+      const text = (segment.text || '').trim()
+      if (text) all.push({ label, start: segment.start ?? 0, text })
+    }
+  }
+  all.sort((a, b) => a.start - b.start)
+
+  let result = ''
+  let currentLabel = null
+  for (const { label, text } of all) {
+    if (label !== currentLabel) {
+      if (result) result += '\n'
+      result += `[${label}]: ${text}`
+      currentLabel = label
+    } else {
+      result += ' ' + text
+    }
+  }
+  return result
 }
 
 async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateName) {
@@ -478,7 +486,7 @@ async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateN
   return data.choices?.[0]?.message?.content || transcript
 }
 
-ipcMain.handle('transcription:run', async (_event, { filePath, language, candidateName }) => {
+ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
@@ -487,7 +495,28 @@ ipcMain.handle('transcription:run', async (_event, { filePath, language, candida
   const savedModel = config.transcriptionModel || 'whisper-large-v3'
   const model = VALID_MODELS.includes(savedModel) ? savedModel : 'whisper-large-v3'
   const chunkDuration = (config.chunkDuration && config.chunkDuration >= 5) ? config.chunkDuration : DEFAULT_CHUNK_DURATION_SEC
-  let text = await transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration)
+
+  const systemExists = systemFilePath
+    ? await fs.access(systemFilePath).then(() => true).catch(() => false)
+    : false
+
+  if (systemExists) {
+    // Mic y sistema se transcriben por separado (cada uno solo tiene una voz,
+    // así Whisper no tiene que separar audio solapado) y se combinan por
+    // orden de tiempo — sabemos con certeza quién es quién, no hace falta adivinar.
+    const [micResult, systemResult] = await Promise.all([
+      transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration),
+      transcribeAudio(systemFilePath, config.groqApiKey, model, language || 'auto', chunkDuration),
+    ])
+    const text = mergeDualTrackSegments([
+      { label: 'Entrevistador', segments: micResult.segments },
+      { label: candidateName || 'Candidato', segments: systemResult.segments },
+    ])
+    return { text: text || [micResult.text, systemResult.text].filter(Boolean).join('\n') }
+  }
+
+  const micResult = await transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration)
+  let text = micResult.text
 
   if (text.trim().length > 0) {
     text = await identifySpeakers(text, config.groqApiKey, config.summaryModel || 'llama-3.3-70b-versatile', candidateName || '').catch(() => text)
