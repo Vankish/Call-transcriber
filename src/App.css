@@ -2283,6 +2283,15 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   position: relative;
 }
 
+.rec-row--expandable { cursor: pointer; }
+.rec-row--expandable:hover { background: #f9fbff; }
+
+.rec-row-chevron {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.rec-row-chevron--open { transform: rotate(-180deg); }
+
 .rec-row-accent {
   width: 4px;
   background: #2563eb;
@@ -2314,6 +2323,14 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   font-size: 12px;
   font-weight: 400;
   color: #808080;
+}
+
+.rec-row-warning {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #b45309;
+  margin-top: 2px;
 }
 
 .rec-row-edit-wrap { display: flex; align-items: center; gap: 4px; }
