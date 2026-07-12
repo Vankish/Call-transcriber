@@ -563,6 +563,16 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 /* ── Candidates table ────────────────────────────────────────────────────── */
 .candidates-table { display: flex; flex-direction: column; gap: 8px; }
 
+.candidates-table--grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), 1fr);
+  align-items: stretch;
+}
+.candidates-table--grid .ctr { flex-direction: column; align-items: flex-start; gap: 8px; }
+.candidates-table--grid .ctr-meta { white-space: normal; }
+.candidates-table--grid .ctr-actions { width: 100%; justify-content: flex-end; }
+.candidates-table--grid .ctr-open { align-self: flex-end; }
+
 .ctr {
   display: flex;
   align-items: center;
@@ -1573,6 +1583,44 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   gap: 12px;
 }
 
+.proj-list--grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), 1fr);
+  align-items: stretch;
+}
+.proj-list--grid .plc { flex-direction: column; }
+.proj-list--grid .plc-accent { width: 100%; height: 4px; min-width: 0; }
+.proj-list--grid .plc-bottom { flex-direction: column; align-items: stretch; gap: 12px; }
+.proj-list--grid .plc-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 12px; width: 100%; }
+.proj-list--grid .plc-actions { width: 100%; }
+.proj-list--grid .plc-open-btn { flex: 1; text-align: center; }
+
+/* ── Vista lista/cuadrícula (proyectos, perfiles) ────────────────────────── */
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: #f3f4f6;
+  border-radius: 8px;
+}
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.view-toggle-btn:hover { color: #374151; }
+.view-toggle-btn--active { background: #fff; color: var(--primary); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+
 .plc {
   display: flex;
   background: #fff;
@@ -2523,102 +2571,6 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   padding: 8px;
 }
 
-.proj-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.proj-list-card {
-  display: flex;
-  align-items: stretch;
-  background: #ffffff;
-  border: 1px solid #bfdbfe;
-  border-radius: 0;
-  min-height: 96px;
-  overflow: hidden;
-  cursor: pointer;
-  transition: box-shadow 0.15s;
-}
-
-.proj-list-card:hover { box-shadow: 0 2px 8px rgba(37,99,235,0.10); }
-
-.proj-list-card-accent {
-  width: 4px;
-  background: #2563eb;
-  flex-shrink: 0;
-}
-
-.proj-list-card-body {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 16px 20px;
-  flex: 1;
-  min-width: 0;
-}
-
-.proj-list-card-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.proj-list-card-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #141414;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.proj-list-card-meta {
-  font-size: 13px;
-  color: #808080;
-}
-
-.proj-list-card-stats {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.proj-list-card-badge {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.proj-list-card-badge--active { background: #e0f5ea; color: #1a9966; }
-.proj-list-card-badge--closed { background: #f3f4f6; color: #6b7280; }
-
-.proj-list-card-btn {
-  flex-shrink: 0;
-  height: 32px;
-  padding: 0 16px;
-  border: none;
-  border-radius: 6px;
-  background: #2563eb;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.proj-list-card-btn:hover { background: #1d4ed8; }
-
-.proj-list-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
 /* ── Pill tabs ───────────────────────────────────────────────────────────── */
 .profile-tabs-pill {
   display: flex;
@@ -3417,6 +3369,12 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   margin-bottom: 16px;
 }
 
+.proj-section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .proj-section-title {
   font-size: 16px;
   font-weight: 700;
@@ -3430,6 +3388,30 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   flex-direction: column;
   gap: 10px;
 }
+
+.pdc-list--grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), 1fr);
+  align-items: stretch;
+}
+.pdc-list--grid .pdc-row { flex-direction: column; }
+.pdc-list--grid .pdc-row-accent { display: none; }
+.pdc-list--grid .pdc-row-body { flex-direction: column; align-items: flex-start; gap: 8px; }
+.pdc-list--grid .pdc-row-meta { white-space: normal; }
+.pdc-list--grid .pdc-row-actions { width: 100%; justify-content: flex-end; }
+.pdc-row-avatar {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #DBEAFE;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  align-items: center;
+  justify-content: center;
+}
+.pdc-list--grid .pdc-row-avatar { display: flex; }
 
 .pdc-row {
   display: flex;
