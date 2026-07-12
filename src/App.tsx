@@ -119,6 +119,8 @@ const StarIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="non
 const DocIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
 const ClipboardIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
 const CameraIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+const ListViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+const GridViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
 
 const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[] }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
@@ -188,6 +190,17 @@ const EmptyState = ({ icon, title, sub, btnLabel, onBtn }: { icon?: React.ReactN
   </div>
 )
 
+const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: 'list' | 'grid') => void }) => (
+  <div className="view-toggle">
+    <button type="button" className={`view-toggle-btn${mode === 'list' ? ' view-toggle-btn--active' : ''}`} title="Lista de detalles" onClick={() => onChange('list')}>
+      <ListViewIcon /> Lista de detalles
+    </button>
+    <button type="button" className={`view-toggle-btn${mode === 'grid' ? ' view-toggle-btn--active' : ''}`} title="Cuadrícula" onClick={() => onChange('grid')}>
+      <GridViewIcon /> Cuadrícula
+    </button>
+  </div>
+)
+
 function App() {
   // ── Core data ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([])
@@ -204,6 +217,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
   const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'active' | 'closed'>('all')
+  const [projectsViewMode, setProjectsViewMode] = useState<'list' | 'grid'>('list')
+  const [profilesViewMode, setProfilesViewMode] = useState<'list' | 'grid'>('list')
 
   // ── Interview selection ────────────────────────────────────────────────
   const [selectedInterviewId, setSelectedInterviewId] = useState<string | null>(null)
@@ -1339,9 +1354,10 @@ function App() {
               className={`dash-filter-btn${dashFilter === 'closed' ? ' dash-filter-btn--on' : ''}`}
               onClick={() => setDashFilter('closed')}
             >Cerrados</button>
+            <ViewToggle mode={projectsViewMode} onChange={setProjectsViewMode} />
           </div>
 
-          <div className="proj-list">
+          <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.length === 0 ? (
               projects.length === 0
                 ? <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
@@ -1468,6 +1484,7 @@ function App() {
             <button type="button" className={`proj-filter-btn${projectStatusFilter === 'active' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'active' ? 'all' : 'active')}>Activos</button>
             <button type="button" className={`proj-filter-btn${projectStatusFilter === 'closed' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'closed' ? 'all' : 'closed')}>Cerrados</button>
           </div>
+          <ViewToggle mode={projectsViewMode} onChange={setProjectsViewMode} />
         </div>
         {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para "${projectSearchQuery}"` : ''}</p>}
         {filteredProjects.length === 0 ? (
@@ -1475,7 +1492,7 @@ function App() {
             ? <EmptyState title="Sin resultados" sub="No hay proyectos que coincidan con los filtros aplicados." />
             : <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
         ) : (
-          <div className="proj-list">
+          <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.map(p => {
               const cCnt = candidates.filter(c => c.projectId === p.id).length
               const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
@@ -1696,7 +1713,10 @@ function App() {
         {/* Section header */}
         <div className="proj-section-header">
           <h3 className="proj-section-title">Perfiles del proceso</h3>
-          <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>Nuevo perfil</button>
+          <div className="proj-section-header-actions">
+            <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
+            <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>Nuevo perfil</button>
+          </div>
         </div>
 
         {/* Search */}
@@ -1711,7 +1731,7 @@ function App() {
             ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
             : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas" btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
         ) : (
-          <div className="pdc-list">
+          <div className={`pdc-list${profilesViewMode === 'grid' ? ' pdc-list--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, filteredCandidates.length) } as React.CSSProperties : undefined}>
             {filteredCandidates.map(c => {
               const ci = interviews.filter(i => i.candidateId === c.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
               const last = ci[0]
@@ -1724,6 +1744,7 @@ function App() {
                 <div key={c.id} className="pdc-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                   <div className="pdc-row-accent" />
                   <div className="pdc-row-body">
+                    <div className="pdc-row-avatar">{initials(c.name)}</div>
                     <div className="pdc-row-info">
                       <span className="pdc-row-name">{c.name}</span>
                       <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fs(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
@@ -1763,6 +1784,7 @@ function App() {
       <div className="screen-content">
         <div className="content-header">
           <div><h2>Perfiles</h2><p className="screen-sub">{candidates.length} perfil{candidates.length !== 1 ? 'es' : ''}</p></div>
+          <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
@@ -1774,7 +1796,7 @@ function App() {
             ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
             : <EmptyState icon={<UsersIcon />} title="Sin perfiles" sub="Los perfiles aparecerán aquí cuando los añadas a un proyecto." />
         ) : (
-          <div className="candidates-table">
+          <div className={`candidates-table${profilesViewMode === 'grid' ? ' candidates-table--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, allCandidates.length) } as React.CSSProperties : undefined}>
             {allCandidates.map(c => {
               const project = projects.find(p => p.id === c.projectId)
               const ci = interviews.filter(i => i.candidateId === c.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
