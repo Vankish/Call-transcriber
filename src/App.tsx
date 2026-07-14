@@ -134,6 +134,12 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
     videoFilePath: i.videoFilePath ?? null,
     systemAudioFilePath: i.systemAudioFilePath ?? null,
     captureSource: i.captureSource ?? 'none',
+    // Una entrevista con status 'recording'/'paused' solo puede venir de una sesión
+    // anterior que se cerró (crash, cierre forzado) antes de llegar a parar la
+    // grabación — al arrancar la app no existe ningún MediaRecorder real detrás.
+    // Sin esto, la pantalla de "grabando" se queda bloqueada para siempre (solo se
+    // puede pausar, nunca parar, porque no hay grabador al que llamar .stop()).
+    status: (i.status === 'recording' || i.status === 'paused') ? 'stopped' : i.status,
     transcriptionStatus: i.transcriptionStatus === 'transcribing' ? 'error'
       : i.transcriptionStatus ?? (i.transcriptOriginal && !i.transcriptOriginal.startsWith('Transcripcion pendiente') ? 'done' : 'pending'),
     summaryInstructions: i.summaryInstructions ?? '',
@@ -352,9 +358,7 @@ function App() {
   const videoMediaRecorderRef = useRef<MediaRecorder | null>(null)
   const videoChunkRef = useRef<Blob[]>([])
   const pendingVideoBlobRef = useRef<Blob | null>(null)
-  const systemMediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const systemChunkRef = useRef<Blob[]>([])
-  const pendingSystemBlobRef = useRef<Blob | null>(null)
+  const discardedInterviewIdsRef = useRef<Set<string>>(new Set())
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -750,7 +754,6 @@ function App() {
   const cleanupRecording = () => {
     mediaRecorderRef.current = null
     videoMediaRecorderRef.current = null
-    systemMediaRecorderRef.current = null
     micStreamRef.current?.getTracks().forEach(t => t.stop())
     systemStreamRef.current?.getTracks().forEach(t => t.stop())
     mixedStreamRef.current?.getTracks().forEach(t => t.stop())
@@ -771,43 +774,62 @@ function App() {
     try {
       setRecordingMessage('Solicitando permisos...')
       chunkRef.current = []
-      systemChunkRef.current = []
       videoChunkRef.current = []
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId } } })
+      // echoCancellation es clave cuando se graba sin auriculares: sin ella, la voz
+      // del interlocutor que sale por los altavoces se "filtra" de vuelta al micro,
+      // y esa fuga acaba etiquetada como [Entrevistador] al mezclarse con tu voz.
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: iv.micDeviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
       if (captureSystem) {
-        try { sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }); systemStreamRef.current = sysStream } catch { /* silent */ }
+        await window.desktopApp?.setCaptureMode?.(recordVideo)
+        try {
+          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+          systemStreamRef.current = sysStream
+        } catch (err) {
+          console.error('No se pudo capturar audio/vídeo de sistema:', err)
+        }
       }
       const hasSystemAudio = !!sysStream?.getAudioTracks().length
+      const videoTrack = sysStream?.getVideoTracks()[0] ?? null
+
+      if (captureSystem && !hasSystemAudio && !recordVideo) {
+        // Aviso inmediato (no esperar a ver el resultado en la transcripción):
+        // se sigue grabando solo con el micrófono, pero David tiene que saberlo YA.
+        toast('No se capturó el audio del interlocutor: solo se grabará tu micrófono', 'error')
+      }
+
+      if (recordVideo && !videoTrack) {
+        // El usuario canceló el selector de pantalla (o no eligió nada) en modo
+        // "Llamada entera". Sin pantalla no hay vídeo que grabar, así que abortamos
+        // del todo en vez de caer en una grabación de solo audio no pedida.
+        micStream.getTracks().forEach(t => t.stop())
+        sysStream?.getTracks().forEach(t => t.stop())
+        setRecordingMessage('Grabación cancelada.')
+        setInterviews(c => c.filter(i => i.id !== iv.id))
+        if (session) await supabase.from('interviews').delete().eq('id', iv.id)
+        return
+      }
+
       const qualityBitsPerSecond = ({ high: 128000, medium: 64000, low: 32000 } as Record<string, number>)[settingsRecordingQualityDraft] ?? 128000
 
-      // Mic y sistema se graban en pistas SEPARADAS (no mezcladas) para poder
-      // transcribir cada una por su lado y saber con certeza quién dijo qué,
-      // sin depender de que una IA lo adivine por el texto.
-      const recorder = new MediaRecorder(micStream, { audioBitsPerSecond: qualityBitsPerSecond })
+      // Mic y sistema se MEZCLAN en una sola pista (sistema de antes del 10 de julio):
+      // se graba y transcribe una única pista, y una IA adivina después quién dijo qué.
+      // El intento de separar mic/sistema en pistas propias se descartó por duplicar
+      // contenido entre pistas en llamadas reales — este es el sistema que sí funcionaba.
+      const ctx = new AudioContext(); audioContextRef.current = ctx
+      const dest = ctx.createMediaStreamDestination()
+      ctx.createMediaStreamSource(micStream).connect(dest)
+      if (hasSystemAudio) ctx.createMediaStreamSource(sysStream!).connect(dest)
+      mixedStreamRef.current = dest.stream
+
+      const recorder = new MediaRecorder(dest.stream, { audioBitsPerSecond: qualityBitsPerSecond })
       mediaRecorderRef.current = recorder
       activeInterviewIdRef.current = iv.id
 
-      let systemRecorder: MediaRecorder | null = null
-      if (hasSystemAudio) {
-        try {
-          const systemAudioOnlyStream = new MediaStream([sysStream!.getAudioTracks()[0]])
-          systemRecorder = new MediaRecorder(systemAudioOnlyStream, { audioBitsPerSecond: qualityBitsPerSecond })
-          systemRecorder.ondataavailable = e => { if (e.data.size > 0) systemChunkRef.current.push(e.data) }
-          systemMediaRecorderRef.current = systemRecorder
-        } catch { systemRecorder = null }
-      }
-
-      const videoTrack = sysStream?.getVideoTracks()[0] ?? null
       let videoRecorder: MediaRecorder | null = null
       if (recordVideo && videoTrack) {
-        // El vídeo sí lleva mic+sistema MEZCLADOS en una sola pista, para que se oiga todo al reproducirlo.
-        const ctx = new AudioContext(); audioContextRef.current = ctx
-        const dest = ctx.createMediaStreamDestination()
-        ctx.createMediaStreamSource(micStream).connect(dest)
-        if (hasSystemAudio) ctx.createMediaStreamSource(sysStream!).connect(dest)
-        mixedStreamRef.current = dest.stream
+        // El vídeo lleva la MISMA pista ya mezclada (mic + sistema), para que se oiga todo al reproducirlo.
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
         const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
         try {
@@ -820,6 +842,54 @@ function App() {
         } catch { videoRecorder = null }
       }
 
+      // Guarda a disco en cuanto la grabación para, SIN esperar a que el usuario
+      // confirme el modal de nombre de sesión — así el audio sobrevive aunque la
+      // app se cierre, casque, o el usuario descarte antes de confirmar (Bug #1).
+      const persistRecordingToDisk = async () => {
+        // OJO: los 2 blobs se leen y se "reservan" (refs a null) AQUÍ, síncronamente,
+        // antes de cualquier await. Si se leyeran uno a uno justo antes de usarlos,
+        // confirmar el modal rápido (handleConfirmSessionName) podría vaciar los refs
+        // ANTES de llegar a leer el de vídeo — perdiéndolo por una carrera.
+        const blob = pendingBlobRef.current
+        const videoBlob = pendingVideoBlobRef.current
+        pendingBlobRef.current = null; pendingVideoBlobRef.current = null
+
+        // Si el usuario descarta la grabación MIENTRAS este guardado está en curso
+        // (handleDiscardRecording marca iv.id en discardedInterviewIdsRef), no hay
+        // ya ninguna entrevista en la lista donde enganchar la ruta del archivo —
+        // en vez de dejarlo suelto en disco sin que nada lo referencie, se borra.
+        if (blob && window.desktopApp?.saveRecording) {
+          try {
+            const bytes = new Uint8Array(await blob.arrayBuffer())
+            const r = await window.desktopApp.saveRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, extension: getExt(pendingMimeTypeRef.current), format: settingsAudioFormatDraft, audioBytes: bytes })
+            if (discardedInterviewIdsRef.current.has(iv.id)) {
+              void window.desktopApp.deleteRecording?.({ filePath: r.filePath })
+            } else {
+              const fileName = r.filePath.split(/[\\/]/).pop() ?? r.filePath
+              updateInterview(iv.id, { recordingFilePath: fileName })
+            }
+          } catch { /* ignore */ }
+        }
+
+        if (videoBlob && window.desktopApp?.saveVideoRecording) {
+          try {
+            const videoBytes = new Uint8Array(await videoBlob.arrayBuffer())
+            const vr = await window.desktopApp.saveVideoRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, videoBytes })
+            if (discardedInterviewIdsRef.current.has(iv.id)) {
+              void window.desktopApp.deleteRecording?.({ filePath: vr.filePath })
+            } else {
+              const videoFileName = vr.filePath.split(/[\\/]/).pop() ?? vr.filePath
+              updateInterview(iv.id, { videoFilePath: videoFileName })
+              saveVideoPathCache(iv.id, videoFileName)
+            }
+          } catch { /* ignore */ }
+        }
+
+        const wasDiscarded = discardedInterviewIdsRef.current.has(iv.id)
+        discardedInterviewIdsRef.current.delete(iv.id)
+        if (!wasDiscarded && autoTranscribe) void handleTranscribe(iv.id)
+      }
+
       recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
       recorder.onstop = () => {
         const blob = new Blob(chunkRef.current, { type: recorder.mimeType })
@@ -827,26 +897,16 @@ function App() {
         pendingBlobRef.current = blob; pendingMimeTypeRef.current = recorder.mimeType
         if (activeInterviewIdRef.current) updateInterview(activeInterviewIdRef.current, { status: 'stopped', captureSource: src })
 
-        const finishStop = () => {
-          const vr = videoMediaRecorderRef.current
-          if (vr && vr.state !== 'inactive') {
-            vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); cleanupRecording() }
-            vr.stop()
-          } else {
-            cleanupRecording()
-          }
-        }
-        const sr = systemMediaRecorderRef.current
-        if (sr && sr.state !== 'inactive') {
-          sr.onstop = () => { pendingSystemBlobRef.current = new Blob(systemChunkRef.current, { type: sr.mimeType }); finishStop() }
-          sr.stop()
+        const vr = videoMediaRecorderRef.current
+        if (vr && vr.state !== 'inactive') {
+          vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); cleanupRecording(); void persistRecordingToDisk() }
+          vr.stop()
         } else {
-          finishStop()
+          cleanupRecording(); void persistRecordingToDisk()
         }
         setSessionNameDraft(''); setShowSessionNameModal(true)
       }
       recorder.start(1000)
-      systemRecorder?.start(1000)
       updateInterview(iv.id, { status: 'recording', captureSource: hasSystemAudio ? 'mic+system' : 'mic' })
       setRecordingMessage(hasSystemAudio ? 'Grabando micrófono + sistema.' : 'Grabando solo micrófono.')
     } catch { setRecordingMessage('No se pudo iniciar la grabación.'); cleanupRecording() }
@@ -900,11 +960,24 @@ function App() {
 
   const handleDiscardRecording = async () => {
     const iId = activeInterviewIdRef.current
-    pendingBlobRef.current = null
+    pendingBlobRef.current = null; pendingVideoBlobRef.current = null
     activeInterviewIdRef.current = null
     setShowSessionNameModal(false)
     setDiscardConfirming(false)
     if (iId) {
+      // Marca la entrevista como descartada: si persistRecordingToDisk todavía está
+      // a mitad de guardar el vídeo/audio de sistema en este momento, al terminar
+      // verá esta marca y borrará el archivo en vez de dejarlo huérfano en disco
+      // (la entrevista ya no existe para poder engancharle la ruta).
+      discardedInterviewIdsRef.current.add(iId)
+      // El audio (y vídeo/sistema, si los hay) ya se guardaron a disco al parar
+      // la grabación (persistRecordingToDisk), así que hay que borrarlos explícitamente.
+      const interview = interviews.find(i => i.id === iId)
+      if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+      if (interview?.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+      if (interview?.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+      saveVideoPathCache(iId, null)
+      saveSystemAudioPathCache(iId, null)
       setInterviews(c => c.filter(i => i.id !== iId))
       if (session) await supabase.from('interviews').delete().eq('id', iId)
     }
@@ -930,54 +1003,22 @@ function App() {
     r.stop()
   }
 
-  const handleConfirmSessionName = async () => {
-    const blob = pendingBlobRef.current; const iId = activeInterviewIdRef.current
-    if (!blob || !iId) return
+  // El audio/vídeo se guarda a disco en segundo plano en cuanto paró la grabación
+  // (ver persistRecordingToDisk en handleStartRecording), en paralelo a que se
+  // muestre este modal — puede que aún no haya terminado cuando el usuario confirma.
+  // Por eso aquí NO se tocan pendingBlobRef/pendingVideoBlobRef: hacerlo antes de
+  // que persistRecordingToDisk los lea provocaba perder el vídeo si se confirmaba
+  // el nombre demasiado rápido.
+  const handleConfirmSessionName = () => {
+    const iId = activeInterviewIdRef.current
+    if (!iId) return
+    const blob = pendingBlobRef.current
     const defaultName = `Entrevista ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
     const finalName = sessionNameDraft.trim() || defaultName
-    const iData = interviews.find(i => i.id === iId)
-    const url = URL.createObjectURL(blob)
-    setShowSessionNameModal(false); setDiscardConfirming(false); updateInterview(iId, { sessionName: finalName })
-    let filePath: string | null = null
-    if (iData && window.desktopApp?.saveRecording) {
-      try {
-        const bytes = new Uint8Array(await blob.arrayBuffer())
-        const cand = candidates.find(c => c.id === iData.candidateId)
-        const r = await window.desktopApp.saveRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, extension: getExt(pendingMimeTypeRef.current), format: settingsAudioFormatDraft, audioBytes: bytes })
-        filePath = r.filePath
-      } catch { /* ignore */ }
-    }
-    const fileName = filePath ? filePath.split(/[\\/]/).pop() ?? filePath : null
-    updateInterview(iId, { recordingUrl: url, recordingFilePath: fileName })
-    pendingBlobRef.current = null; toast('Grabación guardada')
-
-    const videoBlob = pendingVideoBlobRef.current
-    if (iData && videoBlob && window.desktopApp?.saveVideoRecording) {
-      try {
-        const videoBytes = new Uint8Array(await videoBlob.arrayBuffer())
-        const cand = candidates.find(c => c.id === iData.candidateId)
-        const vr = await window.desktopApp.saveVideoRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, videoBytes })
-        const videoFileName = vr.filePath.split(/[\\/]/).pop() ?? vr.filePath
-        updateInterview(iId, { videoFilePath: videoFileName })
-        saveVideoPathCache(iId, videoFileName)
-      } catch { /* ignore */ }
-    }
-    pendingVideoBlobRef.current = null
-
-    const systemBlob = pendingSystemBlobRef.current
-    if (iData && systemBlob && window.desktopApp?.saveSystemRecording) {
-      try {
-        const systemBytes = new Uint8Array(await systemBlob.arrayBuffer())
-        const cand = candidates.find(c => c.id === iData.candidateId)
-        const sr = await window.desktopApp.saveSystemRecording({ interviewId: iId, candidateName: cand?.name ?? 'candidata', createdAt: iData.createdAt, extension: getExt(systemBlob.type), audioBytes: systemBytes })
-        const systemFileName = sr.filePath.split(/[\\/]/).pop() ?? sr.filePath
-        updateInterview(iId, { systemAudioFilePath: systemFileName })
-        saveSystemAudioPathCache(iId, systemFileName)
-      } catch { /* ignore */ }
-    }
-    pendingSystemBlobRef.current = null
-
-    if (autoTranscribe && filePath) void handleTranscribe(iId)
+    setShowSessionNameModal(false); setDiscardConfirming(false)
+    updateInterview(iId, { sessionName: finalName, ...(blob ? { recordingUrl: URL.createObjectURL(blob) } : {}) })
+    activeInterviewIdRef.current = null
+    toast('Grabación guardada')
   }
 
   // ── Transcription / Summary ────────────────────────────────────────────
@@ -987,10 +1028,9 @@ function App() {
     const fullPath = resolveAudioPath(interview.recordingFilePath)
     if (!fullPath) return
     const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
-    const systemFullPath = interview.systemAudioFilePath ? resolveAudioPath(interview.systemAudioFilePath) : null
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
     try {
-      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemFullPath ?? undefined, language: language ?? txLang, candidateName })
+      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, language: language ?? txLang, candidateName })
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')

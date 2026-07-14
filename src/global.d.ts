@@ -93,6 +93,7 @@ interface Window {
     saveSystemRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
     onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
     pickCaptureSource: (sourceId: string | null) => Promise<{ ok: boolean }>
+    setCaptureMode: (wantsVideo: boolean) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>
     saveConfig: (payload: SaveConfigPayload) => Promise<SaveConfigResult>
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>
