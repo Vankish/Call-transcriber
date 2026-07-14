@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   saveSystemRecording: (payload) => ipcRenderer.invoke('recording:save-system', payload),
   onCaptureSources: (cb) => ipcRenderer.on('capture:sources', (_e, sources) => cb(sources)),
   pickCaptureSource: (sourceId) => ipcRenderer.invoke('capture:pick-source', sourceId),
+  setCaptureMode: (wantsVideo) => ipcRenderer.invoke('capture:set-mode', wantsVideo),
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (payload) => ipcRenderer.invoke('config:save', payload),
   transcribeAudio: (payload) => ipcRenderer.invoke('transcription:run', payload),
