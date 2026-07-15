@@ -531,7 +531,128 @@ async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateN
   return data.choices?.[0]?.message?.content || transcript
 }
 
-ipcMain.handle('transcription:run', async (_event, { filePath, language, candidateName }) => {
+// ── Separación determinista de hablantes por pistas ──────────────────────────
+// Cuando se graba con audio de sistema, además de la mezcla (mic+sistema) se guarda
+// una pista SOLO con el audio del sistema = voz limpia del interlocutor. Transcribiendo
+// ambas y conociendo qué pista es quién, ya NO hace falta que una IA adivine hablantes.
+//
+// Variante de transcribeChunk que devuelve los segmentos crudos (con marcas de tiempo)
+// en vez del texto ya formateado, para poder combinarlos entre pistas.
+async function transcribeChunkSegments(filePath, groqApiKey, model, language) {
+  const audioBuffer = await fs.readFile(filePath)
+  const ext = path.extname(filePath).slice(1) || 'mp3'
+  const blob = new Blob([audioBuffer], { type: `audio/${ext}` })
+  const formData = new FormData()
+  formData.append('file', blob, path.basename(filePath))
+  formData.append('model', model || 'whisper-large-v3')
+  if (language && language !== 'auto') formData.append('language', language)
+  formData.append('response_format', 'verbose_json')
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 120000)
+  let response
+  try {
+    response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${groqApiKey}` },
+      body: formData,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Error de Groq: ${errorText}`)
+  }
+
+  const data = await response.json()
+  const rawSegments = Array.isArray(data.segments) ? data.segments : []
+  const segments = filterHallucinatedSegments(rawSegments)
+  const text = segments.map((s) => (s.text || '').trim()).filter(Boolean).join(' ') || (data.text || '')
+  return { text, segments }
+}
+
+async function transcribeAudioSegments(filePath, groqApiKey, model, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
+  try {
+    const mp3Path = path.join(tmpDir, 'audio.mp3')
+    await convertToMp3(filePath, mp3Path)
+
+    const stat = await fs.stat(mp3Path)
+    if (stat.size <= GROQ_MAX_BYTES) {
+      return await transcribeChunkSegments(mp3Path, groqApiKey, model, language)
+    }
+
+    const durationSec = await getAudioDurationSec(mp3Path)
+    if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
+
+    const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
+    const results = await Promise.all(chunkPaths.map((p) => transcribeChunkSegments(p, groqApiKey, model, language)))
+    const text = results.map((r) => r.text).join('\n\n')
+    // Reajusta las marcas de tiempo de cada chunk a la línea temporal absoluta.
+    const segments = results.flatMap((r, i) => r.segments.map((s) => ({
+      ...s,
+      start: (s.start ?? 0) + i * chunkDurationSec,
+      end: (s.end ?? 0) + i * chunkDurationSec,
+    })))
+    return { text, segments }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+// Fracción de la duración de `seg` que solapa temporalmente con cualquier segmento de `others`.
+function segOverlapFraction(seg, others) {
+  const a0 = seg.start ?? 0
+  const a1 = seg.end ?? a0
+  const dur = Math.max(a1 - a0, 0.001)
+  let overlap = 0
+  for (const o of others) {
+    const b0 = o.start ?? 0
+    const b1 = o.end ?? b0
+    const lo = Math.max(a0, b0)
+    const hi = Math.min(a1, b1)
+    if (hi > lo) overlap += hi - lo
+  }
+  return overlap / dur
+}
+
+// Combina la mezcla (mic+sistema) con la pista limpia del sistema:
+//  · sistema  → [Candidato] (voz del interlocutor, ya aislada, se conserva entera)
+//  · mezcla   → [Entrevistador], PERO descartando los segmentos que solapan en el
+//    tiempo con la voz del sistema. Eso elimina el eco/duplicado (la voz del candidato
+//    que también aparece en la mezcla) — que fue justo lo que rompió el intento anterior.
+function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabel, candidateLabel) {
+  const rows = []
+  for (const s of systemSegments) {
+    const text = (s.text || '').trim()
+    if (text) rows.push({ start: s.start ?? 0, label: candidateLabel, text })
+  }
+  for (const s of mixedSegments) {
+    const text = (s.text || '').trim()
+    if (!text) continue
+    if (segOverlapFraction(s, systemSegments) > 0.5) continue // hablaba el candidato: ya está en la pista limpia
+    rows.push({ start: s.start ?? 0, label: interviewerLabel, text })
+  }
+  rows.sort((a, b) => a.start - b.start)
+
+  let result = ''
+  let currentLabel = null
+  for (const { label, text } of rows) {
+    if (label !== currentLabel) {
+      if (result) result += '\n'
+      result += `[${label}]: ${text}`
+      currentLabel = label
+    } else {
+      result += ' ' + text
+    }
+  }
+  return result
+}
+
+ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName }) => {
   const config = await readConfig()
   if (!config.groqApiKey) {
     throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
@@ -541,6 +662,29 @@ ipcMain.handle('transcription:run', async (_event, { filePath, language, candida
   const model = VALID_MODELS.includes(savedModel) ? savedModel : 'whisper-large-v3'
   const chunkDuration = (config.chunkDuration && config.chunkDuration >= 5) ? config.chunkDuration : DEFAULT_CHUNK_DURATION_SEC
 
+  const systemExists = systemFilePath
+    ? await fs.access(systemFilePath).then(() => true).catch(() => false)
+    : false
+
+  // CAMINO NUEVO: separación determinista por pistas (cuando existe la pista de sistema).
+  if (systemExists) {
+    try {
+      const [mixed, system] = await Promise.all([
+        transcribeAudioSegments(filePath, config.groqApiKey, model, language || 'auto', chunkDuration),
+        transcribeAudioSegments(systemFilePath, config.groqApiKey, model, language || 'auto', chunkDuration),
+      ])
+      // Etiquetas fijas [Entrevistador] / [Candidato]: el resumen depende de ellas.
+      const merged = mergeSeparatedTranscript(mixed.segments, system.segments, 'Entrevistador', 'Candidato')
+      const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
+      return { text }
+    } catch (err) {
+      // Si algo falla en la vía separada, caemos al camino clásico de una sola pista
+      // en vez de romper la transcripción.
+      console.error('Fallo en la separación por pistas, usando pista única:', err)
+    }
+  }
+
+  // CAMINO CLÁSICO (sin cambios): una sola pista mezclada + diarización por IA.
   let text = await transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration)
 
   if (text.trim().length > 0) {
