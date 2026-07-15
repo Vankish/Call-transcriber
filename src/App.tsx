@@ -322,7 +322,8 @@ function App() {
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
   const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null)
   const [_playbackProgress, setPlaybackProgress] = useState(0)
-  const [_playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
+  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
+  const [playbackDuration, setPlaybackDuration] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
 
   // ── Auth ───────────────────────────────────────────────────────────────
@@ -1062,7 +1063,7 @@ function App() {
   // ── Playback ───────────────────────────────────────────────────────────
   const stopAudio = () => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; audioRef.current = null }
-    setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0)
+    setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0); setPlaybackDuration(0)
   }
 
   const handleTogglePlayback = (interview: Interview) => {
@@ -1072,12 +1073,69 @@ function App() {
     if (playingInterviewId === interview.id) { stopAudio(); return }
     stopAudio()
     const audio = new Audio(src); audio.playbackRate = playbackRate; audioRef.current = audio
+    setPlaybackDuration(interview.durationSec > 0 ? interview.durationSec : 0)
+
+    // Los archivos de MediaRecorder (webm/opus) reportan duration = Infinity hasta que se
+    // "busca" hasta el final. Mientras sondeamos, no queremos actualizar el tiempo mostrado.
+    let probing = false
+    const applyDuration = () => { if (isFinite(audio.duration) && audio.duration > 0) setPlaybackDuration(audio.duration) }
+
     audio.ontimeupdate = () => {
-      const total = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : interview.durationSec
-      if (total > 0) { setPlaybackProgress(Math.min(audio.currentTime / total, 1)); setPlaybackCurrentTime(audio.currentTime) }
+      if (probing) return
+      setPlaybackCurrentTime(audio.currentTime)
+      const d = audio.duration
+      if (isFinite(d) && d > 0) setPlaybackProgress(Math.min(audio.currentTime / d, 1))
     }
-    audio.onended = audio.onerror = () => { setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0) }
+    audio.ondurationchange = applyDuration
+    audio.onloadedmetadata = () => {
+      if (isFinite(audio.duration) && audio.duration > 0) { applyDuration(); return }
+      // Forzar el cálculo de la duración real con un seek al final, una sola vez.
+      probing = true
+      const onProbe = () => {
+        audio.removeEventListener('timeupdate', onProbe)
+        probing = false
+        audio.currentTime = 0
+        applyDuration()
+      }
+      audio.addEventListener('timeupdate', onProbe)
+      audio.currentTime = 1e101
+    }
+    audio.onended = audio.onerror = () => { setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0); setPlaybackDuration(0) }
     void audio.play(); setPlayingInterviewId(interview.id)
+  }
+
+  // Busca (adelanta/atrasa) el audio en reproducción a un segundo concreto
+  const handleSeek = (sec: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const total = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : playbackDuration
+    const clamped = Math.max(0, total > 0 ? Math.min(sec, total) : sec)
+    audio.currentTime = clamped
+    setPlaybackCurrentTime(clamped)
+    if (total > 0) setPlaybackProgress(Math.min(clamped / total, 1))
+  }
+
+  // Barra de tiempo/scrubber que aparece junto al play de la entrevista en reproducción.
+  // full = ocupa todo el ancho de la tarjeta (para los paneles estrechos de transcripción/resumen)
+  const renderSeekBar = (iv: Interview, full = false) => {
+    if (playingInterviewId !== iv.id) return null
+    const total = playbackDuration > 0 ? playbackDuration : iv.durationSec
+    return (
+      <div className={`seek-bar${full ? ' seek-bar--full' : ''}`} onClick={e => e.stopPropagation()}>
+        <span className="seek-time">{fmt(Math.floor(playbackCurrentTime))}</span>
+        <input
+          type="range"
+          className="seek-range"
+          min={0}
+          max={total > 0 ? total : 0}
+          step={0.1}
+          value={total > 0 ? Math.min(playbackCurrentTime, total) : 0}
+          onChange={e => handleSeek(parseFloat(e.target.value))}
+          title="Adelantar o atrasar el audio"
+        />
+        <span className="seek-time">{total > 0 ? fmt(Math.floor(total)) : '--:--'}</span>
+      </div>
+    )
   }
 
   // ── CRUD ───────────────────────────────────────────────────────────────
@@ -2025,6 +2083,7 @@ function App() {
                   {(iv.recordingUrl ?? iv.recordingFilePath) && (
                     <button type="button" className="btn-icon" title="Reproducir" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                   )}
+                  {renderSeekBar(iv)}
                   <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fd(iv.createdAt)) }}><PencilIcon /></button>
                   <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? '¿Confirmar?' : 'Eliminar'} onClick={() => handleDeleteInterview(iv.id)}>
                     {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}
@@ -2101,6 +2160,7 @@ function App() {
                     {iv.transcriptionStatus === 'transcribing' && <span className="spinner" style={{ width: 12, height: 12 }} />}
                   </div>
                 </div>
+                {renderSeekBar(iv, true)}
               </div>
             )
           })}
@@ -2230,10 +2290,13 @@ function App() {
                 </div>
                 <div className="trx-list-item-bottom">
                   <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? <><DotFilled /> Con resumen</> : <><DotRing /> Sin resumen</>}</span>
-                  {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                    <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
-                  )}
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {(iv.recordingUrl ?? iv.recordingFilePath) && (
+                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                    )}
+                  </div>
                 </div>
+                {renderSeekBar(iv, true)}
               </div>
             )
           })}
