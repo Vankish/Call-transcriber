@@ -112,7 +112,8 @@ const DownloadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill=
 const UploadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
 const UsersIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
 const KeyIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
-const MicIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+const MicIcon = ({ size = 16 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', flexShrink: 0 }}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+const VideoIcon = ({ size = 16 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', flexShrink: 0 }}><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
 const LockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
 const BellIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
 const StarIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
@@ -1522,7 +1523,7 @@ function App() {
               const pCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'pending').length
               const isClosed = p.status === 'closed'
               return (
-                <div key={p.id} className={`plc${isClosed ? ' plc--closed' : ''}`}>
+                <div key={p.id} className={`plc plc--clickable${isClosed ? ' plc--closed' : ''}`} onClick={() => goToProject(p.id)}>
                   <div className="plc-accent" />
                   <div className="plc-body">
                     <div className="plc-top">
@@ -1530,7 +1531,7 @@ function App() {
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
-                      <div className="plc-top-right">
+                      <div className="plc-top-right" onClick={e => e.stopPropagation()}>
                         <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
@@ -1547,7 +1548,7 @@ function App() {
                           <span className="plc-stat-lbl">pendientes</span>
                         </div>
                       </div>
-                      <div className="plc-actions">
+                      <div className="plc-actions" onClick={e => e.stopPropagation()}>
                         <button
                           type="button"
                           className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`}
@@ -1653,7 +1654,7 @@ function App() {
               const pCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id && i.transcriptionStatus === 'pending').length
               const isClosed = p.status === 'closed'
               return (
-                <div key={p.id} className={`plc${isClosed ? ' plc--closed' : ''}`}>
+                <div key={p.id} className={`plc plc--clickable${isClosed ? ' plc--closed' : ''}`} onClick={() => goToProject(p.id)}>
                   <div className="plc-accent" />
                   <div className="plc-body">
                     <div className="plc-top">
@@ -1661,7 +1662,7 @@ function App() {
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
-                      <div className="plc-top-right">
+                      <div className="plc-top-right" onClick={e => e.stopPropagation()}>
                         <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
@@ -1678,7 +1679,7 @@ function App() {
                           <span className="plc-stat-lbl">pendientes</span>
                         </div>
                       </div>
-                      <div className="plc-actions">
+                      <div className="plc-actions" onClick={e => e.stopPropagation()}>
                         <button type="button" className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`} onClick={() => goToProject(p.id)}>
                           {isClosed ? 'Ver proyecto' : 'Abrir proyecto'}
                         </button>
@@ -2123,7 +2124,7 @@ function App() {
                   </div>
                   <span className="rec-row-meta">
                     {fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}
-                    {iv.videoFilePath ? <> · 🎥 vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
+                    {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
                   </span>
                   {iv.captureSource === 'mic' && (
                     <span className="rec-row-warning" title="No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.">
@@ -2154,7 +2155,7 @@ function App() {
               </div>
               {iv.videoFilePath && expandedVideoId === iv.id && (
                 <div className="video-player-card" onClick={e => e.stopPropagation()}>
-                  <div className="video-player-title">🎥 Vídeo de la grabación</div>
+                  <div className="video-player-title"><VideoIcon size={15} /> Vídeo de la grabación</div>
                   <video
                     className="video-player-el"
                     controls
@@ -2176,7 +2177,7 @@ function App() {
                       <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
                     </label>
                   </div>
-                  <span className="video-player-sub">🎥 Vídeo con audio  ·  {fs(iv.createdAt)}  ·  {fmt(iv.durationSec)}  ·  guardado en tu equipo</span>
+                  <span className="video-player-sub"><VideoIcon size={12} /> Vídeo con audio  ·  {fs(iv.createdAt)}  ·  {fmt(iv.durationSec)}  ·  guardado en tu equipo</span>
                 </div>
               )}
               </div>
@@ -2191,8 +2192,11 @@ function App() {
   const renderTranscriptTab = () => {
     const wordCount = transcriptDraft.trim() ? transcriptDraft.trim().split(/\s+/).length : 0
     const readingMin = Math.ceil(wordCount / 150)
+    // Si la entrevista seleccionada es un vídeo, se muestra el vídeo en el centro y la
+    // transcripción en una columna estrecha a la derecha (scrollable), para verlo y leer a la vez.
+    const hasVideo = !!selectedInterview?.videoFilePath
     return (
-      <div className="transcript-layout-v2">
+      <div className={`transcript-layout-v2${hasVideo ? ' transcript-layout-v2--with-video' : ''}`}>
         <aside className="trx-list-panel">
           {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
             const hasDone = iv.transcriptionStatus === 'done'
@@ -2221,6 +2225,34 @@ function App() {
           })}
         </aside>
         <div className="trx-separator" />
+        {hasVideo && selectedInterview && (
+          <>
+            <div className="trx-video-panel">
+              <video
+                className="trx-video-el"
+                controls
+                src={resolveVideoUrl(selectedInterview.videoFilePath) ?? undefined}
+                ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume } }}
+              />
+              <div className="video-player-controls">
+                <label className="video-player-ctrl">Velocidad
+                  <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
+                    <option value="0.5">0.5×</option>
+                    <option value="0.75">0.75×</option>
+                    <option value="1">1×</option>
+                    <option value="1.25">1.25×</option>
+                    <option value="1.5">1.5×</option>
+                    <option value="2">2×</option>
+                  </select>
+                </label>
+                <label className="video-player-ctrl">Volumen
+                  <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
+                </label>
+              </div>
+            </div>
+            <div className="trx-separator" />
+          </>
+        )}
         <div className="trx-editor-panel">
           {selectedInterview ? (
             <>
@@ -2791,7 +2823,7 @@ function App() {
               <video ref={pipVideoRef} className="rec-pip-video" autoPlay muted playsInline />
               <span className="rec-pip-live-badge">● EN VIVO</span>
             </div>
-            <span className="rec-pip-caption">🎥 Grabando ventana: {captureWindowLabel}</span>
+            <span className="rec-pip-caption"><VideoIcon size={13} /> Grabando ventana: {captureWindowLabel}</span>
           </div>
         )}
         <div className="rec-screen-content">
@@ -3217,7 +3249,7 @@ function App() {
                 className={`rec-option-card${!pendingRecordVideo ? ' rec-option-card--active' : ''}`}
                 onClick={() => setPendingRecordVideo(false)}
               >
-                <span className="rec-option-icon">🎙️</span>
+                <span className="rec-option-icon"><MicIcon size={22} /></span>
                 <span className="rec-option-title">Solo audio</span>
                 <span className="rec-option-desc">Graba solo el sonido: tu micro + el audio de la llamada.</span>
               </button>
@@ -3226,13 +3258,13 @@ function App() {
                 className={`rec-option-card${pendingRecordVideo ? ' rec-option-card--active' : ''}`}
                 onClick={() => setPendingRecordVideo(true)}
               >
-                <span className="rec-option-icon">🎥</span>
+                <span className="rec-option-icon"><VideoIcon size={22} /></span>
                 <span className="rec-option-title">Llamada entera (vídeo + audio)</span>
                 <span className="rec-option-desc">Graba también la pantalla. Al empezar eliges qué ventana.</span>
               </button>
             </div>
             {pendingRecordVideo && (
-              <div className="rec-video-banner">🎥 Al empezar se te pedirá elegir qué pantalla o ventana grabar.</div>
+              <div className="rec-video-banner"><VideoIcon size={14} /> Al empezar se te pedirá elegir qué pantalla o ventana grabar.</div>
             )}
             <div className="modal-field" style={{ marginTop: 16 }}>
               <span className="modal-field-label">Micrófono</span>
