@@ -180,10 +180,13 @@ if (!gotTheLock) {
         return
       }
 
+      // fetchWindowIcons desactivado: el icono no se envía ni se usa en ningún sitio
+      // de la UI (solo se manda id/name/thumbnail) — pedirlo era trabajo tirado que
+      // solo alargaba la espera de este selector, tanto más cuantas más ventanas hay abiertas.
       const sources = await desktopCapturer.getSources({
         types: ['window', 'screen'],
         thumbnailSize: { width: 300, height: 200 },
-        fetchWindowIcons: true,
+        fetchWindowIcons: false,
       })
 
       if (mainWindowRef && !mainWindowRef.isDestroyed()) {
@@ -191,6 +194,7 @@ if (!gotTheLock) {
           id: s.id,
           name: s.name,
           thumbnail: s.thumbnail.isEmpty() ? null : s.thumbnail.toDataURL(),
+          type: s.id.startsWith('screen:') ? 'screen' : 'window',
         })))
       }
 
