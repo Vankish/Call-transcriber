@@ -22,6 +22,7 @@ type CaptureSourceOption = {
   id: string
   name: string
   thumbnail: string | null
+  type: 'screen' | 'window'
 }
 
 type GetConfigResult = {
