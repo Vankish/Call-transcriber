@@ -372,6 +372,7 @@ function App() {
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
   const [captureSources, setCaptureSources] = useState<CaptureSourceOption[] | null>(null)
+  const [sourcePickerTab, setSourcePickerTab] = useState<'screen' | 'window'>('screen')
   const [videoPlaybackRate, setVideoPlaybackRate] = useState(1)
   const [videoVolume, setVideoVolume] = useState(1)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -709,7 +710,10 @@ function App() {
 
   // ── Screen/window picker (Electron getDisplayMedia) ────────────────────
   useEffect(() => {
-    window.desktopApp?.onCaptureSources?.(sources => setCaptureSources(sources))
+    window.desktopApp?.onCaptureSources?.(sources => {
+      setCaptureSources(sources)
+      setSourcePickerTab(sources.some(s => s.type === 'screen') ? 'screen' : 'window')
+    })
   }, [])
 
   const pickCaptureSource = (sourceId: string | null) => {
@@ -1173,6 +1177,20 @@ function App() {
     }
     audio.onended = audio.onerror = () => { setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0); setPlaybackDuration(0) }
     void audio.play(); setPlayingInterviewId(interview.id)
+  }
+
+  // Los vídeos grabados (MediaRecorder → webm) reportan duration=Infinity hasta que se
+  // "busca" hasta el final una vez — mismo problema que ya se arregló para el audio
+  // (ver handleTogglePlayback). Sin esto, la barra de progreso NATIVA del <video controls>
+  // no puede calcular la posición y no se mueve hasta que el usuario hace clic manualmente
+  // en la barra (eso fuerza a Chromium a resolver la duración real de rebote).
+  const fixVideoDuration = (el: HTMLVideoElement) => {
+    el.onloadedmetadata = () => {
+      if (isFinite(el.duration) && el.duration > 0) return
+      const onProbe = () => { el.removeEventListener('timeupdate', onProbe); el.currentTime = 0 }
+      el.addEventListener('timeupdate', onProbe)
+      el.currentTime = 1e101
+    }
   }
 
   // Busca (adelanta/atrasa) el audio en reproducción a un segundo concreto
@@ -2175,7 +2193,7 @@ function App() {
                     className="video-player-el"
                     controls
                     src={resolveVideoUrl(iv.videoFilePath) ?? undefined}
-                    ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume } }}
+                    ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume; fixVideoDuration(el) } }}
                   />
                   <div className="video-player-controls">
                     <label className="video-player-ctrl">Velocidad
@@ -3328,20 +3346,27 @@ function App() {
               <button type="button" className="modal-close" onClick={() => pickCaptureSource(null)}>✕</button>
             </div>
             <div className="modal-header-divider" />
-            {captureSources.length === 0 ? (
-              <p className="tab-note">No se encontraron ventanas o pantallas disponibles.</p>
-            ) : (
-              <div className="source-picker-grid">
-                {captureSources.map(s => (
-                  <button key={s.id} type="button" className="source-picker-item" onClick={() => pickCaptureSource(s.id)}>
-                    <span className="source-picker-thumb">
-                      {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback">🖥️</span>}
-                    </span>
-                    <span className="source-picker-name">{s.name || 'Sin nombre'}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="source-picker-tabs">
+              <button type="button" className={`source-picker-tab${sourcePickerTab === 'screen' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('screen')}>Pantalla</button>
+              <button type="button" className={`source-picker-tab${sourcePickerTab === 'window' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('window')}>Ventana</button>
+            </div>
+            {(() => {
+              const filtered = captureSources.filter(s => s.type === sourcePickerTab)
+              return filtered.length === 0 ? (
+                <p className="tab-note">{sourcePickerTab === 'screen' ? 'No se encontraron pantallas disponibles.' : 'No se encontraron ventanas disponibles.'}</p>
+              ) : (
+                <div className="source-picker-grid">
+                  {filtered.map(s => (
+                    <button key={s.id} type="button" className="source-picker-item" onClick={() => pickCaptureSource(s.id)}>
+                      <span className="source-picker-thumb">
+                        {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback">🖥️</span>}
+                      </span>
+                      <span className="source-picker-name">{s.name || 'Sin nombre'}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => pickCaptureSource(null)}>Cancelar</button>

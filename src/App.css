@@ -4735,18 +4735,42 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 /* ── Selector de ventana/pantalla a compartir ────────────────────────────── */
 .source-picker-box { width: 620px; max-width: 94vw; }
+.source-picker-tabs {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.source-picker-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.source-picker-tab--active {
+  border-color: var(--primary);
+  background: #eff6ff;
+  color: var(--primary);
+}
 .source-picker-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   max-height: 400px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 .source-picker-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: 5px;
+  padding: 6px;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: #fff;
@@ -4760,13 +4784,13 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 120px;
+  height: 80px;
   background: #1e293b;
   border-radius: 6px;
   overflow: hidden;
 }
 .source-picker-thumb img { width: 100%; height: 100%; object-fit: contain; }
-.source-picker-thumb-fallback { font-size: 28px; }
+.source-picker-thumb-fallback { font-size: 20px; }
 .source-picker-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Barra de tiempo del reproductor (scrubber) ──────────────────────────── */
