@@ -797,7 +797,12 @@ function App() {
       if (captureSystem) {
         await window.desktopApp?.setCaptureMode?.(recordVideo)
         try {
-          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+          // frameRate baja a propósito: esto es una captura de pantalla de referencia para
+          // revisar la llamada después, no vídeo de acción — grabar a la frecuencia nativa
+          // del monitor (30/60/144Hz) hace que Chromium tenga que codificar vídeo por software
+          // a esa misma cadencia durante TODA la llamada, y eso es lo que se comía la CPU/GPU
+          // y acababa notándose en todo el PC en llamadas largas.
+          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: { frameRate: { ideal: 8, max: 12 } } })
           systemStreamRef.current = sysStream
         } catch (err) {
           console.error('No se pudo capturar audio/vídeo de sistema:', err)
@@ -822,6 +827,16 @@ function App() {
         setInterviews(c => c.filter(i => i.id !== iv.id))
         if (session) await supabase.from('interviews').delete().eq('id', iv.id)
         return
+      }
+
+      if (!recordVideo && videoTrack) {
+        // getDisplayMedia obliga a pedir vídeo para poder acceder al audio "loopback"
+        // del sistema, pero si no vamos a grabar pantalla esa pista de captura se queda
+        // viva sin nadie consumiéndola. Chromium sigue capturando fotogramas de la
+        // pantalla entera igualmente, y eso va acumulando carga de CPU/GPU cuanto más
+        // dura la llamada — el PC entero se nota más lento y se llega a congelar en
+        // llamadas largas. Al no necesitar los fotogramas, se para la pista ya mismo.
+        videoTrack.stop()
       }
 
       const qualityBitsPerSecond = ({ high: 128000, medium: 64000, low: 32000 } as Record<string, number>)[settingsRecordingQualityDraft] ?? 128000
