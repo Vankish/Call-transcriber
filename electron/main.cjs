@@ -13,6 +13,7 @@ const {
   shell,
 } = require('electron')
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
+const providers = require('./providers.cjs')
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
 
@@ -123,6 +124,11 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     autoHideMenuBar: true,
+    // Empaquetada, el icono va incrustado en el .exe por electron-builder. En
+    // desarrollo no hay .exe propio, así que sin esto saldría el logo genérico
+    // de Electron. build/icon.ico no se empaqueta (no está en build.files), de
+    // ahí que solo se pase en dev.
+    ...(isDev ? { icon: path.join(__dirname, '..', 'build', 'icon.ico') } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -313,7 +319,10 @@ ipcMain.handle('recording:save-video', async (_event, payload) => {
 })
 
 ipcMain.handle('config:get', async () => {
-  return readConfig()
+  const config = await readConfig()
+  // Se entrega siempre con stt/llm resueltos, para que la interfaz no tenga que
+  // saber nada del formato antiguo ni duplicar la lógica de migración.
+  return { ...config, ...providers.migrateConfig(config) }
 })
 
 ipcMain.handle('config:save', async (_event, payload) => {
@@ -321,7 +330,6 @@ ipcMain.handle('config:save', async (_event, payload) => {
   return { ok: true }
 })
 
-const GROQ_MAX_BYTES = 24 * 1024 * 1024
 const DEFAULT_CHUNK_DURATION_SEC = 600 // 10 minutos por chunk
 
 function getAudioDurationSec(filePath) {
@@ -398,49 +406,25 @@ function formatDiarizedTranscript(segments) {
   return result
 }
 
-async function transcribeChunk(filePath, groqApiKey, model, language) {
+async function transcribeChunk(filePath, provider, language) {
   const audioBuffer = await fs.readFile(filePath)
-  const ext = path.extname(filePath).slice(1) || 'mp3'
-  const blob = new Blob([audioBuffer], { type: `audio/${ext}` })
-  const formData = new FormData()
-  formData.append('file', blob, path.basename(filePath))
-  formData.append('model', model || 'whisper-large-v3')
-  if (language && language !== 'auto') formData.append('language', language)
-  formData.append('response_format', 'verbose_json')
-  formData.append('diarize', 'true')
+  const { text, segments: rawSegments } = await providers.transcribe(provider, {
+    buffer: audioBuffer,
+    fileName: path.basename(filePath),
+    language,
+  })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
-  let response
-  try {
-    response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${groqApiKey}` },
-      body: formData,
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Error de Groq: ${errorText}`)
-  }
-
-  const data = await response.json()
-  const rawSegments = Array.isArray(data.segments) ? data.segments : []
   const segments = filterHallucinatedSegments(rawSegments)
 
   if (segments.some((s) => s.speaker !== undefined)) {
     return formatDiarizedTranscript(segments)
   }
 
-  // Si Groq no devolvió segmentos (no debería pasar con verbose_json) usamos el
-  // texto plano tal cual, porque no hay forma de filtrar sin las métricas por segmento.
+  // Si el proveedor no devolvió segmentos usamos el texto plano tal cual, porque
+  // no hay forma de filtrar sin las métricas por segmento.
   return rawSegments.length
     ? segments.map((s) => (s.text || '').trim()).filter(Boolean).join(' ')
-    : (data.text || '')
+    : text
 }
 
 async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
@@ -467,7 +451,7 @@ async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec
   return chunkPaths
 }
 
-async function transcribeAudio(filePath, groqApiKey, model, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
+async function transcribeAudio(filePath, provider, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
 
   try {
@@ -476,63 +460,55 @@ async function transcribeAudio(filePath, groqApiKey, model, language, chunkDurat
 
     const stat = await fs.stat(mp3Path)
 
-    if (stat.size <= GROQ_MAX_BYTES) {
-      return await transcribeChunk(mp3Path, groqApiKey, model, language)
+    // Cada proveedor declara su propio límite de tamaño; ya no es el de Groq.
+    if (stat.size <= provider.maxBytes) {
+      return await transcribeChunk(mp3Path, provider, language)
     }
 
     const durationSec = await getAudioDurationSec(mp3Path)
     if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
-    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, groqApiKey, model, language)))
+    const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, provider, language)))
     return texts.join('\n\n')
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
 }
 
-async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateName) {
-  if (!transcript || !groqApiKey) return transcript
+async function identifySpeakers(transcript, llmProvider, candidateName) {
+  if (!transcript || !llmProvider.apiKey) return transcript
   const candidateHint = candidateName
     ? `El nombre del candidato es "${candidateName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [Candidato].`
     : ''
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: summaryModel || 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista ' +
-            '(puede venir con etiquetas genéricas como [Hablante 1] / [Hablante 2] o sin etiquetas).\n' +
-            'Tu tarea es reetiquétar CADA turno de conversación con exactamente una de estas etiquetas: [Entrevistador]: o [Candidato]:\n\n' +
-            'SEÑALES para identificar al entrevistador:\n' +
-            '- Hace preguntas sobre el historial, experiencia o motivaciones del candidato\n' +
-            '- Presenta la empresa, el puesto o el proceso de selección\n' +
-            '- Conduce y estructura la conversación\n' +
-            '- Habla en nombre de la empresa ("nosotros buscamos...", "el equipo es...")\n\n' +
-            'SEÑALES para identificar al candidato:\n' +
-            '- Habla de su propia trayectoria, empresas donde ha trabajado, estudios\n' +
-            '- Usa primera persona para describir su experiencia ("yo estuve en...", "llevo X años...")\n' +
-            '- Responde preguntas sobre sí mismo\n' +
-            (candidateHint ? candidateHint + '\n\n' : '') +
-            'REGLAS:\n' +
-            '- Conserva el texto EXACTAMENTE como está; solo sustituye o añade la etiqueta al inicio de cada turno\n' +
-            '- Agrupa frases consecutivas del mismo hablante bajo una sola etiqueta\n' +
-            '- Si un fragmento es completamente ambiguo, asígnalo al hablante más probable por contexto\n' +
-            '- Responde ÚNICAMENTE con la transcripción etiquetada, sin explicaciones ni texto adicional',
-        },
-        { role: 'user', content: transcript },
-      ],
-      temperature: 0.1,
-      max_tokens: 8000,
-    }),
-  })
-  if (!response.ok) return transcript
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content || transcript
+  const system =
+    'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista ' +
+    '(puede venir con etiquetas genéricas como [Hablante 1] / [Hablante 2] o sin etiquetas).\n' +
+    'Tu tarea es reetiquétar CADA turno de conversación con exactamente una de estas etiquetas: [Entrevistador]: o [Candidato]:\n\n' +
+    'SEÑALES para identificar al entrevistador:\n' +
+    '- Hace preguntas sobre el historial, experiencia o motivaciones del candidato\n' +
+    '- Presenta la empresa, el puesto o el proceso de selección\n' +
+    '- Conduce y estructura la conversación\n' +
+    '- Habla en nombre de la empresa ("nosotros buscamos...", "el equipo es...")\n\n' +
+    'SEÑALES para identificar al candidato:\n' +
+    '- Habla de su propia trayectoria, empresas donde ha trabajado, estudios\n' +
+    '- Usa primera persona para describir su experiencia ("yo estuve en...", "llevo X años...")\n' +
+    '- Responde preguntas sobre sí mismo\n' +
+    (candidateHint ? candidateHint + '\n\n' : '') +
+    'REGLAS:\n' +
+    '- Conserva el texto EXACTAMENTE como está; solo sustituye o añade la etiqueta al inicio de cada turno\n' +
+    '- Agrupa frases consecutivas del mismo hablante bajo una sola etiqueta\n' +
+    '- Si un fragmento es completamente ambiguo, asígnalo al hablante más probable por contexto\n' +
+    '- Responde ÚNICAMENTE con la transcripción etiquetada, sin explicaciones ni texto adicional'
+
+  // Si el proveedor de resumen falla aquí, se devuelve la transcripción sin
+  // etiquetar en vez de romper: mejor sin etiquetas que sin transcripción.
+  try {
+    const out = await providers.chat(llmProvider, { system, user: transcript, temperature: 0.1, maxTokens: 8000 })
+    return out || transcript
+  } catch {
+    return transcript
+  }
 }
 
 // ── Separación determinista de hablantes por pistas ──────────────────────────
@@ -542,66 +518,45 @@ async function identifySpeakers(transcript, groqApiKey, summaryModel, candidateN
 //
 // Variante de transcribeChunk que devuelve los segmentos crudos (con marcas de tiempo)
 // en vez del texto ya formateado, para poder combinarlos entre pistas.
-async function transcribeChunkSegments(filePath, groqApiKey, model, language) {
+async function transcribeChunkSegments(filePath, provider, language) {
   const audioBuffer = await fs.readFile(filePath)
-  const ext = path.extname(filePath).slice(1) || 'mp3'
-  const blob = new Blob([audioBuffer], { type: `audio/${ext}` })
-  const formData = new FormData()
-  formData.append('file', blob, path.basename(filePath))
-  formData.append('model', model || 'whisper-large-v3')
-  if (language && language !== 'auto') formData.append('language', language)
-  formData.append('response_format', 'verbose_json')
+  const { text: fullText, segments: rawSegments, words } = await providers.transcribe(provider, {
+    buffer: audioBuffer,
+    fileName: path.basename(filePath),
+    language,
+  })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
-  let response
-  try {
-    response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${groqApiKey}` },
-      body: formData,
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Error de Groq: ${errorText}`)
-  }
-
-  const data = await response.json()
-  const rawSegments = Array.isArray(data.segments) ? data.segments : []
   const segments = filterHallucinatedSegments(rawSegments)
-  const text = segments.map((s) => (s.text || '').trim()).filter(Boolean).join(' ') || (data.text || '')
-  return { text, segments }
+  const text = segments.map((s) => (s.text || '').trim()).filter(Boolean).join(' ') || fullText
+  return { text, segments, words: words ?? [] }
 }
 
-async function transcribeAudioSegments(filePath, groqApiKey, model, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
+async function transcribeAudioSegments(filePath, provider, language, chunkDurationSec = DEFAULT_CHUNK_DURATION_SEC) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-'))
   try {
     const mp3Path = path.join(tmpDir, 'audio.mp3')
     await convertToMp3(filePath, mp3Path)
 
     const stat = await fs.stat(mp3Path)
-    if (stat.size <= GROQ_MAX_BYTES) {
-      return await transcribeChunkSegments(mp3Path, groqApiKey, model, language)
+    if (stat.size <= provider.maxBytes) {
+      return await transcribeChunkSegments(mp3Path, provider, language)
     }
 
     const durationSec = await getAudioDurationSec(mp3Path)
     if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
-    const results = await Promise.all(chunkPaths.map((p) => transcribeChunkSegments(p, groqApiKey, model, language)))
+    const results = await Promise.all(chunkPaths.map((p) => transcribeChunkSegments(p, provider, language)))
     const text = results.map((r) => r.text).join('\n\n')
     // Reajusta las marcas de tiempo de cada chunk a la línea temporal absoluta.
-    const segments = results.flatMap((r, i) => r.segments.map((s) => ({
-      ...s,
-      start: (s.start ?? 0) + i * chunkDurationSec,
-      end: (s.end ?? 0) + i * chunkDurationSec,
-    })))
-    return { text, segments }
+    const shift = (items, i) => items.map((x) => ({
+      ...x,
+      start: (x.start ?? 0) + i * chunkDurationSec,
+      end: (x.end ?? 0) + i * chunkDurationSec,
+    }))
+    const segments = results.flatMap((r, i) => shift(r.segments, i))
+    const words = results.flatMap((r, i) => shift(r.words, i))
+    return { text, segments, words }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -621,6 +576,79 @@ function segOverlapFraction(seg, others) {
     if (hi > lo) overlap += hi - lo
   }
   return overlap / dur
+}
+
+// Tramos con voz de una pista, MEDIDOS sobre el audio con ffmpeg.
+//
+// No se usan las marcas de tiempo del proveedor a propósito: en pistas con
+// silencios largos (la del audio de sistema lo es, porque el interlocutor calla
+// mientras habla el entrevistador) ElevenLabs estira la primera palabra del turno
+// hacia atrás hasta cubrir el silencio entero — se han visto "palabras" de 21
+// segundos. Construir el recorte sobre eso se comía frases enteras del micro.
+// La pista de sistema solo contiene una voz, así que "donde hay sonido, habla el
+// interlocutor" es un criterio exacto y no necesita IA.
+function getSpeechIntervals(filePath, noiseDb = -40, minSilenceSec = 0.6) {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ['-i', filePath, '-af', `silencedetect=n=${noiseDb}dB:d=${minSilenceSec}`, '-f', 'null', '-'])
+    let stderr = ''
+    proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('error', () => resolve(null))
+    proc.on('close', () => {
+      const hms = (h, m, s) => Number(h) * 3600 + Number(m) * 60 + parseFloat(s)
+      // Los .webm grabados en directo no llevan duración en la cabecera
+      // (Duration: N/A), así que se toma la última marca de progreso que imprime
+      // ffmpeg al terminar de decodificar, que sí es fiable.
+      const d = stderr.match(/Duration:\s*(\d+):(\d+):([\d.]+)/)
+      const progress = [...stderr.matchAll(/time=\s*(\d+):(\d+):([\d.]+)/g)].pop()
+      const total = d ? hms(d[1], d[2], d[3]) : (progress ? hms(progress[1], progress[2], progress[3]) : null)
+      if (!total) return resolve(null)
+
+      const silences = []
+      const re = /silence_start:\s*([-\d.]+)|silence_end:\s*([\d.]+)/g
+      let m, open = null
+      while ((m = re.exec(stderr))) {
+        if (m[1] !== undefined) open = Math.max(0, parseFloat(m[1]))
+        else if (open !== null) { silences.push([open, parseFloat(m[2])]); open = null }
+      }
+      if (open !== null) silences.push([open, total])
+
+      // El complemento de los silencios es la voz.
+      const speech = []
+      let cursor = 0
+      for (const [s, e] of silences) {
+        if (s > cursor) speech.push([cursor, s])
+        cursor = Math.max(cursor, e)
+      }
+      if (cursor < total) speech.push([cursor, total])
+      resolve(speech)
+    })
+  })
+}
+
+// Descarta las palabras cuyo centro cae dentro de un tramo de voz del interlocutor.
+// Al trabajar palabra a palabra, una pregunta pegada a la respuesta ya no se pierde
+// entera: se recorta solo el eco.
+function wordsOutsideIntervals(words, intervals, pad = 0.2) {
+  return words.filter((w) => {
+    const mid = ((w.start ?? 0) + (w.end ?? 0)) / 2
+    return !intervals.some(([s, e]) => mid >= s - pad && mid <= e + pad)
+  })
+}
+
+// Reagrupa palabras sueltas en frases, cortando por silencio.
+function segmentsFromWords(words, gapSec = 0.8) {
+  const segments = []
+  let current = null
+  for (const w of words) {
+    if (!current || (w.start ?? 0) - (current.end ?? 0) > gapSec) {
+      current = { start: w.start ?? 0, end: w.end ?? 0, text: w.text }
+      segments.push(current)
+    } else {
+      current.text += ' ' + w.text
+      current.end = w.end ?? current.end
+    }
+  }
+  return segments
 }
 
 // Combina la mezcla (mic+sistema) con la pista limpia del sistema:
@@ -658,27 +686,51 @@ function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabe
 
 ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName }) => {
   const config = await readConfig()
-  if (!config.groqApiKey) {
-    throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
+  const stt = providers.resolveStt(config)
+  const llm = providers.resolveLlm(config)
+  if (!stt.apiKey && stt.id !== 'custom') {
+    throw new Error(`Falta la API key de ${stt.label}. Configúrala en Ajustes → Motores de IA.`)
   }
-  const VALID_MODELS = ['whisper-large-v3', 'whisper-large-v3-turbo']
-  const savedModel = config.transcriptionModel || 'whisper-large-v3'
-  const model = VALID_MODELS.includes(savedModel) ? savedModel : 'whisper-large-v3'
+  if (!stt.model) {
+    throw new Error(`Falta indicar el modelo de ${stt.label}. Configúralo en Ajustes → Motores de IA.`)
+  }
   const chunkDuration = (config.chunkDuration && config.chunkDuration >= 5) ? config.chunkDuration : DEFAULT_CHUNK_DURATION_SEC
 
   const systemExists = systemFilePath
     ? await fs.access(systemFilePath).then(() => true).catch(() => false)
     : false
 
-  // CAMINO NUEVO: separación determinista por pistas (cuando existe la pista de sistema).
-  if (systemExists) {
+  log.info(`[transcripción] ${stt.label}/${stt.model} · archivo=${path.basename(filePath)} · pista de sistema=${systemExists ? 'sí' : 'no'}`)
+
+  // CAMINO NUEVO: separación determinista por pistas (cuando existe la pista de
+  // sistema Y el proveedor devuelve marcas de tiempo — sin ellas no se pueden
+  // cruzar las dos pistas, así que se cae al camino clásico sin avisar al usuario).
+  if (systemExists && stt.canSegment) {
     try {
-      const [mixed, system] = await Promise.all([
-        transcribeAudioSegments(filePath, config.groqApiKey, model, language || 'auto', chunkDuration),
-        transcribeAudioSegments(systemFilePath, config.groqApiKey, model, language || 'auto', chunkDuration),
+      const [mixed, system, speech] = await Promise.all([
+        transcribeAudioSegments(filePath, stt, language || 'auto', chunkDuration),
+        transcribeAudioSegments(systemFilePath, stt, language || 'auto', chunkDuration),
+        getSpeechIntervals(systemFilePath),
       ])
+
+      // Mejor camino: marcas por palabra + tramos de voz medidos en el audio.
+      // Si el proveedor no da palabras (Whisper) o falla la medición, se cae a los
+      // criterios anteriores en vez de romper.
+      let mixedSegments
+      let modo
+      if (mixed.words?.length && speech?.length) {
+        mixedSegments = segmentsFromWords(wordsOutsideIntervals(mixed.words, speech))
+        modo = 'palabras + audio medido'
+      } else if (mixed.words?.length) {
+        mixedSegments = segmentsFromWords(wordsOutsideIntervals(mixed.words, system.segments.map((s) => [s.start ?? 0, s.end ?? 0])))
+        modo = 'palabras + marcas del proveedor'
+      } else {
+        mixedSegments = mixed.segments
+        modo = 'segmentos'
+      }
+      log.info(`[transcripción] recorte por ${modo}: ${mixed.segments.length} → ${mixedSegments.length} tramos del entrevistador`)
       // Etiquetas fijas [Entrevistador] / [Candidato]: el resumen depende de ellas.
-      const merged = mergeSeparatedTranscript(mixed.segments, system.segments, 'Entrevistador', 'Candidato')
+      const merged = mergeSeparatedTranscript(mixedSegments, system.segments, 'Entrevistador', 'Candidato')
       const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
       return { text }
     } catch (err) {
@@ -688,11 +740,13 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
     }
   }
 
-  // CAMINO CLÁSICO (sin cambios): una sola pista mezclada + diarización por IA.
-  let text = await transcribeAudio(filePath, config.groqApiKey, model, language || 'auto', chunkDuration)
+  // CAMINO CLÁSICO: una sola pista mezclada. Si el proveedor ya separa hablantes
+  // por sí mismo (Deepgram y similares), transcribeAudio devuelve el texto ya
+  // etiquetado y no hace falta que un LLM lo adivine.
+  let text = await transcribeAudio(filePath, stt, language || 'auto', chunkDuration)
 
-  if (text.trim().length > 0) {
-    text = await identifySpeakers(text, config.groqApiKey, config.summaryModel || 'llama-3.3-70b-versatile', candidateName || '').catch(() => text)
+  if (text.trim().length > 0 && !stt.canDiarize) {
+    text = await identifySpeakers(text, llm, candidateName || '').catch(() => text)
   }
 
   return { text }
@@ -711,10 +765,11 @@ const CRITERIA_LABELS = {
   adecuacion:     'Adecuación al puesto',
 }
 
-ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, candidateName }) => {
+ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, summaryContext, candidateName }) => {
   const config = await readConfig()
-  if (!config.groqApiKey) {
-    throw new Error('API key de Groq no configurada. Abrela en Ajustes.')
+  const llm = providers.resolveLlm(config)
+  if (llm.needsKey && !llm.apiKey) {
+    throw new Error(`Falta la API key de ${llm.label}. Configúrala en Ajustes → Motores de IA.`)
   }
 
   const criteriaList = Array.isArray(criteria) && criteria.length > 0
@@ -726,29 +781,78 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
         return CRITERIA_LABELS[id] || null
       }).filter(Boolean)
     : null
-  const effectiveCriteria = criteriaList && criteriaList.length > 0 ? criteriaList : null
+  // Enfoque del informe. La app nació para entrevistas de selección, pero el mismo
+  // material sirve para reuniones de negocio, donde cambia el sujeto (ya no hay un
+  // "candidato" a evaluar), los apartados y lo que se considera relevante.
+  const isMeeting = summaryContext === 'reunion'
+
+  const MEETING_SECTIONS = [
+    'Acuerdos y próximos pasos (qué se decidió, quién hace qué y para cuándo)',
+    'Necesidades y problemas del cliente',
+    'Objeciones, riesgos y bloqueos',
+    'Presupuesto, plazos y condiciones',
+  ]
+
+  // En modo reunión los apartados son SIEMPRE estos, ignorando los criterios de
+  // evaluación del proyecto: son de selección de personal ("Formación académica",
+  // "Pretensiones salariales") y en un acta de negocio solo producen secciones
+  // vacías. Así "reunión" significa lo mismo en cualquier proyecto.
+  const effectiveCriteria = isMeeting
+    ? MEETING_SECTIONS
+    : (criteriaList && criteriaList.length > 0 ? criteriaList : null)
 
   const fidelityRules =
     'REGLAS ESTRICTAS DE FIDELIDAD:\n' +
-    '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Extrae información solo de lo que dice el [Candidato]: salvo que se indique lo contrario.\n' +
+    (isMeeting
+      // En una reunión ambas partes aportan: los compromisos y las peticiones
+      // pueden salir de cualquiera de los dos lados de la mesa.
+      ? '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Recoge lo relevante de AMBOS: acuerdos, peticiones y compromisos pueden venir de cualquiera de los dos.\n'
+      : '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Extrae información solo de lo que dice el [Candidato]: salvo que se indique lo contrario.\n') +
     '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
-    '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n' +
+    (isMeeting
+      ? '- Presta máxima atención a cifras, fechas, plazos y nombres de empresas: asocia cada dato exactamente a aquello a lo que se refería, sin mezclarlos.\n'
+      : '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n') +
     '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
     'Responde en español.'
 
   let systemPrompt
   let userPrompt
 
-  const candidateRef = candidateName ? `El candidato/a se llama ${candidateName}. Refiérete a él/ella por su nombre en el informe.` : ''
+  // Correspondencia explícita entre etiqueta y persona. Sin esto el modelo deduce
+  // los nombres del propio texto y los cruza: cuando el entrevistador saluda
+  // ("Hola Jarvis"), el nombre que aparece en SU turno es el del OTRO, y el modelo
+  // acaba llamando Jarvis al entrevistador.
+  const interviewerName = (config.userName || '').trim()
+  const nameWarning =
+    'No deduzcas los nombres a partir del texto: si un nombre propio aparece dentro de un turno, ' +
+    'lo normal es que sea la persona a la que ese hablante se está dirigiendo, es decir, la OTRA.'
+  const candidateRef = isMeeting
+    ? 'CORRESPONDENCIA DE ETIQUETAS (es la única fuente válida para saber quién es quién):\n' +
+      `- [Entrevistador]: ${interviewerName || 'quien convoca la reunión'}, por parte de nuestro equipo.\n` +
+      `- [Candidato]: ${candidateName || 'la otra parte'}, el cliente o interlocutor externo.\n` +
+      'Las etiquetas vienen de que la app se diseñó para entrevistas: aquí NO hay candidato que evaluar, ' +
+      'sino dos partes reunidas. No hables de "el candidato" ni de "la entrevista" en el informe.\n' +
+      nameWarning
+    : 'CORRESPONDENCIA DE ETIQUETAS (es la única fuente válida para saber quién es quién):\n' +
+      `- [Entrevistador]: ${interviewerName || 'quien conduce la entrevista'}. Hace las preguntas. NO es el sujeto del informe.\n` +
+      `- [Candidato]: ${candidateName || 'la persona entrevistada'}. Responde. Es el sujeto del informe.\n` +
+      nameWarning +
+      (candidateName ? `\nRefiérete al candidato como ${candidateName} en el informe.` : '')
 
   if (summaryType === 'listado') {
     systemPrompt =
-      'Eres un asistente experto en análisis de entrevistas de trabajo. ' +
-      'Genera un listado estructurado por secciones basándote en los criterios indicados. ' +
+      (isMeeting
+        ? 'Eres un analista de negocio que redacta actas de reuniones de trabajo. ' +
+          'Genera un acta estructurada por secciones basándote en los apartados indicados. '
+        : 'Eres un asistente experto en análisis de entrevistas de trabajo. ' +
+          'Genera un listado estructurado por secciones basándote en los criterios indicados. ') +
       'Para cada sección usa un título en negrita seguido de bullets con la información extraída. ' +
-      'Sé conciso y directo. No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".\n\n' +
-      (candidateRef ? candidateRef + '\n\n' : '') +
-      fidelityRules
+      'Sé conciso y directo. ' +
+      (isMeeting
+        ? 'En los acuerdos y próximos pasos indica siempre responsable y plazo cuando se hayan mencionado. ' +
+          'Si un apartado no se trató, escribe "No se trató" en vez de rellenarlo.'
+        : 'No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".') +
+      '\n\n' + candidateRef + '\n\n' + fidelityRules
 
     userPrompt = effectiveCriteria
       ? `Secciones a analizar:\n${effectiveCriteria.join('\n')}\n\nTranscripción:\n${transcript}`
@@ -759,42 +863,60 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
       : 'Organiza el contenido en párrafos temáticos: situación actual y disponibilidad, trayectoria profesional, competencias técnicas y habilidades clave, y adecuación al puesto.'
 
     systemPrompt =
-      'Eres un experto en selección de personal. Tu tarea es redactar un informe narrativo del candidato ' +
-      'basado en la transcripción de una entrevista de trabajo. ' +
-      'Escribe en tercera persona, con prosa fluida y densa en información relevante. ' +
-      `${topicSentence} ` +
-      'NO uses listas con guiones o puntos. ' +
-      'NO incluyas frases como "el entrevistador preguntó" o "el candidato respondió". ' +
-      'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación.\n\n' +
-      (candidateRef ? candidateRef + '\n\n' : '') +
+      (isMeeting
+        ? 'Eres un analista de negocio. Tu tarea es redactar un resumen narrativo de una reunión de trabajo ' +
+          'a partir de su transcripción. ' +
+          'Escribe en prosa fluida y densa en información útil para preparar el siguiente paso. ' +
+          `${topicSentence} ` +
+          'NO uses listas con guiones o puntos. ' +
+          'Cierra siempre con los acuerdos alcanzados y los próximos pasos, indicando responsable y plazo si se mencionaron.\n\n'
+        : 'Eres un experto en selección de personal. Tu tarea es redactar un informe narrativo del candidato ' +
+          'basado en la transcripción de una entrevista de trabajo. ' +
+          'Escribe en tercera persona, con prosa fluida y densa en información relevante. ' +
+          `${topicSentence} ` +
+          'NO uses listas con guiones o puntos. ' +
+          'NO incluyas frases como "el entrevistador preguntó" o "el candidato respondió". ' +
+          'Escribe como si fueran las notas de un reclutador experto que ha sintetizado la conversación.\n\n') +
+      candidateRef + '\n\n' +
       fidelityRules
 
     userPrompt = `Transcripción:\n${transcript}`
   }
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.groqApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: config.summaryModel || 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.1,
-    }),
-  })
+  const text = await providers.chat(llm, { system: systemPrompt, user: userPrompt, temperature: 0.1 })
+  return { text }
+})
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Error de Groq: ${errorText}`)
+// ── Catálogo y prueba de proveedores (Ajustes → Motores de IA) ───────────────
+
+ipcMain.handle('providers:catalog', async () => ({
+  stt: providers.STT_PRESETS,
+  llm: providers.LLM_PRESETS,
+}))
+
+// Prueba la configuración que el usuario tiene en pantalla, sin necesidad de
+// guardarla antes.
+ipcMain.handle('providers:test', async (_event, { kind, draft }) => {
+  const config = kind === 'stt' ? { stt: draft } : { llm: draft }
+  if (kind === 'llm') return providers.testLlm(providers.resolveLlm(config))
+
+  // Para transcripción hace falta un audio: se genera medio segundo de silencio
+  // con ffmpeg, que basta para validar clave, URL y nombre de modelo.
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ct-test-'))
+  try {
+    const probePath = path.join(tmpDir, 'probe.mp3')
+    await new Promise((resolve, reject) => {
+      const args = ['-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '0.5', '-b:a', '32k', '-y', probePath]
+      const proc = spawn(ffmpegPath, args)
+      proc.on('error', reject)
+      proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('ffmpeg falló generando el audio de prueba'))))
+    })
+    return await providers.testStt(providers.resolveStt(config), await fs.readFile(probePath))
+  } catch (err) {
+    return { ok: false, detail: String(err?.message || err) }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
-
-  const data = await response.json()
-  return { text: data.choices[0].message.content }
 })
 
 ipcMain.handle('export:pdf', async (_event, { html, fileName }) => {

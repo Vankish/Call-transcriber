@@ -3883,6 +3883,38 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 .sec-update-btn { min-width: 220px; }
 
+/* ── Settings: Motores de IA ─────────────────────────────────────────────── */
+.modal-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.modal-checkbox input { cursor: pointer; }
+
+.cfg-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.cfg-test-ok,
+.cfg-test-fail {
+  font-size: 13px;
+  /* Los mensajes de error del proveedor pueden ser largos: que corten en vez
+     de estirar el panel de ajustes. */
+  overflow-wrap: anywhere;
+  flex: 1 1 200px;
+}
+
+.cfg-test-ok { color: #059669; }
+.cfg-test-fail { color: #dc2626; }
+
 /* ── Settings: Grabación & General fields ────────────────────────────────── */
 .cfg-field-desc {
   font-size: 13px;

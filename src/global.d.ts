@@ -25,10 +25,42 @@ type CaptureSourceOption = {
   type: 'screen' | 'window'
 }
 
+/** Configuración de un motor de IA. `provider` es el id de un preset del
+ *  catálogo, o 'custom' para un servicio que el usuario escribe a mano. */
+type ProviderConfig = {
+  provider: string
+  apiKey: string
+  model: string
+  /** Solo para 'custom': URL base y dialecto que habla el servicio. */
+  baseUrl?: string
+  dialect?: string
+  label?: string
+}
+
+type ProviderPreset = {
+  id: string
+  label: string
+  note?: string
+  consoleUrl?: string
+  keyHint?: string
+  dialect: string
+  baseUrl: string
+  models: string[]
+  noKey?: boolean
+  diarize?: boolean
+}
+
+type ProviderCatalog = {
+  stt: ProviderPreset[]
+  llm: ProviderPreset[]
+}
+
 type GetConfigResult = {
   groqApiKey: string | null
   transcriptionModel?: string
   summaryModel?: string
+  stt?: ProviderConfig
+  llm?: ProviderConfig
   userName?: string
   userEmail?: string
   userCompany?: string
@@ -46,6 +78,8 @@ type SaveConfigPayload = {
   groqApiKey: string
   transcriptionModel: string
   summaryModel: string
+  stt?: ProviderConfig
+  llm?: ProviderConfig
   userName: string
   userEmail: string
   userCompany: string
@@ -77,7 +111,10 @@ type TranscribeAudioResult = {
 type GenerateSummaryPayload = {
   transcript: string
   criteria: string[]
+  /** Formato del informe. */
   summaryType: 'resumen' | 'listado'
+  /** Enfoque: de qué tipo de sesión se trata. Cambia el rol del modelo y los apartados. */
+  summaryContext?: 'entrevista' | 'reunion'
   candidateName?: string
 }
 
@@ -97,6 +134,8 @@ interface Window {
     setCaptureMode: (wantsVideo: boolean) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>
     saveConfig: (payload: SaveConfigPayload) => Promise<SaveConfigResult>
+    getProviderCatalog: () => Promise<ProviderCatalog>
+    testProvider: (payload: { kind: 'stt' | 'llm'; draft: ProviderConfig }) => Promise<{ ok: boolean; detail: string }>
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
