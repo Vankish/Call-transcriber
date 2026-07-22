@@ -43,6 +43,25 @@ type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' |
 type ProfileScreenTab = 'perfil' | 'plan' | 'seguridad' | 'notif'
 type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 
+// ── Motores de IA ──────────────────────────────────────────────────────────
+// El catálogo de proveedores vive en electron/providers.cjs y llega por IPC.
+// Aquí solo están los valores por defecto (Groq, que es gratis) y los ayudantes
+// para saber si un motor está listo para usarse.
+const DEFAULT_STT_CFG: ProviderConfig = { provider: 'groq', apiKey: '', model: 'whisper-large-v3' }
+const DEFAULT_LLM_CFG: ProviderConfig = { provider: 'groq', apiKey: '', model: 'llama-3.3-70b-versatile' }
+
+type ProviderTest = { ok: boolean; detail: string } | 'testing' | null
+
+const findPreset = (presets: ProviderPreset[] | undefined, id: string) => presets?.find(p => p.id === id)
+
+/** Un motor está listo si tiene modelo, clave (salvo que el proveedor no la pida)
+ *  y, en el caso de un servicio personalizado, una URL. */
+const isProviderReady = (cfg: ProviderConfig, preset: ProviderPreset | undefined) => {
+  if (!cfg.model.trim()) return false
+  if (cfg.provider === 'custom' && !cfg.baseUrl?.trim()) return false
+  return preset?.noKey ? true : Boolean(cfg.apiKey.trim())
+}
+
 // ── Storage ────────────────────────────────────────────────────────────────
 const V2_KEY = 'call-transcriber-v2'
 const ONBOARDING_KEY = 'ct-onboarding-done'
@@ -55,6 +74,21 @@ const saveCriteriaCache = (projectId: string, criteria: string[]) => {
   const cache = getCriteriaCache()
   cache[projectId] = criteria
   localStorage.setItem(CRITERIA_KEY, JSON.stringify(cache))
+}
+
+// Enfoque del resumen por sesión. Vive en localStorage y no en la nube a
+// propósito: es una preferencia de redacción, no un dato de la entrevista, y así
+// no hace falta migrar la tabla de Supabase.
+const SUMMARY_CONTEXT_KEY = 'ct-summary-context'
+type SummaryContext = 'entrevista' | 'reunion'
+
+const getSummaryContexts = (): Record<string, SummaryContext> => {
+  try { return JSON.parse(localStorage.getItem(SUMMARY_CONTEXT_KEY) ?? '{}') } catch { return {} }
+}
+const saveSummaryContext = (interviewId: string, context: SummaryContext) => {
+  const cache = getSummaryContexts()
+  cache[interviewId] = context
+  localStorage.setItem(SUMMARY_CONTEXT_KEY, JSON.stringify(cache))
 }
 
 // El vídeo de una entrevista solo se guarda en local (nunca sube a Supabase, pesa
@@ -252,9 +286,12 @@ function App() {
 
   // ── Config ─────────────────────────────────────────────────────────────
   const [configLoaded, setConfigLoaded] = useState(false)
-  const [groqApiKey, setGroqApiKey] = useState('')
-  const [transcriptionModel, setTranscriptionModel] = useState('whisper-large-v3')
-  const [summaryModel, setSummaryModel] = useState('llama-3.3-70b-versatile')
+  // Motores de IA: transcripción y resumen se configuran por separado, cada uno
+  // con su proveedor, su clave y su modelo. Ver electron/providers.cjs.
+  const [sttCfg, setSttCfg] = useState<ProviderConfig>(DEFAULT_STT_CFG)
+  const [llmCfg, setLlmCfg] = useState<ProviderConfig>(DEFAULT_LLM_CFG)
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null)
+  const [summaryContexts, setSummaryContexts] = useState<Record<string, SummaryContext>>(getSummaryContexts)
   const [userName, setUserName] = useState('')
   const [userEmail, setUserEmail] = useState('')
   const [userCompany, setUserCompany] = useState('')
@@ -264,9 +301,11 @@ function App() {
   const [notifErrors, setNotifErrors] = useState(true)
 
   // ── Settings drafts ────────────────────────────────────────────────────
-  const [settingsKeyDraft, setSettingsKeyDraft] = useState('')
-  const [settingsTxModelDraft, setSettingsTxModelDraft] = useState('whisper-large-v3')
-  const [settingsSumModelDraft, setSettingsSumModelDraft] = useState('llama-3.3-70b-versatile')
+  const [sttDraft, setSttDraft] = useState<ProviderConfig>(DEFAULT_STT_CFG)
+  const [llmDraft, setLlmDraft] = useState<ProviderConfig>(DEFAULT_LLM_CFG)
+  const [sameKeyForLlm, setSameKeyForLlm] = useState(false)
+  const [sttTest, setSttTest] = useState<ProviderTest>(null)
+  const [llmTest, setLlmTest] = useState<ProviderTest>(null)
   const [settingsNameDraft, setSettingsNameDraft] = useState('')
   const [settingsEmailDraft, setSettingsEmailDraft] = useState('')
   const [settingsCompanyDraft, setSettingsCompanyDraft] = useState('')
@@ -539,9 +578,10 @@ function App() {
           if (p.name)          setUserName(p.name)
           if (p.company)       setUserCompany(p.company)
           if (p.photo)         setUserPhoto(p.photo)
-          // La Groq API key ya NO se lee de la nube: vive solo en el config.json local (ver setGroqApiKey desde cfg más abajo).
-          if (p.tx_model)      setTranscriptionModel(p.tx_model)
-          if (p.sum_model)     setSummaryModel(p.sum_model)
+          // Los motores de IA (proveedor + clave + modelo) NO se leen de la nube:
+          // viven solo en el config.json local. La nube guarda el nombre del modelo
+          // a título informativo, pero aplicarlo aquí podría dejar una combinación
+          // imposible — p.ej. proveedor Deepgram con un modelo de Whisper.
         }
       } catch { /* ignore */ }
     }
@@ -594,9 +634,10 @@ function App() {
   useEffect(() => {
     if (!window.desktopApp?.getConfig) { setConfigLoaded(true); return }
     void window.desktopApp.getConfig().then(cfg => {
-      setGroqApiKey(cfg.groqApiKey ?? '')
-      setTranscriptionModel(cfg.transcriptionModel ?? 'whisper-large-v3')
-      setSummaryModel(cfg.summaryModel ?? 'llama-3.3-70b-versatile')
+      // El proceso principal ya entrega stt/llm migrados desde el formato antiguo
+      // si hacía falta (ver providers.migrateConfig).
+      setSttCfg(cfg.stt ?? DEFAULT_STT_CFG)
+      setLlmCfg(cfg.llm ?? DEFAULT_LLM_CFG)
       setUserName(cfg.userName ?? '')
       setUserEmail(cfg.userEmail ?? '')
       setUserCompany(cfg.userCompany ?? '')
@@ -612,12 +653,25 @@ function App() {
     })
   }, [])
 
-  // ── Show onboarding if no API key ──────────────────────────────────────
+  // ── Catálogo de proveedores (lo sirve el proceso principal) ─────────────
+  useEffect(() => {
+    if (!window.desktopApp?.getProviderCatalog) return
+    void window.desktopApp.getProviderCatalog().then(setProviderCatalog).catch(() => {})
+  }, [])
+
+  const sttPreset = findPreset(providerCatalog?.stt, sttCfg.provider)
+  const llmPreset = findPreset(providerCatalog?.llm, llmCfg.provider)
+  // Antes de que llegue el catálogo se asume que hace falta clave, que es el caso
+  // de casi todos: así no se habilitan botones que luego fallarían.
+  const sttReady = isProviderReady(sttCfg, sttPreset)
+  const llmReady = isProviderReady(llmCfg, llmPreset)
+
+  // ── Show onboarding if no engine configured ────────────────────────────
   useEffect(() => {
     if (!configLoaded) return
     const done = localStorage.getItem(ONBOARDING_KEY)
-    if (!done && !groqApiKey) setShowOnboarding(true)
-  }, [configLoaded, groqApiKey])
+    if (!done && !sttReady) setShowOnboarding(true)
+  }, [configLoaded, sttReady])
 
   // (data loaded from Supabase via the auth effect above)
 
@@ -1097,9 +1151,14 @@ function App() {
   // ── Transcription / Summary ────────────────────────────────────────────
   const handleTranscribe = async (interviewId: string, language?: string) => {
     const interview = interviews.find(i => i.id === interviewId)
-    if (!interview?.recordingFilePath || !window.desktopApp?.transcribeAudio) return
+    // Estas salidas eran mudas: al pulsar "Transcribir" no pasaba nada y no había
+    // forma de saber por qué. Cada una dice ahora qué falta.
+    if (!interview) { toast('No se encuentra la entrevista', 'error'); return }
+    if (!interview.recordingFilePath) { toast('Esta entrevista no tiene grabación asociada', 'error'); return }
+    if (!window.desktopApp?.transcribeAudio) { toast('La transcripción solo funciona en la app de escritorio', 'error'); return }
+    if (!sttReady) { toast('Configura un motor de transcripción', 'error', 'Ajustes → Motores de IA'); return }
     const fullPath = resolveAudioPath(interview.recordingFilePath)
-    if (!fullPath) return
+    if (!fullPath) { toast('No se encuentra el archivo de la grabación', 'error', interview.recordingFilePath); return }
     // Pista solo-sistema (voz limpia del interlocutor), si esta grabación la tiene.
     // Su presencia activa la separación determinista de hablantes en el backend.
     const systemPath = interview.systemAudioFilePath ? resolveAudioPath(interview.systemAudioFilePath) : null
@@ -1125,7 +1184,7 @@ function App() {
     const criteria = project?.evaluationCriteria ?? []
     updateInterview(interviewId, { summaryStatus: 'generating' })
     try {
-      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, candidateName: candidate?.name ?? '' })
+      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, summaryContext: summaryContexts[interviewId] ?? 'entrevista', candidateName: candidate?.name ?? '' })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
       if (notifSummary) toast('Resumen generado')
     } catch (err) {
@@ -1336,14 +1395,20 @@ function App() {
   }
 
   const handleSaveSettings = async () => {
+    const nextStt = sttDraft
+    const nextLlm = sameKeyForLlm ? { ...llmDraft, apiKey: sttDraft.apiKey } : llmDraft
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
-      groqApiKey: settingsKeyDraft, transcriptionModel: settingsTxModelDraft, summaryModel: settingsSumModelDraft,
+      stt: nextStt, llm: nextLlm,
+      // Campos antiguos: se siguen escribiendo para que una versión anterior de la
+      // app (o un downgrade) siga encontrando la configuración de Groq.
+      groqApiKey: nextStt.provider === 'groq' ? nextStt.apiKey : '',
+      transcriptionModel: nextStt.model, summaryModel: nextLlm.model,
       userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft,
       userRole: settingsRoleDraft, audioFormat: settingsAudioFormatDraft, recordingQuality: settingsRecordingQualityDraft,
       chunkDuration: settingsChunkDurationDraft, language: settingsLanguageDraft, dateFormat: settingsDateFormatDraft,
       autoSave: settingsAutoSaveDraft, autoTranscribe,
     })
-    setGroqApiKey(settingsKeyDraft); setTranscriptionModel(settingsTxModelDraft); setSummaryModel(settingsSumModelDraft)
+    setSttCfg(nextStt); setLlmCfg(nextLlm)
     setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
     setUserRole(settingsRoleDraft); setAutoSave(settingsAutoSaveDraft)
     localStorage.setItem('ct-default-mic', settingsDefaultMicDraft)
@@ -1353,18 +1418,48 @@ function App() {
     localStorage.setItem('ct-default-video-quality', settingsVideoQualityDraft)
     setDefaultMicDeviceId(settingsDefaultMicDraft); setDefaultOutputDeviceId(settingsDefaultOutputDraft); setDefaultCaptureSystem(settingsDefaultSystemDraft)
     setDefaultRecordVideo(settingsRecordVideoDraft); setDefaultVideoQuality(settingsVideoQualityDraft)
-    // NOTE: la Groq API key NO se sincroniza a la nube por seguridad — vive solo en el config.json local.
-    if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, tx_model: settingsTxModelDraft, sum_model: settingsSumModelDraft, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
+    // NOTE: las API keys NO se sincronizan a la nube por seguridad — viven solo en el config.json local.
+    if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, tx_model: nextStt.model, sum_model: nextLlm.model, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
     toast('Configuración guardada')
   }
 
   const openSettings = (tab: SettingsTab = 'api-keys') => {
-    setSettingsKeyDraft(groqApiKey); setSettingsTxModelDraft(transcriptionModel); setSettingsSumModelDraft(summaryModel)
+    setSttDraft(sttCfg); setLlmDraft(llmCfg)
+    setSameKeyForLlm(Boolean(sttCfg.apiKey) && sttCfg.apiKey === llmCfg.apiKey)
+    setSttTest(null); setLlmTest(null)
     setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany)
     setSettingsRoleDraft(userRole)
     setSettingsDefaultMicDraft(defaultMicDeviceId); setSettingsDefaultOutputDraft(defaultOutputDeviceId); setSettingsDefaultSystemDraft(defaultCaptureSystem)
     setSettingsRecordVideoDraft(defaultRecordVideo); setSettingsVideoQualityDraft(defaultVideoQuality)
     setSettingsTab(tab); setScreen('settings')
+  }
+
+  // ── Motores de IA: cambio de proveedor y prueba de conexión ────────────
+  // Al cambiar de servicio se arrastra el modelo por defecto del nuevo (y su
+  // dialecto/URL si es personalizado), para que nunca quede una combinación
+  // imposible como "Deepgram + llama-3.3".
+  const changeProvider = (kind: 'stt' | 'llm', providerId: string) => {
+    const preset = findPreset(kind === 'stt' ? providerCatalog?.stt : providerCatalog?.llm, providerId)
+    const next: ProviderConfig = {
+      provider: providerId,
+      apiKey: '',
+      model: preset?.models[0] ?? '',
+      ...(providerId === 'custom' ? { baseUrl: '', dialect: 'openai' } : {}),
+    }
+    if (kind === 'stt') { setSttDraft(next); setSttTest(null) }
+    else { setLlmDraft(next); setLlmTest(null) }
+  }
+
+  const testProvider = async (kind: 'stt' | 'llm') => {
+    if (!window.desktopApp?.testProvider) return
+    const draft = kind === 'stt' ? sttDraft : (sameKeyForLlm ? { ...llmDraft, apiKey: sttDraft.apiKey } : llmDraft)
+    const setter = kind === 'stt' ? setSttTest : setLlmTest
+    setter('testing')
+    try {
+      setter(await window.desktopApp.testProvider({ kind, draft }))
+    } catch (err) {
+      setter({ ok: false, detail: String((err as Error)?.message || err) })
+    }
   }
 
   const goToProject = (projectId: string) => { setActiveProjectId(projectId); setSearchQuery(''); setScreen('project-detail') }
@@ -1388,12 +1483,26 @@ function App() {
     e.target.value = ''
   }
 
+  // El onboarding ofrece el camino fácil (Groq, gratis). Quien ya use otro
+  // servicio salta a Ajustes → Motores de IA y lo configura allí.
   const handleOnboardingSave = async () => {
-    if (!onboardingKeyDraft.trim()) return
-    if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({ groqApiKey: onboardingKeyDraft.trim(), transcriptionModel, summaryModel, userName, userEmail, userCompany })
-    setGroqApiKey(onboardingKeyDraft.trim()); setShowOnboarding(false)
+    const key = onboardingKeyDraft.trim()
+    if (!key) return
+    const stt: ProviderConfig = { ...DEFAULT_STT_CFG, apiKey: key }
+    const llm: ProviderConfig = { ...DEFAULT_LLM_CFG, apiKey: key }
+    if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
+      stt, llm, groqApiKey: key, transcriptionModel: stt.model, summaryModel: llm.model,
+      userName, userEmail, userCompany,
+    })
+    setSttCfg(stt); setLlmCfg(llm); setShowOnboarding(false)
     localStorage.setItem(ONBOARDING_KEY, '1')
     toast('API Key guardada — ¡todo listo!')
+  }
+
+  const skipOnboardingToSettings = () => {
+    setShowOnboarding(false)
+    localStorage.setItem(ONBOARDING_KEY, '1')
+    openSettings('api-keys')
   }
 
   // ── Breadcrumb ─────────────────────────────────────────────────────────
@@ -2090,9 +2199,9 @@ function App() {
 
   const renderInterviewsTab = () => (
     <div className="interviews-tab">
-      {!groqApiKey && (
+      {!sttReady && (
         <div className="warning-note" style={{ marginBottom: 12 }}>
-          ⚠ Sin API key de Groq — la transcripción no funcionará. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora →</button>
+          ⚠ Sin motor de transcripción configurado — la transcripción no funcionará. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora →</button>
         </div>
       )}
       <div className="rec-section-header">
@@ -2346,7 +2455,7 @@ function App() {
                     <div className="trx-error-icon-wrap"><span className="trx-error-icon">⚠</span></div>
                     <h3 className="trx-error-title">Error al transcribir</h3>
                     <p className="trx-error-sub1">No se pudo completar la transcripción.</p>
-                    <p className="trx-error-sub2">Verifica tu clave API de Groq o inténtalo de nuevo.</p>
+                    <p className="trx-error-sub2">Verifica tu clave de {sttPreset?.label ?? 'transcripción'} o inténtalo de nuevo.</p>
                     <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}>↺  Reintentar</button>
                     <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}>← Volver a grabaciones</button>
                   </div>
@@ -2426,14 +2535,27 @@ function App() {
           {selectedInterview ? (
             <>
               <div className="trx-toolbar">
+                {/* Enfoque: cambia de quién habla el informe y qué apartados cubre. */}
+                <select
+                  className="sum-type-select"
+                  value={summaryContexts[selectedInterview.id] ?? 'entrevista'}
+                  onChange={e => {
+                    const ctx = e.target.value as SummaryContext
+                    saveSummaryContext(selectedInterview.id, ctx)
+                    setSummaryContexts(prev => ({ ...prev, [selectedInterview.id]: ctx }))
+                  }}
+                >
+                  <option value="entrevista">Entrevista de selección ⌄</option>
+                  <option value="reunion">Reunión de negocio ⌄</option>
+                </select>
                 <select className={`sum-type-select${selectedInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`} value={selectedInterview.summaryType} onChange={e => updateInterview(selectedInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}>
                   <option value="resumen">Resumen descriptivo ⌄</option>
                   <option value="listado">Listado por puntos ⌄</option>
                 </select>
                 <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!groqApiKey || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating'}>{selectedInterview.summaryText ? '↺ Regenerar' : '★ Generar'}</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating'}>{selectedInterview.summaryText ? '↺ Regenerar' : '★ Generar'}</button>
               </div>
-              {!groqApiKey && <p className="warning-note">Configura tu API key de Groq en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
+              {!llmReady && <p className="warning-note">Configura un motor de resumen en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
               {selectedInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
               {selectedInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
               {selectedInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
@@ -2465,7 +2587,7 @@ function App() {
                 )
               ) : (
                 selectedInterview.transcriptionStatus === 'done' && selectedInterview.summaryStatus !== 'generating' && (
-                  <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!groqApiKey}>
+                  <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady}>
                     ★ Generar resumen con IA
                   </button>
                 )
@@ -2477,13 +2599,99 @@ function App() {
     )
   }
 
+  // ── Bloque de configuración de un motor de IA ──────────────────────────
+  // Se usa dos veces: una para transcripción y otra para resumen. Ambos son
+  // independientes — se puede transcribir con uno y resumir con otro.
+  const renderEngineSection = (kind: 'stt' | 'llm') => {
+    const isStt = kind === 'stt'
+    const presets = (isStt ? providerCatalog?.stt : providerCatalog?.llm) ?? []
+    const draft = isStt ? sttDraft : llmDraft
+    const setDraft = isStt ? setSttDraft : setLlmDraft
+    const preset = findPreset(presets, draft.provider)
+    const test = isStt ? sttTest : llmTest
+    const listId = `models-${kind}`
+    const keyLocked = !isStt && sameKeyForLlm
+    // Cualquier edición invalida el resultado de la última prueba de conexión.
+    const clearTest = () => (isStt ? setSttTest : setLlmTest)(null)
+
+    return (
+      <div className="settings-section">
+        <div className="settings-section-title">{isStt ? 'Transcripción' : 'Resumen IA'}</div>
+        <div className="settings-section-divider" />
+        <p className="cfg-field-desc">{isStt ? 'Convierte el audio de la llamada en texto' : 'Redacta el informe a partir de la transcripción'}</p>
+
+        <label className="modal-label">Servicio
+          <select className="modal-input modal-select" value={draft.provider} onChange={e => changeProvider(kind, e.target.value)}>
+            {presets.map(p => <option key={p.id} value={p.id}>{p.label}{p.note ? ` — ${p.note}` : ''}</option>)}
+          </select>
+        </label>
+
+        {preset?.consoleUrl && (
+          <p className="modal-link-note">
+            ¿De dónde saco la clave? — <a href={preset.consoleUrl} target="_blank" rel="noreferrer">{preset.consoleUrl.replace(/^https?:\/\//, '')}</a>
+          </p>
+        )}
+
+        {draft.provider === 'custom' && (
+          <>
+            <label className="modal-label">URL base
+              <input type="text" className="modal-input" value={draft.baseUrl ?? ''} placeholder="https://mi-servicio.com/v1"
+                onChange={e => setDraft({ ...draft, baseUrl: e.target.value })} />
+            </label>
+            <label className="modal-label">Formato que habla
+              <select className="modal-input modal-select" value={draft.dialect ?? 'openai'} onChange={e => setDraft({ ...draft, dialect: e.target.value })}>
+                <option value="openai">Compatible con OpenAI (lo más habitual)</option>
+                {isStt
+                  ? <><option value="deepgram">Deepgram</option><option value="elevenlabs">ElevenLabs</option></>
+                  : <option value="anthropic">Anthropic</option>}
+              </select>
+            </label>
+          </>
+        )}
+
+        {!isStt && (
+          <label className="modal-checkbox">
+            <input type="checkbox" checked={sameKeyForLlm} onChange={e => { setSameKeyForLlm(e.target.checked); setLlmTest(null) }} />
+            <span>Usar la misma clave que en transcripción</span>
+          </label>
+        )}
+
+        {!preset?.noKey && !keyLocked && (
+          <label className="modal-label">API Key
+            <input type="password" className="modal-input" value={draft.apiKey} placeholder={preset?.keyHint ?? '···'}
+              onChange={e => { setDraft({ ...draft, apiKey: e.target.value }); clearTest() }} />
+          </label>
+        )}
+
+        {/* Editable a propósito: si mañana sale un modelo nuevo, se escribe y ya.
+            Las sugerencias del catálogo son un atajo, no una lista cerrada. */}
+        <label className="modal-label">Modelo
+          <input type="text" className="modal-input" list={listId} value={draft.model} placeholder="nombre del modelo"
+            onChange={e => { setDraft({ ...draft, model: e.target.value }); clearTest() }} />
+          <datalist id={listId}>
+            {(preset?.models ?? []).map(m => <option key={m} value={m} />)}
+          </datalist>
+        </label>
+
+        <div className="cfg-test-row">
+          <button type="button" className="pill-btn" onClick={() => void testProvider(kind)} disabled={test === 'testing'}>
+            {test === 'testing' ? 'Probando…' : 'Probar conexión'}
+          </button>
+          {test && test !== 'testing' && (
+            <span className={test.ok ? 'cfg-test-ok' : 'cfg-test-fail'}>{test.ok ? '✓ ' : '✕ '}{test.detail}</span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   const renderSettings = () => (
     <div className="screen-content">
       <div className="content-header"><h2>Configuración</h2></div>
       <div className="settings-layout">
         <aside className="settings-nav">
           {([
-            ['api-keys', <KeyIcon />, 'API Keys'],
+            ['api-keys', <KeyIcon />, 'Motores de IA'],
             ['grabacion', <MicIcon />, 'Grabación'],
             ['general', <SettingsIcon />, 'General'],
           ] as [SettingsTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
@@ -2496,29 +2704,8 @@ function App() {
         <div className="settings-panel">
           {settingsTab === 'api-keys' && (
             <div className="settings-sections">
-              <div className="settings-section">
-                <div className="settings-section-title">API Key de Groq</div>
-                <div className="settings-section-divider" />
-                <p className="modal-link-note">Groq es gratuita — <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a></p>
-                <label className="modal-label">API Key<input type="password" className="modal-input" value={settingsKeyDraft} onChange={e => setSettingsKeyDraft(e.target.value)} placeholder="gsk_..." /></label>
-              </div>
-              <div className="settings-section">
-                <div className="settings-section-title">Modelos IA</div>
-                <div className="settings-section-divider" />
-                <label className="modal-label">Transcripción (Whisper)
-                  <select className="modal-input modal-select" value={settingsTxModelDraft} onChange={e => setSettingsTxModelDraft(e.target.value)}>
-                    <option value="whisper-large-v3">whisper-large-v3 — Mayor precisión</option>
-                    <option value="whisper-large-v3-turbo">whisper-large-v3-turbo — Rápido y preciso</option>
-                  </select>
-                </label>
-                <label className="modal-label">Resumen IA (LLM)
-                  <select className="modal-input modal-select" value={settingsSumModelDraft} onChange={e => setSettingsSumModelDraft(e.target.value)}>
-                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile — Más capaz</option>
-                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant — Más rápido</option>
-                    <option value="gemma2-9b-it">gemma2-9b-it — Alternativa</option>
-                  </select>
-                </label>
-              </div>
+              {renderEngineSection('stt')}
+              {renderEngineSection('llm')}
               <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
             </div>
           )}
@@ -3169,13 +3356,14 @@ function App() {
           <div className="modal-box onboarding-box" onClick={e => e.stopPropagation()}>
             <div className="onboarding-logo"><div className="sidebar-logo-badge" style={{ width: 48, height: 48, fontSize: 18 }}>CT</div></div>
             <h2 style={{ textAlign: 'center', margin: 0 }}>Bienvenido a Call Transcriber</h2>
-            <p style={{ textAlign: 'center', margin: 0 }}>Para empezar necesitas una API Key de Groq. Es gratuita.</p>
-            <label className="modal-label">Tu Groq API Key
+            <p style={{ textAlign: 'center', margin: 0 }}>Para transcribir necesitas conectar un servicio de IA. Groq es gratuito y no pide tarjeta — pero puedes usar el que prefieras.</p>
+            <label className="modal-label">Tu API Key de Groq
               <input type="password" className="modal-input" value={onboardingKeyDraft} onChange={e => setOnboardingKeyDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && onboardingKeyDraft.trim()) void handleOnboardingSave() }} placeholder="gsk_..." autoFocus />
             </label>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>¿Cómo obtengo mi clave? → <a href="https://console.groq.com" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>console.groq.com</a></p>
             <div className="modal-actions" style={{ justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
               <button type="button" className="primary-btn" style={{ width: '100%', padding: '12px' }} onClick={() => void handleOnboardingSave()} disabled={!onboardingKeyDraft.trim()}>Empezar a grabar →</button>
+              <button type="button" style={{ border: 'none', background: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }} onClick={skipOnboardingToSettings}>Ya uso otro servicio → configurarlo</button>
               <button type="button" style={{ border: 'none', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }} onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_KEY, '1') }}>Configurar más tarde</button>
             </div>
           </div>
