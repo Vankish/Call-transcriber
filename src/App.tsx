@@ -2622,9 +2622,18 @@ function App() {
 
         <label className="modal-label">Servicio
           <select className="modal-input modal-select" value={draft.provider} onChange={e => changeProvider(kind, e.target.value)}>
-            {presets.map(p => <option key={p.id} value={p.id}>{p.label}{p.note ? ` — ${p.note}` : ''}</option>)}
+            {presets.map(p => <option key={p.id} value={p.id}>{p.label}{p.note ? ` — ${p.note}` : ''}{p.unverified ? ' · sin probar' : ''}</option>)}
           </select>
         </label>
+
+        {preset?.unverified && (
+          <p className="warning-note cfg-unverified">
+            <strong>⚠ Sin probar.</strong> Este servicio está integrado pero todavía no se ha
+            usado con {isStt ? 'audio' : 'una transcripción'} de verdad, así que puede fallar.
+            Dale a <strong>Probar conexión</strong> aquí abajo y haz una prueba corta antes de
+            usarlo en una entrevista importante.
+          </p>
+        )}
 
         {preset?.consoleUrl && (
           <p className="modal-link-note">

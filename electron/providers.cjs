@@ -17,6 +17,14 @@
 
 const DEFAULT_MAX_BYTES = 24 * 1024 * 1024
 
+// `unverified: true` = el adaptador está escrito pero NUNCA se ha ejecutado
+// contra la API real. Compila, pero nadie ha visto que funcione. La UI lo marca
+// como "sin probar" para que nadie lo elija creyendo que está rodado.
+//
+// Al confirmar que un proveedor funciona de verdad (con audio o texto real, no
+// solo "Probar conexión"), quitar la marca de aquí. A fecha 2026-07-29 los
+// únicos usados en serio son ElevenLabs para transcribir y Groq para resumir.
+
 // ── Catálogo de transcripción (audio → texto) ────────────────────────────────
 const STT_PRESETS = [
   {
@@ -44,6 +52,7 @@ const STT_PRESETS = [
     maxBytes: DEFAULT_MAX_BYTES,
     diarize: false,
     segments: true,
+    unverified: true,
     // Los modelos gpt-4o-* no admiten verbose_json, así que no devuelven marcas
     // de tiempo. Sin ellas no se puede separar hablantes por pistas.
     noSegmentModels: ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe'],
@@ -71,6 +80,7 @@ const STT_PRESETS = [
     maxBytes: 1024 * 1024 * 1024,
     diarize: true,
     segments: true,
+    unverified: true,
   },
   {
     id: 'custom',
@@ -105,6 +115,7 @@ const LLM_PRESETS = [
     dialect: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     models: ['gpt-4o', 'gpt-4o-mini'],
+    unverified: true,
   },
   {
     id: 'anthropic',
@@ -114,6 +125,7 @@ const LLM_PRESETS = [
     dialect: 'anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
     models: ['claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+    unverified: true,
   },
   {
     id: 'openrouter',
@@ -123,6 +135,7 @@ const LLM_PRESETS = [
     dialect: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
     models: ['anthropic/claude-sonnet-5', 'google/gemini-2.5-pro', 'meta-llama/llama-3.3-70b-instruct'],
+    unverified: true,
   },
   {
     id: 'deepseek',
@@ -130,6 +143,7 @@ const LLM_PRESETS = [
     dialect: 'openai',
     baseUrl: 'https://api.deepseek.com/v1',
     models: ['deepseek-chat'],
+    unverified: true,
   },
   {
     id: 'ollama',
@@ -139,6 +153,7 @@ const LLM_PRESETS = [
     baseUrl: 'http://localhost:11434/v1',
     models: ['llama3.1', 'qwen2.5'],
     noKey: true,
+    unverified: true,
   },
   {
     id: 'custom',

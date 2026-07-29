@@ -48,6 +48,8 @@ type ProviderPreset = {
   models: string[]
   noKey?: boolean
   diarize?: boolean
+  /** Adaptador escrito pero nunca ejecutado contra la API real. Ver providers.cjs. */
+  unverified?: boolean
 }
 
 type ProviderCatalog = {
