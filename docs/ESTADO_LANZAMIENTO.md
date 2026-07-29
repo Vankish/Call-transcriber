@@ -102,9 +102,8 @@ No es un fallo de red ni de credenciales.
 - **Certificado de firma** (OV ~200-400€/año, o EV): quita el aviso de SmartScreen "editor desconocido".
 - **Legal**: rellenar huecos `[ ]` de `legal/*.md` + revisión de abogado. Decidir **región de Supabase**
   (recomendado UE) y verificar retención/transferencia de Groq (EE.UU.).
-- **`build/` está en `.gitignore`** → un clon limpio no tiene `build/icon.ico` y el build fallaría.
-  Si se va a buildear desde otro equipo, hay que versionar `build/` o regenerar el icono. **Importante
-  para el test entre dispositivos si el segundo equipo va a compilar.**
+- ~~**`build/` está en `.gitignore`**~~ → **ya resuelto** (verificado 2026-07-29): `build/icon.ico`
+  está versionado en git y `build/` no está ignorado. Un clon limpio compila.
 
 ## Archivos clave
 
