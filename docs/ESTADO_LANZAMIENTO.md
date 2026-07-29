@@ -33,8 +33,14 @@ el código nuevo no se ve hasta **reconstruir**:
 ```powershell
 git pull
 npm install                                        # solo si cambió package.json
+npm run build                                      # ⚠️ IMPRESCINDIBLE: tsc + vite → dist/
 npx electron-builder --win --dir --publish never   # refresca win-unpacked, sin instalador
 ```
+
+⚠️ **Trampa clásica:** `electron-builder` **no compila nada**, solo empaqueta lo que ya haya
+en `dist/`. Si lo lanzas sin `npm run build` delante, reconstruyes el `.exe` con el código
+VIEJO y parece que el `git pull` no ha servido de nada. `npm run package:win` sí hace los dos
+pasos (`npm run build && electron-builder`), pero genera además el instalador NSIS.
 
 ## Hecho ✅
 
