@@ -1,13 +1,40 @@
 # Estado de lanzamiento — Call Transcriber
 
 > Documento de contexto para retomar el trabajo desde cualquier dispositivo.
-> Última actualización: 2026-06-10.
+> Última actualización: 2026-07-29.
 
 ## Resumen
 
 La app está **técnicamente lista para lanzar**. En la sesión del 2026-06-10 se cerraron los
-4 bloqueadores de pre-lanzamiento. Ahora mismo se está **validando el auto-update entre dos
-dispositivos**.
+4 bloqueadores de pre-lanzamiento. El auto-update funciona salvo por el paso final, que
+sigue **bloqueado por la falta de certificado de firma**.
+
+## Última release: v1.0.3 (2026-07-29)
+
+Publicada SIN firma, como decisión consciente. Se instala a mano (SmartScreen avisa de
+"editor desconocido" → `Más información` → `Ejecutar de todas formas`).
+
+**Por qué hizo falta:** la v1.0.2 publicada el 15/07 era anterior a los commits del 20/07 y
+22/07, así que los usuarios nunca recibieron el selector Pantalla/Ventana, el fix de CPU en
+llamadas largas ni los motores de IA intercambiables. Y como `package.json` seguía diciendo
+`1.0.2` —el mismo número que la release publicada— las dos versiones eran indistinguibles
+entre sí. **Lección: subir `version` en `package.json` en el mismo commit que se publica.**
+
+⚠️ **Efecto conocido:** los usuarios en v1.0.2 detectarán la v1.0.3 y descargarán el diff,
+pero `electron-updater` no lo aplicará (falta firma) y fallará en silencio en cada arranque.
+El banner de actualización de `src/App.tsx` nunca llega a mostrarse. Hay que avisarles de
+que descarguen el `.exe` a mano hasta que haya certificado.
+
+### ⚠️ Un `git pull` NO actualiza la app en un equipo de desarrollo
+
+Si el acceso directo apunta a `release\win-unpacked\Call Transcriber.exe` (build empaquetada),
+el código nuevo no se ve hasta **reconstruir**:
+
+```powershell
+git pull
+npm install                                        # solo si cambió package.json
+npx electron-builder --win --dir --publish never   # refresca win-unpacked, sin instalador
+```
 
 ## Hecho ✅
 
@@ -43,11 +70,11 @@ Test ejecutado el 2026-06-10 en el mismo equipo de desarrollo (sin segundo dispo
 
 ### Próximos pasos (en orden)
 
-1. **Decidir**: ¿desactivar verificación de firma para terminar el test? (útil para desarrollo,
-   no apto para producción). Se haría en `electron/main.cjs` con `autoUpdater.allowPrerelease` /
-   desactivando `verifyUpdateCodeSignature`. O bien ir directo al certificado.
+1. ~~**Decidir** qué hacer con la firma~~ → **DECIDIDO 2026-07-29:** publicar sin firma
+   (v1.0.3). Instalación manual, auto-update sigue sin aplicarse. Se descartó de momento
+   desactivar `verifyUpdateCodeSignature` (apaño de desarrollo, no de producción).
 2. **Certificado OV/EV** (~200-400€/año): quita SmartScreen Y permite que electron-updater
-   aplique updates. Es la solución definitiva.
+   aplique updates. Es la solución definitiva y sigue pendiente.
 3. **Groq API key en Supabase**: pendiente de reimplementar — se eliminó por seguridad pero
    tiene sentido vincularla a la cuenta del usuario (protegida por RLS) para que no haya que
    reintroducirla en cada dispositivo. Requiere: migración SQL (añadir columna `groq_api_key`
@@ -59,12 +86,16 @@ Requisitos de build: Windows x64, **Modo de desarrollador activado** (para los s
 winCodeSign), `npm install`. Subir `version` en package.json, luego:
 
 ```powershell
-# PAT clásico (scope repo) guardado en gh_token.txt en la raíz (gitignored / borrar tras usar)
-$env:GH_TOKEN = (Get-Content .\gh_token.txt -Raw).Trim()
+# Si ya tienes gh CLI autenticado, no hace falta ningún PAT ni gh_token.txt:
+$env:GH_TOKEN = (gh auth token).Trim()
 npm run release:win
-Remove-Item .\gh_token.txt -Force
-# Luego en github.com/Vankish/Call-transcriber/releases: editar el borrador y "Publish release".
+# electron-builder crea la release como BORRADOR. Para publicarla:
+gh release edit v1.0.3 --repo Vankish/Call-transcriber --draft=false --latest
 ```
+
+**Ojo con la sandbox:** `git push` y `gh release edit` son operaciones de escritura y pueden
+salir bloqueadas ("Failed to connect to github.com port 443") aunque `git fetch` funcione.
+No es un fallo de red ni de credenciales.
 
 ## Pendiente (acciones externas) ⏳
 
