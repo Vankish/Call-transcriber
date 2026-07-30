@@ -252,6 +252,34 @@ function convertToFormat(inputPath, outputPath, format) {
   })
 }
 
+// MediaRecorder escribe el .webm en directo, así que no sabe cuánto va a durar y
+// deja la cabecera sin duración (`Duration: N/A`). El reproductor entonces no puede
+// calcular la posición: la barra avanza sobre lo que lleva descargado, llega al
+// final en unos segundos y luego se arrastra el resto del vídeo.
+//
+// Reempaquetar con ffmpeg SIN recodificar reescribe la cabecera con la duración
+// real. Es copia de flujos: 300 MB en menos de medio segundo, y no toca la calidad.
+async function writeDurationHeader(filePath) {
+  const fixedPath = filePath.replace(/(\.[^.]+)$/, '.fixed$1')
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ffmpegPath, ['-y', '-i', filePath, '-c', 'copy', fixedPath])
+      proc.on('error', reject)
+      proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg salió con ${code}`))))
+    })
+    // Solo se sustituye si el resultado tiene tamaño coherente: más vale un vídeo
+    // con la barra torcida que un vídeo corrupto.
+    const [orig, fixed] = await Promise.all([fs.stat(filePath), fs.stat(fixedPath)])
+    if (fixed.size < orig.size * 0.9) throw new Error('el reempaquetado salió más pequeño de lo esperado')
+    await fs.rename(fixedPath, filePath)
+    return true
+  } catch (err) {
+    log.warn(`[grabación] no se pudo escribir la duración en ${path.basename(filePath)}: ${err.message}`)
+    await fs.rm(fixedPath, { force: true }).catch(() => {})
+    return false
+  }
+}
+
 ipcMain.handle('recording:save', async (_event, payload) => {
   const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
   await fs.mkdir(recordingsDir, { recursive: true })
@@ -290,8 +318,24 @@ ipcMain.handle('recording:save-system', async (_event, payload) => {
 
   const filePath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}_system.${rawExtension}`)
   await fs.writeFile(filePath, buffer)
+  if (rawExtension === 'webm') await writeDurationHeader(filePath)
 
   return { filePath }
+})
+
+// Repara grabaciones hechas ANTES de que se escribiera la duración al guardar.
+// `getAudioDurationSec` devuelve null justo cuando falta la cabecera, así que
+// sirve de comprobación: si ya está, no se toca el archivo.
+ipcMain.handle('recording:ensure-duration', async (_event, { filePath }) => {
+  try {
+    if (!filePath || !/\.webm$/i.test(filePath)) return { ok: true, repaired: false }
+    await fs.access(filePath)
+    if (await getAudioDurationSec(filePath)) return { ok: true, repaired: false }
+    log.info(`[grabación] ${path.basename(filePath)} no lleva duración en la cabecera, reempaquetando`)
+    return { ok: true, repaired: await writeDurationHeader(filePath) }
+  } catch {
+    return { ok: false, repaired: false }
+  }
 })
 
 ipcMain.handle('capture:set-mode', (_event, wantsVideo) => {
@@ -314,6 +358,7 @@ ipcMain.handle('recording:save-video', async (_event, payload) => {
 
   const videoPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}_video.webm`)
   await fs.writeFile(videoPath, buffer)
+  await writeDurationHeader(videoPath)
 
   return { filePath: videoPath }
 })
@@ -635,6 +680,49 @@ function wordsOutsideIntervals(words, intervals, pad = 0.2) {
   })
 }
 
+// Reparte las palabras de la mezcla entre los hablantes que YA ha identificado el
+// proveedor, y decide cuál de ellos es el interlocutor comparando con la pista de
+// sistema: la voz que suena a la vez que esa pista es, por fuerza, la suya.
+//
+// Es mejor que recortar por tiempo. Recortando se pierde toda palabra del
+// entrevistador que caiga mientras el otro habla — o sea las interrupciones, los
+// "ajá" y el arranque de cada pregunta encadenada. Aquí no se borra nada: solo se
+// decide de quién es cada palabra, que es lo que el proveedor ya ha calculado (y
+// que hasta ahora se estaba tirando a la basura).
+//
+// Devuelve null si la identificación no es concluyente, para caer al método por
+// tiempo en vez de inventarse una separación.
+function interviewerWordsBySpeaker(words, systemIntervals) {
+  const bySpeaker = new Map()
+  for (const w of words) {
+    const key = w.speaker ?? '?'
+    if (!bySpeaker.has(key)) bySpeaker.set(key, [])
+    bySpeaker.get(key).push(w)
+  }
+  if (bySpeaker.size < 2) return null   // el proveedor no separó hablantes
+
+  const suenaEnLaPistaDelOtro = (w) => {
+    const mid = ((w.start ?? 0) + (w.end ?? 0)) / 2
+    return systemIntervals.some(([s, e]) => mid >= s && mid <= e)
+  }
+
+  const stats = [...bySpeaker.entries()]
+    .map(([speaker, ws]) => ({ speaker, words: ws, ratio: ws.filter(suenaEnLaPistaDelOtro).length / ws.length }))
+    .sort((a, b) => b.ratio - a.ratio)
+
+  // El interlocutor es quien más coincide con su propia pista; el resto es el
+  // entrevistador (a veces el proveedor parte una misma voz en dos hablantes).
+  const [interlocutor, ...resto] = stats
+  if (interlocutor.ratio < 0.6) return null            // nadie encaja con la pista: no fiarse
+  const entrevistador = resto.filter((s) => s.ratio < 0.4)
+  if (!entrevistador.length) return null               // no se distingue una segunda voz
+
+  return {
+    words: entrevistador.flatMap((s) => s.words).sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
+    detail: stats.map((s) => `${s.speaker}=${Math.round(s.ratio * 100)}%`).join(' '),
+  }
+}
+
 // Reagrupa palabras sueltas en frases, cortando por silencio.
 function segmentsFromWords(words, gapSec = 0.8) {
   const segments = []
@@ -651,12 +739,28 @@ function segmentsFromWords(words, gapSec = 0.8) {
   return segments
 }
 
+// Marca de tiempo de cada turno, para poder saltar a ese punto del audio o del
+// vídeo y comprobar que lo transcrito es lo que se dijo.
+const stamp = (sec) => {
+  const total = Math.max(0, Math.floor(sec || 0))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const mm = String(m).padStart(2, '0')
+  return `[${h > 0 ? `${h}:${mm}` : mm}:${String(s).padStart(2, '0')}]`
+}
+
 // Combina la mezcla (mic+sistema) con la pista limpia del sistema:
 //  · sistema  → [Candidato] (voz del interlocutor, ya aislada, se conserva entera)
-//  · mezcla   → [Entrevistador], PERO descartando los segmentos que solapan en el
-//    tiempo con la voz del sistema. Eso elimina el eco/duplicado (la voz del candidato
-//    que también aparece en la mezcla) — que fue justo lo que rompió el intento anterior.
-function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabel, candidateLabel) {
+//  · mezcla   → [Entrevistador]
+//
+// `dropOverlapping` descarta los segmentos de la mezcla que solapan en el tiempo con
+// la voz del sistema, para que la voz del interlocutor no salga duplicada. Solo hace
+// falta cuando el entrevistador se ha aislado por TIEMPO. Si se ha aislado por
+// HABLANTE (interviewerWordsBySpeaker), esas palabras ya son suyas con nombre y
+// apellidos, y aplicar el filtro aquí volvería a borrar justo lo que se quería
+// rescatar: lo que dice mientras el otro habla.
+function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabel, candidateLabel, dropOverlapping = true) {
   const rows = []
   for (const s of systemSegments) {
     const text = (s.text || '').trim()
@@ -665,17 +769,17 @@ function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabe
   for (const s of mixedSegments) {
     const text = (s.text || '').trim()
     if (!text) continue
-    if (segOverlapFraction(s, systemSegments) > 0.5) continue // hablaba el candidato: ya está en la pista limpia
+    if (dropOverlapping && segOverlapFraction(s, systemSegments) > 0.5) continue
     rows.push({ start: s.start ?? 0, label: interviewerLabel, text })
   }
   rows.sort((a, b) => a.start - b.start)
 
   let result = ''
   let currentLabel = null
-  for (const { label, text } of rows) {
+  for (const { label, text, start } of rows) {
     if (label !== currentLabel) {
       if (result) result += '\n'
-      result += `[${label}]: ${text}`
+      result += `${stamp(start)} [${label}]: ${text}`
       currentLabel = label
     } else {
       result += ' ' + text
@@ -718,7 +822,15 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
       // criterios anteriores en vez de romper.
       let mixedSegments
       let modo
-      if (mixed.words?.length && speech?.length) {
+      // Camino preferente: quedarse con las palabras del entrevistador por HABLANTE.
+      // No borra nada, así que conserva lo que dice mientras el otro habla.
+      const porHablante = mixed.words?.length && speech?.length
+        ? interviewerWordsBySpeaker(mixed.words, speech)
+        : null
+      if (porHablante) {
+        mixedSegments = segmentsFromWords(porHablante.words)
+        modo = `hablantes del proveedor (coincidencia con la pista de sistema: ${porHablante.detail})`
+      } else if (mixed.words?.length && speech?.length) {
         mixedSegments = segmentsFromWords(wordsOutsideIntervals(mixed.words, speech))
         modo = 'palabras + audio medido'
       } else if (mixed.words?.length) {
@@ -728,9 +840,9 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
         mixedSegments = mixed.segments
         modo = 'segmentos'
       }
-      log.info(`[transcripción] recorte por ${modo}: ${mixed.segments.length} → ${mixedSegments.length} tramos del entrevistador`)
+      log.info(`[transcripción] separación por ${modo}: ${mixed.segments.length} → ${mixedSegments.length} tramos del entrevistador`)
       // Etiquetas fijas [Entrevistador] / [Candidato]: el resumen depende de ellas.
-      const merged = mergeSeparatedTranscript(mixedSegments, system.segments, 'Entrevistador', 'Candidato')
+      const merged = mergeSeparatedTranscript(mixedSegments, system.segments, 'Entrevistador', 'Candidato', !porHablante)
       const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
       return { text }
     } catch (err) {
@@ -751,6 +863,114 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
 
   return { text }
 })
+
+// ── Resúmenes de transcripciones largas ──────────────────────────────────────
+//
+// Los planes gratuitos limitan los TOKENS POR MINUTO (Groq: 12.000) y cuentan en
+// la misma petición el prompt y los tokens de salida reservados con `max_tokens`.
+// Una entrevista de 40 minutos ya no cabe y la API devuelve 413 sin procesar nada.
+//
+// Dos medidas: reservar una salida realista (un informe no ocupa 8.000 tokens), y
+// si aun así no cabe, trocear la transcripción por turnos, sacar de cada trozo una
+// lista de hechos literales, y redactar el informe final sobre esas notas. Se
+// pierde algo de matiz, pero es la diferencia entre tener informe y no tenerlo.
+
+const SUMMARY_MAX_TOKENS = 2500   // techo del informe final
+const NOTES_MAX_TOKENS = 1200     // techo de las notas de cada trozo
+
+// Aproximación: en español un token ronda los 3,5 caracteres. Se queda corta a
+// propósito — si nos pasamos por poco, el reintento por trozos lo cubre; si nos
+// pasáramos de prudentes, trocearíamos entrevistas que sí cabían.
+const estimateTokens = (text) => Math.ceil(String(text || '').length / 3.5)
+
+// El proveedor rechaza por tamaño (413) o por cuota agotada (429). Ambos casos se
+// resuelven igual: con menos texto por petición.
+const isSizeOrRateError = (err) =>
+  /\b(413|429)\b|too large|rate.?limit|tokens per minute/i.test(String(err?.message || err))
+
+/** Parte el texto en trozos de como mucho `maxTokens`, cortando por turnos de
+ *  conversación para no dejar a nadie a media frase. */
+function splitTranscript(text, maxTokens) {
+  const maxChars = Math.max(2000, Math.floor(maxTokens * 3.5))
+  const chunks = []
+  let current = ''
+  for (const line of String(text).split('\n')) {
+    // Un turno más largo que un trozo entero (un monólogo sin saltos de línea) se
+    // parte por frases, y si aun así no cabe, por longitud a secas.
+    const pieces = line.length <= maxChars ? [line] : splitLongLine(line, maxChars)
+    for (const piece of pieces) {
+      if (current && current.length + piece.length + 1 > maxChars) {
+        chunks.push(current)
+        current = ''
+      }
+      current = current ? `${current}\n${piece}` : piece
+    }
+  }
+  if (current.trim()) chunks.push(current)
+  return chunks
+}
+
+function splitLongLine(line, maxChars) {
+  const out = []
+  let rest = line
+  while (rest.length > maxChars) {
+    const window = rest.slice(0, maxChars)
+    const cut = Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '))
+    const at = cut > maxChars * 0.5 ? cut + 1 : maxChars
+    out.push(rest.slice(0, at).trim())
+    rest = rest.slice(at)
+  }
+  if (rest.trim()) out.push(rest.trim())
+  return out
+}
+
+/** El límite es por MINUTO, así que tras gastar cuota no queda otra que esperar a
+ *  que la ventana se libere. Mejor esperar que comerse un 429. */
+function makePacer(tokensPerMinute) {
+  let spent = []
+  return async (tokens) => {
+    for (;;) {
+      const now = Date.now()
+      spent = spent.filter((e) => now - e.at < 60000)
+      const used = spent.reduce((sum, e) => sum + e.tokens, 0)
+      if (!spent.length || used + tokens <= tokensPerMinute) break
+      const wait = 60000 - (now - spent[0].at) + 1000
+      log.info(`[resumen] cuota del minuto agotada, esperando ${Math.round(wait / 1000)}s`)
+      await new Promise((r) => setTimeout(r, wait))
+    }
+    spent.push({ at: Date.now(), tokens })
+  }
+}
+
+/** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
+ *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada. */
+async function condenseTranscript(text, llm, { isMeeting, budget, pace }) {
+  const system =
+    `Recibes un FRAGMENTO de la transcripción de una ${isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'}, ` +
+    'con los turnos etiquetados como [Entrevistador]: y [Candidato]:.\n' +
+    'Devuelve una lista de viñetas con TODO lo concreto que se diga en el fragmento. Cada viñeta empieza por la ' +
+    'etiqueta de quien lo dijo, así: "- [Candidato]: ...".\n' +
+    'REGLAS:\n' +
+    '- Copia literalmente cifras, fechas, plazos, importes y nombres de personas y empresas, y asócialos exactamente a aquello a lo que se referían. No los mezcles entre sí.\n' +
+    '- Los turnos empiezan por una marca de tiempo entre corchetes, tipo [12:34]. Conserva al principio de cada viñeta la del turno del que sale, pero no la trates nunca como un dato de lo que se habla.\n' +
+    '- No interpretes, no valores y no saques conclusiones: solo registra lo dicho.\n' +
+    '- No inventes ni completes nada que no aparezca en el fragmento.\n' +
+    '- Omite la charla intrascendente (saludos, cortesías, problemas de conexión).\n' +
+    '- Si el fragmento empieza o termina a media frase, no la completes.\n' +
+    'Responde en español y solo con las viñetas.'
+
+  const chunkTokens = Math.max(600, budget - estimateTokens(system) - NOTES_MAX_TOKENS - 100)
+  const chunks = splitTranscript(text, chunkTokens)
+  log.info(`[resumen] transcripción larga: se condensa en ${chunks.length} trozo(s)`)
+
+  const notes = []
+  for (let i = 0; i < chunks.length; i++) {
+    const user = `Fragmento ${i + 1} de ${chunks.length}:\n\n${chunks[i]}`
+    await pace(estimateTokens(system) + estimateTokens(user) + NOTES_MAX_TOKENS)
+    notes.push(await providers.chat(llm, { system, user, temperature: 0, maxTokens: NOTES_MAX_TOKENS }))
+  }
+  return notes.map((n) => String(n).trim()).filter(Boolean).join('\n')
+}
 
 const CRITERIA_LABELS = {
   experiencia:    'Experiencia laboral',
@@ -813,10 +1033,21 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
       ? '- Presta máxima atención a cifras, fechas, plazos y nombres de empresas: asocia cada dato exactamente a aquello a lo que se refería, sin mezclarlos.\n'
       : '- Presta máxima atención a los nombres de empresas y los tiempos de permanencia: cada duración debe asociarse exactamente a la empresa a la que corresponde según la transcripción. No intercambies ni mezcles datos de distintas empresas o períodos.\n') +
     '- Si un dato concreto (fecha, duración, nombre) no aparece claramente en la transcripción, omítelo en lugar de suponerlo.\n' +
+    // Sin esto el modelo toma los [12:34] por datos y acaba escribiendo cosas como
+    // "a los 12 minutos mencionó..." o confundiéndolos con horas y fechas reales.
+    '- Cada turno empieza por una marca de tiempo entre corchetes, tipo [12:34]: es el momento de la grabación en que se dijo, NO es contenido. No la cites ni la confundas con una hora, una fecha ni una cifra de las que se hablan.\n' +
     'Responde en español.'
 
   let systemPrompt
-  let userPrompt
+  let makeUserPrompt
+
+  // Cuando la transcripción no cabe en una petición, al modelo no le llega la
+  // conversación sino las notas extraídas de ella. Conviene que lo sepa: si cree
+  // que tiene la transcripción entera, da por no tratado lo que no ve.
+  const bodyLabel = (isNotes) => isNotes
+    ? 'Notas literales extraídas de la transcripción, en orden cronológico (la conversación era demasiado ' +
+      'larga para procesarla de una vez; estas notas son la única fuente disponible):'
+    : 'Transcripción:'
 
   // Correspondencia explícita entre etiqueta y persona. Sin esto el modelo deduce
   // los nombres del propio texto y los cruza: cuando el entrevistador saluda
@@ -854,9 +1085,9 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
         : 'No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".') +
       '\n\n' + candidateRef + '\n\n' + fidelityRules
 
-    userPrompt = effectiveCriteria
-      ? `Secciones a analizar:\n${effectiveCriteria.join('\n')}\n\nTranscripción:\n${transcript}`
-      : `Transcripción:\n${transcript}`
+    makeUserPrompt = (body, isNotes) => effectiveCriteria
+      ? `Secciones a analizar:\n${effectiveCriteria.join('\n')}\n\n${bodyLabel(isNotes)}\n${body}`
+      : `${bodyLabel(isNotes)}\n${body}`
   } else {
     const topicSentence = effectiveCriteria
       ? `Cubre específicamente los siguientes aspectos (en este orden si aplican): ${effectiveCriteria.join(', ')}.`
@@ -880,10 +1111,44 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
       candidateRef + '\n\n' +
       fidelityRules
 
-    userPrompt = `Transcripción:\n${transcript}`
+    makeUserPrompt = (body, isNotes) => `${bodyLabel(isNotes)}\n${body}`
   }
 
-  const text = await providers.chat(llm, { system: systemPrompt, user: userPrompt, temperature: 0.1 })
+  // Se aparta un margen del límite por minuto: la cuenta de tokens del proveedor
+  // no tiene por qué coincidir con nuestra estimación.
+  const budget = Math.max(2000, llm.tpm - 200)
+  const fixedCost = estimateTokens(systemPrompt) + SUMMARY_MAX_TOKENS
+
+  const fullPrompt = makeUserPrompt(transcript, false)
+  if (fixedCost + estimateTokens(fullPrompt) <= budget) {
+    try {
+      const text = await providers.chat(llm, {
+        system: systemPrompt, user: fullPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
+      })
+      return { text }
+    } catch (err) {
+      // Si nuestra estimación se quedó corta, se recae en el camino por trozos en
+      // vez de devolverle el error al usuario.
+      if (!isSizeOrRateError(err)) throw err
+      log.warn(`[resumen] ${llm.label} rechazó la petición por tamaño; se reintenta por trozos: ${err.message}`)
+    }
+  }
+
+  const pace = makePacer(budget)
+  let material = transcript
+  // Con transcripciones muy largas un solo pase de notas puede seguir sin caber:
+  // se vuelve a condensar hasta que entre (con tope, para no dar vueltas si el
+  // modelo deja de comprimir).
+  for (let pase = 1; pase <= 3; pase++) {
+    material = await condenseTranscript(material, llm, { isMeeting, budget, pace })
+    if (fixedCost + estimateTokens(makeUserPrompt(material, true)) <= budget) break
+  }
+
+  const notesPrompt = makeUserPrompt(material, true)
+  await pace(fixedCost + estimateTokens(notesPrompt))
+  const text = await providers.chat(llm, {
+    system: systemPrompt, user: notesPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
+  })
   return { text }
 })
 
