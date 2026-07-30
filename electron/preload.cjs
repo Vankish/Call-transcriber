@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   transcribeAudio: (payload) => ipcRenderer.invoke('transcription:run', payload),
   generateSummary: (payload) => ipcRenderer.invoke('summary:generate', payload),
   deleteRecording: (payload) => ipcRenderer.invoke('recording:delete', payload),
+  ensureRecordingDuration: (payload) => ipcRenderer.invoke('recording:ensure-duration', payload),
   openOAuthWindow: (url) => ipcRenderer.invoke('auth:open-oauth-window', url),
   exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
   getRecordingsDir: () => ipcRenderer.invoke('recordings:get-dir'),

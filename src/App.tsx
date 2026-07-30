@@ -361,6 +361,9 @@ function App() {
   // ── Playback ───────────────────────────────────────────────────────────
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
   const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null)
+  const [repairingVideoId, setRepairingVideoId] = useState<string | null>(null)
+  const [videoReloadKey, setVideoReloadKey] = useState(0)
+  const [videoTime, setVideoTime] = useState({ current: 0, total: 0 })
   const [_playbackProgress, setPlaybackProgress] = useState(0)
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0)
   const [playbackDuration, setPlaybackDuration] = useState(0)
@@ -415,6 +418,13 @@ function App() {
   const [videoPlaybackRate, setVideoPlaybackRate] = useState(1)
   const [videoVolume, setVideoVolume] = useState(1)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  // Segundo al que hay que saltar en cuanto el audio tenga metadatos, cuando la
+  // reproducción se lanza desde una marca de tiempo de la transcripción.
+  const pendingSeekRef = useRef<number | null>(null)
+  const videoElRef = useRef<HTMLVideoElement | null>(null)
+  // De qué entrevista es el vídeo que hay ahora mismo en pantalla, para no mandar
+  // un salto de tiempo al vídeo equivocado.
+  const videoElInterviewRef = useRef<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const localDataLoaded = useRef(false)
 
@@ -1200,12 +1210,19 @@ function App() {
     setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0); setPlaybackDuration(0)
   }
 
-  const handleTogglePlayback = (interview: Interview) => {
+  const handleTogglePlayback = (interview: Interview, startAt?: number) => {
     const resolved = resolveAudioPath(interview.recordingFilePath)
     const src = interview.recordingUrl ?? (resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null)
     if (!src) return
-    if (playingInterviewId === interview.id) { stopAudio(); return }
+    // Con startAt no se alterna: se salta a ese punto, esté sonando o no.
+    if (playingInterviewId === interview.id) {
+      if (startAt === undefined) { stopAudio(); return }
+      handleSeek(startAt)
+      void audioRef.current?.play()
+      return
+    }
     stopAudio()
+    if (startAt !== undefined) pendingSeekRef.current = startAt
     const audio = new Audio(src); audio.playbackRate = playbackRate; audioRef.current = audio
     setPlaybackDuration(interview.durationSec > 0 ? interview.durationSec : 0)
 
@@ -1222,13 +1239,23 @@ function App() {
     }
     audio.ondurationchange = applyDuration
     audio.onloadedmetadata = () => {
-      if (isFinite(audio.duration) && audio.duration > 0) { applyDuration(); return }
+      // Salto pedido desde una marca de tiempo de la transcripción. Se aplica al
+      // final a propósito: el sondeo de duración de abajo mueve el cursor y lo pisaría.
+      const applyPendingSeek = () => {
+        const at = pendingSeekRef.current
+        pendingSeekRef.current = null
+        if (at === null) return false
+        audio.currentTime = at
+        setPlaybackCurrentTime(at)
+        return true
+      }
+      if (isFinite(audio.duration) && audio.duration > 0) { applyDuration(); applyPendingSeek(); return }
       // Forzar el cálculo de la duración real con un seek al final, una sola vez.
       probing = true
       const onProbe = () => {
         audio.removeEventListener('timeupdate', onProbe)
         probing = false
-        audio.currentTime = 0
+        if (!applyPendingSeek()) audio.currentTime = 0
         applyDuration()
       }
       audio.addEventListener('timeupdate', onProbe)
@@ -1252,6 +1279,25 @@ function App() {
     }
   }
 
+  // El sondeo de arriba deja la duración "finita", pero no la REAL: mientras el
+  // archivo no lleve la duración en la cabecera, el navegador la estima sobre lo
+  // que lleva leído y la barra avanza a saltos (llega al final en segundos y luego
+  // se arrastra). La cabecera se escribe ahora al guardar, así que esto solo repara
+  // las grabaciones anteriores, la primera vez que se abren.
+  const handleToggleVideo = (iv: Interview) => {
+    const opening = expandedVideoId !== iv.id
+    setExpandedVideoId(id => (id === iv.id ? null : iv.id))
+    if (!opening || !iv.videoFilePath || !window.desktopApp?.ensureRecordingDuration) return
+    const filePath = resolveAudioPath(iv.videoFilePath)
+    if (!filePath) return
+    setRepairingVideoId(iv.id)
+    void window.desktopApp.ensureRecordingDuration({ filePath })
+      // Si se ha reescrito el archivo hay que recargar el <video>: el que ya está
+      // en pantalla sigue con la duración mal calculada.
+      .then(r => { if (r.repaired) setVideoReloadKey(k => k + 1) })
+      .finally(() => setRepairingVideoId(null))
+  }
+
   // Busca (adelanta/atrasa) el audio en reproducción a un segundo concreto
   const handleSeek = (sec: number) => {
     const audio = audioRef.current
@@ -1261,6 +1307,27 @@ function App() {
     audio.currentTime = clamped
     setPlaybackCurrentTime(clamped)
     if (total > 0) setPlaybackProgress(Math.min(clamped / total, 1))
+  }
+
+  // Doble clic en la transcripción → saltar al momento en que se dijo eso.
+  //
+  // La transcripción es un textarea editable, así que no se pueden poner enlaces
+  // dentro. Pero como cada turno empieza por su marca [mm:ss], basta con buscar
+  // hacia atrás desde donde está el cursor la última marca que haya: esa es la del
+  // turno en el que se ha hecho doble clic.
+  const handleTranscriptSeek = (el: HTMLTextAreaElement, iv: Interview) => {
+    const marks = [...el.value.slice(0, el.selectionStart).matchAll(/\[(?:(\d+):)?(\d{1,2}):(\d{2})\]/g)]
+    const last = marks[marks.length - 1]
+    if (!last) return
+    const sec = (last[1] ? parseInt(last[1], 10) * 3600 : 0) + parseInt(last[2], 10) * 60 + parseInt(last[3], 10)
+    // Si el vídeo de esta entrevista está en pantalla manda el vídeo: es donde está mirando.
+    const video = videoElRef.current
+    if (videoElInterviewRef.current === iv.id && video) {
+      video.currentTime = sec
+      void video.play()
+      return
+    }
+    handleTogglePlayback(iv, sec)
   }
 
   // Barra de tiempo/scrubber que aparece junto al play de la entrevista en reproducción.
@@ -1528,6 +1595,17 @@ function App() {
     const resolved = resolveAudioPath(stored)
     return resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null
   }, [resolveAudioPath])
+
+  // El vídeo de la pestaña de transcripción se muestra solo, sin desplegar nada, así
+  // que la reparación de la cabecera se lanza al seleccionar la entrevista.
+  const selectedVideoPath = selectedInterview?.videoFilePath ?? null
+  useEffect(() => {
+    if (!selectedVideoPath || !window.desktopApp?.ensureRecordingDuration) return
+    const filePath = resolveAudioPath(selectedVideoPath)
+    if (!filePath) return
+    void window.desktopApp.ensureRecordingDuration({ filePath })
+      .then(r => { if (r.repaired) setVideoReloadKey(k => k + 1) })
+  }, [selectedVideoPath, resolveAudioPath])
 
   const activeDateLocale = useMemo(() => {
     if (settingsDateFormatDraft === 'MM/DD/YYYY') return 'en-US'
@@ -2249,7 +2327,7 @@ function App() {
               <div key={iv.id}>
               <div
                 className={`rec-row${iv.videoFilePath ? ' rec-row--expandable' : ''}`}
-                onClick={() => { if (iv.videoFilePath) setExpandedVideoId(id => id === iv.id ? null : iv.id) }}
+                onClick={() => { if (iv.videoFilePath) handleToggleVideo(iv) }}
               >
                 <div className="rec-row-accent" />
                 <div className="rec-row-info">
@@ -2299,11 +2377,23 @@ function App() {
                 <div className="video-player-card" onClick={e => e.stopPropagation()}>
                   <div className="video-player-title"><VideoIcon size={15} /> Vídeo de la grabación</div>
                   <video
+                    key={videoReloadKey}
                     className="video-player-el"
                     controls
                     src={resolveVideoUrl(iv.videoFilePath) ?? undefined}
-                    ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume; fixVideoDuration(el) } }}
+                    ref={el => { videoElRef.current = el; videoElInterviewRef.current = el ? iv.id : null; if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume; fixVideoDuration(el) } }}
+                    onTimeUpdate={e => {
+                      const el = e.currentTarget
+                      const d = el.duration
+                      setVideoTime({ current: el.currentTime, total: isFinite(d) && d > 0 ? d : 0 })
+                    }}
                   />
+                  <div className="video-player-time">
+                    <span className="video-player-time-now">{fmt(Math.floor(videoTime.current))}</span>
+                    <span className="video-player-time-sep">/</span>
+                    <span>{videoTime.total > 0 ? fmt(Math.floor(videoTime.total)) : fmt(iv.durationSec)}</span>
+                    {repairingVideoId === iv.id && <span className="video-player-time-note">calibrando la barra…</span>}
+                  </div>
                   <div className="video-player-controls">
                     <label className="video-player-ctrl">Velocidad
                       <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
@@ -2371,11 +2461,26 @@ function App() {
           <>
             <div className="trx-video-panel">
               <video
+                key={videoReloadKey}
                 className="trx-video-el"
                 controls
                 src={resolveVideoUrl(selectedInterview.videoFilePath) ?? undefined}
-                ref={el => { if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume } }}
+                ref={el => {
+                  videoElRef.current = el
+                  videoElInterviewRef.current = el ? selectedInterview.id : null
+                  if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume; fixVideoDuration(el) }
+                }}
+                onTimeUpdate={e => {
+                  const el = e.currentTarget
+                  const d = el.duration
+                  setVideoTime({ current: el.currentTime, total: isFinite(d) && d > 0 ? d : 0 })
+                }}
               />
+              <div className="video-player-time">
+                <span className="video-player-time-now">{fmt(Math.floor(videoTime.current))}</span>
+                <span className="video-player-time-sep">/</span>
+                <span>{videoTime.total > 0 ? fmt(Math.floor(videoTime.total)) : fmt(selectedInterview.durationSec)}</span>
+              </div>
               <div className="video-player-controls">
                 <label className="video-player-ctrl">Velocidad
                   <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
@@ -2469,11 +2574,17 @@ function App() {
                     <p className="trx-pending-sub">Pulsa "Transcribir" en el panel izquierdo para procesarla con Whisper.</p>
                   </div>
                 ) : (
-                  <textarea className="trx-textarea" value={transcriptDraft} onChange={e => setTranscriptDraft(e.target.value)} placeholder="La transcripción aparecerá aquí..." />
+                  <textarea
+                    className="trx-textarea"
+                    value={transcriptDraft}
+                    onChange={e => setTranscriptDraft(e.target.value)}
+                    onDoubleClick={e => handleTranscriptSeek(e.currentTarget, selectedInterview)}
+                    placeholder="La transcripción aparecerá aquí..."
+                  />
                 )
               )}
               <div className="trx-footer">
-                <span className="trx-footer-info">✎ Haz clic para editar · {wordCount} palabras · {readingMin} min</span>
+                <span className="trx-footer-info">✎ Haz clic para editar · Doble clic en un turno para escucharlo · {wordCount} palabras · {readingMin} min</span>
                 <div className="trx-footer-actions">
                   <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
                   <button type="button" className="trx-footer-btn" onClick={() => { const orig = selectedInterview.transcriptOriginal; setTranscriptDraft(orig); updateInterview(selectedInterview.id, { transcriptEdited: orig, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción restaurada') }}>Restaurar original</button>
