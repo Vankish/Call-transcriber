@@ -141,6 +141,7 @@ interface Window {
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
+    ensureRecordingDuration: (payload: { filePath: string }) => Promise<{ ok: boolean; repaired: boolean }>
     openOAuthWindow: (url: string) => Promise<string | null>
     exportPdf: (payload: { html: string; fileName: string }) => Promise<{ ok: boolean; cancelled?: boolean; filePath?: string }>
     getRecordingsDir: () => Promise<string>

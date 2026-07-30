@@ -17,6 +17,14 @@
 
 const DEFAULT_MAX_BYTES = 24 * 1024 * 1024
 
+// Tokens por minuto que admite el plan gratuito. Importa porque los proveedores
+// cuentan en la MISMA petición los tokens del prompt y los de salida que se
+// reservan con `max_tokens`: una transcripción larga se pasa del límite y la API
+// devuelve 413 sin llegar a procesar nada. El resumen usa este número para saber
+// cuándo trocear (ver main.cjs). Solo se pone donde se conoce el límite real; el
+// resto se dejan altos para no trocear sin motivo.
+const DEFAULT_TPM = 120000
+
 // `unverified: true` = el adaptador está escrito pero NUNCA se ha ejecutado
 // contra la API real. Compila, pero nadie ha visto que funcione. La UI lo marca
 // como "sin probar" para que nadie lo elija creyendo que está rodado.
@@ -106,6 +114,7 @@ const LLM_PRESETS = [
     dialect: 'openai',
     baseUrl: 'https://api.groq.com/openai/v1',
     models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it'],
+    tpm: 12000,
   },
   {
     id: 'openai',
@@ -233,6 +242,7 @@ function resolveLlm(config) {
     apiKey: raw.apiKey || '',
     model: raw.model || preset.models[0] || '',
     needsKey: !preset.noKey,
+    tpm: preset.tpm || DEFAULT_TPM,
   }
 }
 
@@ -242,6 +252,22 @@ async function readError(response, label) {
   let detail = ''
   try { detail = (await response.text()).slice(0, 500) } catch { /* respuesta ilegible */ }
   return new Error(`Error de ${label} (${response.status}): ${detail || 'sin detalle'}`)
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Un 429 no es un fallo: es "has gastado la cuota de este minuto, vuelve en N
+// segundos", y el propio proveedor dice cuántos en la cabecera `retry-after`.
+// Esperar y reintentar convierte un error en pantalla en unos segundos de espera.
+async function fetchRetryingRateLimit(url, options, attempts = 3) {
+  for (let intento = 1; ; intento++) {
+    const response = await fetch(url, options)
+    if (response.status !== 429 || intento >= attempts) return response
+    const retryAfter = Number(response.headers.get('retry-after'))
+    const waitMs = Math.min((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 10) * 1000, 65000)
+    await response.text().catch(() => {})   // liberar el cuerpo antes de reintentar
+    await sleep(waitMs)
+  }
 }
 
 function withTimeout(ms) {
@@ -452,7 +478,7 @@ async function chat(provider, { system, user, temperature = 0.1, maxTokens = 800
 }
 
 async function chatOpenAiCompatible(provider, { system, user, temperature, maxTokens }) {
-  const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+  const response = await fetchRetryingRateLimit(`${provider.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${provider.apiKey}`,
@@ -474,7 +500,7 @@ async function chatOpenAiCompatible(provider, { system, user, temperature, maxTo
 }
 
 async function chatAnthropic(provider, { system, user, temperature, maxTokens }) {
-  const response = await fetch(`${provider.baseUrl}/messages`, {
+  const response = await fetchRetryingRateLimit(`${provider.baseUrl}/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': provider.apiKey,
