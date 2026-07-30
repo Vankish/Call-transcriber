@@ -103,6 +103,26 @@ gh release edit v1.0.3 --repo Vankish/Call-transcriber --draft=false --latest
 salir bloqueadas ("Failed to connect to github.com port 443") aunque `git fetch` funcione.
 No es un fallo de red ni de credenciales.
 
+## Prueba pendiente tras el commit `bbfd8e3` (2026-07-30) 🔲
+
+Se arregló que la voz del entrevistador salía a trozos: ya no se recorta por silencios,
+se usa la separación de hablantes que devuelve ElevenLabs y la pista de sistema solo
+decide cuál de los hablantes es el interlocutor.
+
+**Falta confirmarlo con una grabación real**, y solo se puede hacer en el PC donde se grabó
+(**PC-Usuari**): re-transcribir la reunión con Tessa Aparicio del 30/07 y comprobar que la
+voz del entrevistador sale completa. Los `.mp3` / `_system.webm` **no sincronizan** — solo
+viajan los metadatos y el texto, así que en el otro PC la entrevista aparece en la lista
+pero sin audio con el que trabajar.
+
+Cómo saber si fue por el camino nuevo: en `%APPDATA%\call-transcriber-app\logs` debe aparecer
+`separación por hablantes del proveedor` con el % de coincidencia de cada hablante. Si dice
+`palabras + audio medido`, cayó al método anterior y hay que mirar por qué.
+
+Instalador ya compilado y firmado: `release\Call Transcriber Setup 1.0.3.exe` (30/07 16:06).
+La versión no se subió a propósito — es empaquetado local, no release. Si se publica, subir a
+1.0.4 en el mismo commit.
+
 ## Pendiente (acciones externas) ⏳
 
 - **Certificado de firma** (OV ~200-400€/año, o EV): quita el aviso de SmartScreen "editor desconocido".
