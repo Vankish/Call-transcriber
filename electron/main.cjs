@@ -521,15 +521,22 @@ async function transcribeAudio(filePath, provider, language, chunkDurationSec = 
   }
 }
 
-async function identifySpeakers(transcript, llmProvider, candidateName) {
+async function identifySpeakers(transcript, llmProvider, candidateName, interviewerName) {
   if (!transcript || !llmProvider.apiKey) return transcript
+  // Las etiquetas de salida son configurables: si hay nombre real de candidato/
+  // entrevistador se usan tal cual, si no se cae en las palabras fijas de siempre.
+  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
+  const cdTag = (candidateName || '').trim() || 'Candidato'
   const candidateHint = candidateName
-    ? `El nombre del candidato es "${candidateName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [Candidato].`
+    ? `El nombre del candidato es "${candidateName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [${cdTag}].`
+    : ''
+  const interviewerHint = interviewerName
+    ? `El nombre de quien entrevista/dirige la llamada es "${interviewerName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [${ivTag}].`
     : ''
   const system =
     'Eres un asistente experto en entrevistas de trabajo. Recibirás la transcripción de una entrevista ' +
     '(puede venir con etiquetas genéricas como [Hablante 1] / [Hablante 2] o sin etiquetas).\n' +
-    'Tu tarea es reetiquétar CADA turno de conversación con exactamente una de estas etiquetas: [Entrevistador]: o [Candidato]:\n\n' +
+    `Tu tarea es reetiquétar CADA turno de conversación con exactamente una de estas etiquetas: [${ivTag}]: o [${cdTag}]:\n\n` +
     'SEÑALES para identificar al entrevistador:\n' +
     '- Hace preguntas sobre el historial, experiencia o motivaciones del candidato\n' +
     '- Presenta la empresa, el puesto o el proceso de selección\n' +
@@ -540,6 +547,7 @@ async function identifySpeakers(transcript, llmProvider, candidateName) {
     '- Usa primera persona para describir su experiencia ("yo estuve en...", "llevo X años...")\n' +
     '- Responde preguntas sobre sí mismo\n' +
     (candidateHint ? candidateHint + '\n\n' : '') +
+    (interviewerHint ? interviewerHint + '\n\n' : '') +
     'REGLAS:\n' +
     '- Conserva el texto EXACTAMENTE como está; solo sustituye o añade la etiqueta al inicio de cada turno\n' +
     '- Agrupa frases consecutivas del mismo hablante bajo una sola etiqueta\n' +
@@ -788,8 +796,12 @@ function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabe
   return result
 }
 
-ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName }) => {
+ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName, interviewerName }) => {
   const config = await readConfig()
+  // Etiquetas de salida: nombre real si se conoce, si no las palabras fijas de
+  // siempre (así una llamada sin entrevistador/candidato asignado no cambia nada).
+  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
+  const cdTag = (candidateName || '').trim() || 'Candidato'
   const stt = providers.resolveStt(config)
   const llm = providers.resolveLlm(config)
   if (!stt.apiKey && stt.id !== 'custom') {
@@ -841,8 +853,7 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
         modo = 'segmentos'
       }
       log.info(`[transcripción] separación por ${modo}: ${mixed.segments.length} → ${mixedSegments.length} tramos del entrevistador`)
-      // Etiquetas fijas [Entrevistador] / [Candidato]: el resumen depende de ellas.
-      const merged = mergeSeparatedTranscript(mixedSegments, system.segments, 'Entrevistador', 'Candidato', !porHablante)
+      const merged = mergeSeparatedTranscript(mixedSegments, system.segments, ivTag, cdTag, !porHablante)
       const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
       return { text }
     } catch (err) {
@@ -858,7 +869,7 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
   let text = await transcribeAudio(filePath, stt, language || 'auto', chunkDuration)
 
   if (text.trim().length > 0 && !stt.canDiarize) {
-    text = await identifySpeakers(text, llm, candidateName || '').catch(() => text)
+    text = await identifySpeakers(text, llm, candidateName || '', interviewerName || '').catch(() => text)
   }
 
   return { text }
@@ -944,12 +955,12 @@ function makePacer(tokensPerMinute) {
 
 /** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
  *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada. */
-async function condenseTranscript(text, llm, { isMeeting, budget, pace }) {
+async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag }) {
   const system =
     `Recibes un FRAGMENTO de la transcripción de una ${isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'}, ` +
-    'con los turnos etiquetados como [Entrevistador]: y [Candidato]:.\n' +
+    `con los turnos etiquetados como [${ivTag}]: y [${cdTag}]:.\n` +
     'Devuelve una lista de viñetas con TODO lo concreto que se diga en el fragmento. Cada viñeta empieza por la ' +
-    'etiqueta de quien lo dijo, así: "- [Candidato]: ...".\n' +
+    `etiqueta de quien lo dijo, así: "- [${cdTag}]: ...".\n` +
     'REGLAS:\n' +
     '- Copia literalmente cifras, fechas, plazos, importes y nombres de personas y empresas, y asócialos exactamente a aquello a lo que se referían. No los mezcles entre sí.\n' +
     '- Los turnos empiezan por una marca de tiempo entre corchetes, tipo [12:34]. Conserva al principio de cada viñeta la del turno del que sale, pero no la trates nunca como un dato de lo que se habla.\n' +
@@ -985,12 +996,16 @@ const CRITERIA_LABELS = {
   adecuacion:     'Adecuación al puesto',
 }
 
-ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, summaryContext, candidateName }) => {
+ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, summaryContext, candidateName, interviewerName }) => {
   const config = await readConfig()
   const llm = providers.resolveLlm(config)
   if (llm.needsKey && !llm.apiKey) {
     throw new Error(`Falta la API key de ${llm.label}. Configúrala en Ajustes → Motores de IA.`)
   }
+  // Mismas etiquetas que se usaron al transcribir: nombre real si se conoce, si no
+  // las palabras fijas de siempre.
+  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
+  const cdTag = (candidateName || '').trim() || 'Candidato'
 
   const criteriaList = Array.isArray(criteria) && criteria.length > 0
     ? criteria.map(id => {
@@ -1026,8 +1041,8 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
     (isMeeting
       // En una reunión ambas partes aportan: los compromisos y las peticiones
       // pueden salir de cualquiera de los dos lados de la mesa.
-      ? '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Recoge lo relevante de AMBOS: acuerdos, peticiones y compromisos pueden venir de cualquiera de los dos.\n'
-      : '- La transcripción usa etiquetas [Entrevistador]: y [Candidato]:. Extrae información solo de lo que dice el [Candidato]: salvo que se indique lo contrario.\n') +
+      ? `- La transcripción usa etiquetas [${ivTag}]: y [${cdTag}]:. Recoge lo relevante de AMBOS: acuerdos, peticiones y compromisos pueden venir de cualquiera de los dos.\n`
+      : `- La transcripción usa etiquetas [${ivTag}]: y [${cdTag}]:. Extrae información solo de lo que dice el [${cdTag}]: salvo que se indique lo contrario.\n`) +
     '- Extrae ÚNICAMENTE información mencionada de forma explícita en la transcripción. No infieras ni supongas nada.\n' +
     (isMeeting
       ? '- Presta máxima atención a cifras, fechas, plazos y nombres de empresas: asocia cada dato exactamente a aquello a lo que se refería, sin mezclarlos.\n'
@@ -1053,22 +1068,21 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // los nombres del propio texto y los cruza: cuando el entrevistador saluda
   // ("Hola Jarvis"), el nombre que aparece en SU turno es el del OTRO, y el modelo
   // acaba llamando Jarvis al entrevistador.
-  const interviewerName = (config.userName || '').trim()
   const nameWarning =
     'No deduzcas los nombres a partir del texto: si un nombre propio aparece dentro de un turno, ' +
     'lo normal es que sea la persona a la que ese hablante se está dirigiendo, es decir, la OTRA.'
   const candidateRef = isMeeting
     ? 'CORRESPONDENCIA DE ETIQUETAS (es la única fuente válida para saber quién es quién):\n' +
-      `- [Entrevistador]: ${interviewerName || 'quien convoca la reunión'}, por parte de nuestro equipo.\n` +
-      `- [Candidato]: ${candidateName || 'la otra parte'}, el cliente o interlocutor externo.\n` +
+      `- [${ivTag}]: quien convoca la reunión, por parte de nuestro equipo.\n` +
+      `- [${cdTag}]: la otra parte, el cliente o interlocutor externo.\n` +
       'Las etiquetas vienen de que la app se diseñó para entrevistas: aquí NO hay candidato que evaluar, ' +
       'sino dos partes reunidas. No hables de "el candidato" ni de "la entrevista" en el informe.\n' +
       nameWarning
     : 'CORRESPONDENCIA DE ETIQUETAS (es la única fuente válida para saber quién es quién):\n' +
-      `- [Entrevistador]: ${interviewerName || 'quien conduce la entrevista'}. Hace las preguntas. NO es el sujeto del informe.\n` +
-      `- [Candidato]: ${candidateName || 'la persona entrevistada'}. Responde. Es el sujeto del informe.\n` +
+      `- [${ivTag}]: quien conduce la entrevista. Hace las preguntas. NO es el sujeto del informe.\n` +
+      `- [${cdTag}]: la persona entrevistada. Responde. Es el sujeto del informe.\n` +
       nameWarning +
-      (candidateName ? `\nRefiérete al candidato como ${candidateName} en el informe.` : '')
+      (candidateName ? `\nRefiérete al candidato como ${cdTag} en el informe.` : '')
 
   if (summaryType === 'listado') {
     systemPrompt =
@@ -1140,7 +1154,7 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // se vuelve a condensar hasta que entre (con tope, para no dar vueltas si el
   // modelo deja de comprimir).
   for (let pase = 1; pase <= 3; pase++) {
-    material = await condenseTranscript(material, llm, { isMeeting, budget, pace })
+    material = await condenseTranscript(material, llm, { isMeeting, budget, pace, ivTag, cdTag })
     if (fixedCost + estimateTokens(makeUserPrompt(material, true)) <= budget) break
   }
 

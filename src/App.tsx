@@ -6,7 +6,7 @@ import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
 import { AuthScreen } from './AuthScreen'
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[] }
+type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }
 
 const EVALUATION_CRITERIA = [
   { id: 'experiencia',   label: 'Experiencia laboral' },
@@ -36,6 +36,8 @@ type Interview = {
   summaryInstructions: string; summaryText: string
   summaryStatus: 'idle' | 'generating' | 'done' | 'error'
   summaryType: 'resumen' | 'listado'
+  summaryContext: SummaryContext
+  interviewerName: string
 }
 type AudioDeviceOption = { id: string; name: string }
 type Toast = { id: string; message: string; sub?: string; type: 'success' | 'error' | 'info' | 'warning' }
@@ -76,19 +78,25 @@ const saveCriteriaCache = (projectId: string, criteria: string[]) => {
   localStorage.setItem(CRITERIA_KEY, JSON.stringify(cache))
 }
 
-// Enfoque del resumen por sesión. Vive en localStorage y no en la nube a
-// propósito: es una preferencia de redacción, no un dato de la entrevista, y así
-// no hace falta migrar la tabla de Supabase.
+const INTERVIEWERS_KEY = 'ct-interviewers-cache'
+const getInterviewersCache = (): Record<string, string[]> => {
+  try { return JSON.parse(localStorage.getItem(INTERVIEWERS_KEY) ?? '{}') } catch { return {} }
+}
+const saveInterviewersCache = (projectId: string, interviewers: string[]) => {
+  const cache = getInterviewersCache()
+  cache[projectId] = interviewers
+  localStorage.setItem(INTERVIEWERS_KEY, JSON.stringify(cache))
+}
+
+// Enfoque del resumen por llamada (Entrevista de selección / Reunión de negocio).
+// Vivía solo en localStorage sin sincronizar entre equipos; ahora es un campo más
+// de la entrevista en Supabase. SUMMARY_CONTEXT_KEY se conserva solo para migrar
+// una vez el cache antiguo del navegador la primera vez que carguen los datos.
 const SUMMARY_CONTEXT_KEY = 'ct-summary-context'
 type SummaryContext = 'entrevista' | 'reunion'
 
-const getSummaryContexts = (): Record<string, SummaryContext> => {
+const getLegacySummaryContexts = (): Record<string, SummaryContext> => {
   try { return JSON.parse(localStorage.getItem(SUMMARY_CONTEXT_KEY) ?? '{}') } catch { return {} }
-}
-const saveSummaryContext = (interviewId: string, context: SummaryContext) => {
-  const cache = getSummaryContexts()
-  cache[interviewId] = context
-  localStorage.setItem(SUMMARY_CONTEXT_KEY, JSON.stringify(cache))
 }
 
 // El vídeo de una entrevista solo se guarda en local (nunca sube a Supabase, pesa
@@ -157,7 +165,7 @@ const CameraIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="n
 const ListViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
 const GridViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
 
-const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[] }
+const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[], interviewers: [] as string[] }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
 
 function normalizeInterviews(arr: Interview[]): Interview[] {
@@ -181,11 +189,13 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
     summaryText: i.summaryText ?? '',
     summaryStatus: i.summaryStatus ?? 'idle',
     summaryType: i.summaryType ?? 'resumen',
+    summaryContext: i.summaryContext ?? 'entrevista',
+    interviewerName: i.interviewerName ?? '',
   }))
 }
 
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
-const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [] })
+const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [] })
 const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
@@ -198,6 +208,8 @@ const ivFromDb    = (r: DbInterview): Interview => ({
   summaryInstructions: r.summary_instructions, summaryText: r.summary_text,
   summaryStatus: r.summary_status as Interview['summaryStatus'],
   summaryType: r.summary_type as Interview['summaryType'],
+  summaryContext: (r.summary_context as SummaryContext | undefined) ?? 'entrevista',
+  interviewerName: r.interviewer_name ?? '',
 })
 const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
   const db: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -214,6 +226,8 @@ const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
   if (patch.summaryText           !== undefined) db.summary_text          = patch.summaryText
   if (patch.summaryStatus         !== undefined) db.summary_status        = patch.summaryStatus
   if (patch.summaryType           !== undefined) db.summary_type          = patch.summaryType
+  if (patch.summaryContext        !== undefined) db.summary_context       = patch.summaryContext
+  if (patch.interviewerName       !== undefined) db.interviewer_name      = patch.interviewerName
   return db
 }
 
@@ -291,7 +305,6 @@ function App() {
   const [sttCfg, setSttCfg] = useState<ProviderConfig>(DEFAULT_STT_CFG)
   const [llmCfg, setLlmCfg] = useState<ProviderConfig>(DEFAULT_LLM_CFG)
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null)
-  const [summaryContexts, setSummaryContexts] = useState<Record<string, SummaryContext>>(getSummaryContexts)
   const [userName, setUserName] = useState('')
   const [userEmail, setUserEmail] = useState('')
   const [userCompany, setUserCompany] = useState('')
@@ -344,7 +357,9 @@ function App() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showNewCandidate, setShowNewCandidate] = useState(false)
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
-  const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[] }>(EMPTY_PROJECT)
+  const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }>(EMPTY_PROJECT)
+  const [newInterviewerDraft, setNewInterviewerDraft] = useState('')
+  const [addingInterviewerForId, setAddingInterviewerForId] = useState<string | null>(null)
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
@@ -507,12 +522,12 @@ function App() {
           if (rawLocal) {
             const d = JSON.parse(rawLocal) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
             const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
-            if (projs.length) await supabase.from('projects').upsert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], created_at: p.createdAt })), { onConflict: 'id' })
+            if (projs.length) await supabase.from('projects').upsert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })), { onConflict: 'id' })
             if (cands.length) await supabase.from('candidates').upsert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: c.notes ?? '', candidate_status: c.candidateStatus ?? 'pendiente', consent_given: c.consentGiven ?? false, consent_at: c.consentAt ?? null })), { onConflict: 'id' })
             for (const iv of ivs) {
               const cand = cands.find(c => c.id === iv.candidateId)
               if (!cand) continue
-              await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
+              await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
             }
             if (projs.length || cands.length || ivs.length) { localStorage.removeItem(V2_KEY); toast('Datos de este equipo sincronizados a la nube ✓') }
           }
@@ -530,20 +545,32 @@ function App() {
         if (hasRemote) {
           const criteriaCache = getCriteriaCache()
           const updatedCache: Record<string, string[]> = {}
+          const interviewersCache = getInterviewersCache()
+          const updatedInterviewersCache: Record<string, string[]> = {}
           const loadedProjects = (pRes.data ?? []).map(r => {
-            const p = projFromDb(r)
+            let p = projFromDb(r)
             if (p.evaluationCriteria.length > 0) {
               // Supabase tiene datos: es la fuente de verdad, actualizamos cache
               updatedCache[p.id] = p.evaluationCriteria
-              return p
+            } else {
+              // Supabase devuelve vacío (columna sin datos o no existe): usamos cache local
+              const cached = criteriaCache[p.id]
+              if (cached) p = { ...p, evaluationCriteria: cached }
             }
-            // Supabase devuelve vacío (columna sin datos o no existe): usamos cache local
-            const cached = criteriaCache[p.id]
-            return cached ? { ...p, evaluationCriteria: cached } : p
+            if (p.interviewers.length > 0) {
+              updatedInterviewersCache[p.id] = p.interviewers
+            } else {
+              const cachedIv = interviewersCache[p.id]
+              if (cachedIv) p = { ...p, interviewers: cachedIv }
+            }
+            return p
           })
-          // Persistir el cache actualizado desde Supabase
+          // Persistir los caches actualizados desde Supabase
           if (Object.keys(updatedCache).length > 0) {
             localStorage.setItem(CRITERIA_KEY, JSON.stringify({ ...criteriaCache, ...updatedCache }))
+          }
+          if (Object.keys(updatedInterviewersCache).length > 0) {
+            localStorage.setItem(INTERVIEWERS_KEY, JSON.stringify({ ...interviewersCache, ...updatedInterviewersCache }))
           }
           setProjects(loadedProjects)
           setCandidates((cRes.data ?? []).map(candFromDb))
@@ -552,14 +579,28 @@ function App() {
           } else {
             const videoPathCache = getVideoPathCache()
             const systemAudioPathCache = getSystemAudioPathCache()
-            setInterviews(normalizeInterviews((iRes.data ?? []).map(r => {
+            // Modo de resumen (Entrevista/Reunión): migración única desde el cache
+            // local antiguo, por si aquí había una preferencia que Supabase todavía
+            // no conoce (columna recién creada o nunca sincronizada desde este PC).
+            const legacyContexts = getLegacySummaryContexts()
+            const loadedInterviews = normalizeInterviews((iRes.data ?? []).map(r => {
               const iv = ivFromDb(r)
+              const legacyCtx = legacyContexts[iv.id]
               return {
                 ...iv,
                 videoFilePath: videoPathCache[iv.id] ?? iv.videoFilePath,
                 systemAudioFilePath: systemAudioPathCache[iv.id] ?? iv.systemAudioFilePath,
+                summaryContext: legacyCtx ?? iv.summaryContext,
               }
-            })))
+            }))
+            setInterviews(loadedInterviews)
+            if (Object.keys(legacyContexts).length > 0) {
+              for (const iv of loadedInterviews) {
+                const legacyCtx = legacyContexts[iv.id]
+                if (legacyCtx) await supabase.from('interviews').update({ summary_context: legacyCtx }).eq('id', iv.id)
+              }
+              localStorage.removeItem(SUMMARY_CONTEXT_KEY)
+            }
           }
         } else {
           // First login: migrate localStorage data to Supabase
@@ -569,12 +610,12 @@ function App() {
               const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
               const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
               if (projs.length || cands.length) {
-                if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], created_at: p.createdAt })))
+                if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })))
                 if (cands.length) await supabase.from('candidates').insert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: '' })))
                 for (const iv of ivs) {
                   const cand = cands.find(c => c.id === iv.candidateId)
                   if (!cand) continue
-                  await supabase.from('interviews').insert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, created_at: iv.createdAt, updated_at: iv.createdAt })
+                  await supabase.from('interviews').insert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt })
                 }
                 setProjects(projs); setCandidates(cands); setInterviews(ivs)
                 localStorage.removeItem(V2_KEY)
@@ -1066,11 +1107,12 @@ function App() {
       recordingUrl: null, recordingFilePath: filePath, videoFilePath: null, systemAudioFilePath: null,
       captureSource: 'none', transcriptionStatus: 'pending',
       summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
+      summaryContext: 'entrevista', interviewerName: '',
     }
     setInterviews(c => [n, ...c])
     setSelectedInterviewId(n.id)
     if (session) {
-      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: n.sessionName, status: n.status, duration_sec: 0, mic_device_id: '', output_device_id: '', transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: fileName, capture_source: 'none', transcription_status: 'pending', summary_instructions: '', summary_text: '', summary_status: 'idle', summary_type: 'resumen', created_at: n.createdAt, updated_at: n.createdAt })
+      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: n.sessionName, status: n.status, duration_sec: 0, mic_device_id: '', output_device_id: '', transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: fileName, capture_source: 'none', transcription_status: 'pending', summary_instructions: '', summary_text: '', summary_status: 'idle', summary_type: 'resumen', summary_context: 'entrevista', interviewer_name: '', created_at: n.createdAt, updated_at: n.createdAt })
         .then(({ error }) => { if (error) toast(`Error al guardar importación en la nube: ${error.message}`, 'error') })
     }
     toast(`Audio importado: ${fileName}`)
@@ -1080,10 +1122,10 @@ function App() {
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen' }
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '' }
     setInterviews(c => [n, ...c])
     if (session) {
-      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, created_at: n.createdAt, updated_at: n.createdAt })
+      supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: n.interviewerName, created_at: n.createdAt, updated_at: n.createdAt })
         .then(({ error }) => { if (error) toast(`Error al crear entrevista en la nube: ${error.message}`, 'error') })
     }
     setSelectedInterviewId(n.id)
@@ -1173,9 +1215,10 @@ function App() {
     // Su presencia activa la separación determinista de hablantes en el backend.
     const systemPath = interview.systemAudioFilePath ? resolveAudioPath(interview.systemAudioFilePath) : null
     const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
+    const interviewerName = (interview.interviewerName || userName || '').trim()
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
     try {
-      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemPath ?? undefined, language: language ?? txLang, candidateName })
+      const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemPath ?? undefined, language: language ?? txLang, candidateName, interviewerName })
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')
@@ -1192,9 +1235,10 @@ function App() {
     const candidate = candidates.find(c => c.id === interview.candidateId)
     const project = candidate ? projects.find(p => p.id === candidate.projectId) : null
     const criteria = project?.evaluationCriteria ?? []
+    const interviewerName = (interview.interviewerName || userName || '').trim()
     updateInterview(interviewId, { summaryStatus: 'generating' })
     try {
-      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, summaryContext: summaryContexts[interviewId] ?? 'entrevista', candidateName: candidate?.name ?? '' })
+      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, summaryContext: interview.summaryContext ?? 'entrevista', candidateName: candidate?.name ?? '', interviewerName })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
       if (notifSummary) toast('Resumen generado')
     } catch (err) {
@@ -1431,12 +1475,14 @@ function App() {
   const updateProject = (id: string, changes: Partial<Project>) => {
     setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
     if (changes.evaluationCriteria !== undefined) saveCriteriaCache(id, changes.evaluationCriteria)
+    if (changes.interviewers       !== undefined) saveInterviewersCache(id, changes.interviewers)
     if (session) {
       const db: Record<string, unknown> = {}
       if (changes.name               !== undefined) db.name                = changes.name
       if (changes.company            !== undefined) db.company             = changes.company
       if (changes.status             !== undefined) db.status              = changes.status
       if (changes.evaluationCriteria !== undefined) db.evaluation_criteria = changes.evaluationCriteria
+      if (changes.interviewers       !== undefined) db.interviewers        = changes.interviewers
       supabase.from('projects').update(db).eq('id', id)
         .then(({ error }) => { if (error) toast(`Error sincronizando proyecto: ${error.message}`, 'error') }, () => {})
     }
@@ -1444,11 +1490,11 @@ function App() {
 
   const handleCreateProject = async () => {
     if (!projectDraft.name.trim()) return
-    const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria }
+    const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers }
     setProjects(c => [...c, p])
     setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
     if (session) {
-      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, created_at: p.createdAt })
+      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, interviewers: p.interviewers, created_at: p.createdAt })
       if (error) { toast(`Error guardando proyecto: ${error.message}`, 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
     }
     toast(`Proyecto ${p.name} creado`)
@@ -1456,7 +1502,7 @@ function App() {
 
   const handleSaveEditProject = () => {
     if (!editingProjectId || !projectDraft.name.trim()) return
-    updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria })
+    updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers })
     setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT)
     toast('Proyecto actualizado')
   }
@@ -1752,7 +1798,7 @@ function App() {
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
                         </span>
@@ -1883,7 +1929,7 @@ function App() {
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
                         </span>
@@ -2275,7 +2321,19 @@ function App() {
     )
   }
 
-  const renderInterviewsTab = () => (
+  const renderInterviewsTab = () => {
+    const ivProject = activeCandidate ? projects.find(p => p.id === activeCandidate.projectId) ?? null : null
+    const confirmAddInterviewer = (interviewId: string) => {
+      const name = newInterviewerDraft.trim()
+      setAddingInterviewerForId(null)
+      if (!name) { setNewInterviewerDraft(''); return }
+      if (ivProject && !ivProject.interviewers.includes(name)) {
+        updateProject(ivProject.id, { interviewers: [...ivProject.interviewers, name] })
+      }
+      updateInterview(interviewId, { interviewerName: name })
+      setNewInterviewerDraft('')
+    }
+    return (
     <div className="interviews-tab">
       {!sttReady && (
         <div className="warning-note" style={{ marginBottom: 12 }}>
@@ -2345,6 +2403,40 @@ function App() {
                   <span className="rec-row-meta">
                     {fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}
                     {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
+                  </span>
+                  <span className="rec-row-interviewer" onClick={e => e.stopPropagation()}>
+                    {addingInterviewerForId === iv.id ? (
+                      <span className="rec-row-edit-wrap">
+                        <input
+                          type="text"
+                          className="rec-row-edit-input"
+                          placeholder="Nombre del entrevistador..."
+                          value={newInterviewerDraft}
+                          onChange={e => setNewInterviewerDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') confirmAddInterviewer(iv.id)
+                            if (e.key === 'Escape') { setAddingInterviewerForId(null); setNewInterviewerDraft('') }
+                          }}
+                          autoFocus
+                        />
+                        <button type="button" className="btn-icon btn-icon--confirm" onClick={() => confirmAddInterviewer(iv.id)}><CheckIcon /></button>
+                        <button type="button" className="btn-icon" onClick={() => { setAddingInterviewerForId(null); setNewInterviewerDraft('') }}>✕</button>
+                      </span>
+                    ) : (
+                      <select
+                        className="rec-row-interviewer-select"
+                        title="Entrevistador de esta llamada"
+                        value={iv.interviewerName || ''}
+                        onChange={e => {
+                          if (e.target.value === '__add__') { setAddingInterviewerForId(iv.id); setNewInterviewerDraft('') }
+                          else updateInterview(iv.id, { interviewerName: e.target.value })
+                        }}
+                      >
+                        <option value="">Entrevistador: sin asignar</option>
+                        {(ivProject?.interviewers ?? []).map(name => <option key={name} value={name}>Entrevistador: {name}</option>)}
+                        <option value="__add__">+ Añadir entrevistador…</option>
+                      </select>
+                    )}
                   </span>
                   {iv.captureSource === 'mic' && (
                     <span className="rec-row-warning" title="No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.">
@@ -2419,7 +2511,8 @@ function App() {
         </>
       )}
     </div>
-  )
+    )
+  }
 
   const renderTranscriptTab = () => {
     const wordCount = transcriptDraft.trim() ? transcriptDraft.trim().split(/\s+/).length : 0
@@ -2649,12 +2742,8 @@ function App() {
                 {/* Enfoque: cambia de quién habla el informe y qué apartados cubre. */}
                 <select
                   className="sum-type-select"
-                  value={summaryContexts[selectedInterview.id] ?? 'entrevista'}
-                  onChange={e => {
-                    const ctx = e.target.value as SummaryContext
-                    saveSummaryContext(selectedInterview.id, ctx)
-                    setSummaryContexts(prev => ({ ...prev, [selectedInterview.id]: ctx }))
-                  }}
+                  value={selectedInterview.summaryContext ?? 'entrevista'}
+                  onChange={e => updateInterview(selectedInterview.id, { summaryContext: e.target.value as SummaryContext })}
                 >
                   <option value="entrevista">Entrevista de selección ⌄</option>
                   <option value="reunion">Reunión de negocio ⌄</option>
@@ -3147,6 +3236,44 @@ function App() {
             autoFocus
           />
         )}
+      </>
+    )
+  }
+
+  const renderInterviewerEditor = (
+    interviewersList: string[],
+    onChange: (updated: string[]) => void
+  ) => {
+    const addInterviewer = () => {
+      const name = newInterviewerDraft.trim()
+      if (!name || interviewersList.includes(name)) { setNewInterviewerDraft(''); return }
+      onChange([...interviewersList, name])
+      setNewInterviewerDraft('')
+    }
+    return (
+      <>
+        <div className="proj-criteria-chips">
+          {interviewersList.length > 0
+            ? interviewersList.map(name => (
+                <span key={name} className="criteria-chip interviewer-chip">
+                  {name}
+                  <button type="button" className="chip-remove-btn" title="Quitar" onClick={() => onChange(interviewersList.filter(n => n !== name))}>✕</button>
+                </span>
+              ))
+            : <span className="criteria-chip criteria-chip--empty">Sin entrevistadores todavía</span>
+          }
+        </div>
+        <div className="interviewer-add-row">
+          <input
+            type="text"
+            className="modal-input modal-input--figma"
+            placeholder="Nombre del entrevistador..."
+            value={newInterviewerDraft}
+            onChange={e => setNewInterviewerDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addInterviewer() } }}
+          />
+          <button type="button" className="secondary-btn" onClick={addInterviewer} disabled={!newInterviewerDraft.trim()}>+ Añadir</button>
+        </div>
       </>
     )
   }
@@ -3717,6 +3844,14 @@ function App() {
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
               )}
             </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Entrevistadores</span>
+              <p className="modal-field-hint">Personas de tu equipo que pueden llevar una llamada de este proyecto</p>
+              {renderInterviewerEditor(
+                projectDraft.interviewers,
+                updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
+              )}
+            </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>Cancelar</button>
@@ -3761,6 +3896,14 @@ function App() {
               {renderCriteriaGrid(
                 projectDraft.evaluationCriteria,
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
+              )}
+            </div>
+            <div className="modal-field">
+              <span className="modal-field-label">Entrevistadores</span>
+              <p className="modal-field-hint">Personas de tu equipo que pueden llevar una llamada de este proyecto</p>
+              {renderInterviewerEditor(
+                projectDraft.interviewers,
+                updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
               )}
             </div>
             <div className="modal-footer-divider" />

@@ -28,6 +28,7 @@ export interface DbProfile {
 export interface DbProject {
   id: string; user_id: string; name: string; company: string
   status: string; created_at: string; evaluation_criteria?: string[]
+  interviewers?: string[]
 }
 
 export interface DbCandidate {
@@ -48,5 +49,6 @@ export interface DbInterview {
   capture_source: string; transcription_status: string
   summary_instructions: string; summary_text: string
   summary_status: string; summary_type: string
+  summary_context?: string; interviewer_name?: string
   created_at: string; updated_at: string
 }
