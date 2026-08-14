@@ -37,26 +37,20 @@ on conflict (id) do update set file_size_limit = excluded.file_size_limit;
 -- 4) Permisos: cada usuario solo toca su propia carpeta ──────────────────────
 --    Las rutas son {user_id}/{interview_id}/{nombre-del-archivo}, así que basta
 --    con comparar la primera carpeta contra el usuario autenticado.
-drop policy if exists "recordings_select_own" on storage.objects;
-create policy "recordings_select_own" on storage.objects
-  for select to authenticated
-  using (bucket_id = 'recordings' and (storage.foldername(name))[1] = auth.uid()::text);
-
-drop policy if exists "recordings_insert_own" on storage.objects;
-create policy "recordings_insert_own" on storage.objects
-  for insert to authenticated
-  with check (bucket_id = 'recordings' and (storage.foldername(name))[1] = auth.uid()::text);
-
-drop policy if exists "recordings_update_own" on storage.objects;
-create policy "recordings_update_own" on storage.objects
-  for update to authenticated
+--    Una sola política `for all` cubre leer, subir, sobrescribir y borrar, igual
+--    que las de projects/candidates/interviews en supabase-schema.sql.
+drop policy if exists "recordings_own" on storage.objects;
+create policy "recordings_own" on storage.objects
+  for all to authenticated
   using (bucket_id = 'recordings' and (storage.foldername(name))[1] = auth.uid()::text)
   with check (bucket_id = 'recordings' and (storage.foldername(name))[1] = auth.uid()::text);
 
+-- Restos de un intento anterior que dividía los permisos en cuatro políticas.
+-- Se limpian por si llegaron a crearse; si no existen, no pasa nada.
+drop policy if exists "recordings_select_own" on storage.objects;
+drop policy if exists "recordings_insert_own" on storage.objects;
+drop policy if exists "recordings_update_own" on storage.objects;
 drop policy if exists "recordings_delete_own" on storage.objects;
-create policy "recordings_delete_own" on storage.objects
-  for delete to authenticated
-  using (bucket_id = 'recordings' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- ── Verificación (opcional) ──────────────────────────────────────────────────
 -- select column_name from information_schema.columns
