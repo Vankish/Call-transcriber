@@ -384,10 +384,14 @@ function App() {
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }>(EMPTY_PROJECT)
   const [newInterviewerDraft, setNewInterviewerDraft] = useState('')
-  const [addingInterviewerForId, setAddingInterviewerForId] = useState<string | null>(null)
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
+  // Entrevistador elegido en el modal de "Nombrar sesión", y el proyecto del que
+  // sacar la lista. Se guarda el id al abrir el modal porque para entonces la
+  // grabación ya ha parado y activeRecordingInterview vale null.
+  const [sessionInterviewerDraft, setSessionInterviewerDraft] = useState('')
+  const [sessionModalProjectId, setSessionModalProjectId] = useState<string | null>(null)
   const [discardConfirming, setDiscardConfirming] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [editingInterviewId, setEditingInterviewId] = useState<string | null>(null)
@@ -493,6 +497,7 @@ function App() {
   const activeRecordingInterview = interviews.find(i => i.status === 'recording' || i.status === 'paused')
   const activeRecordingCandidate = activeRecordingInterview ? candidates.find(c => c.id === activeRecordingInterview.candidateId) : null
   const activeRecordingProject = activeRecordingCandidate ? projects.find(p => p.id === activeRecordingCandidate.projectId) : null
+  const sessionModalProject = sessionModalProjectId ? projects.find(p => p.id === sessionModalProjectId) ?? null : null
   const transcribingInterview = interviews.find(i => i.transcriptionStatus === 'transcribing')
 
   const stats = useMemo(() => ({
@@ -1120,7 +1125,10 @@ function App() {
           if (vr && vr.state !== 'inactive') vr.stop()
           if (sr && sr.state !== 'inactive') sr.stop()
         }
-        setSessionNameDraft(''); setShowSessionNameModal(true)
+        setSessionNameDraft('')
+        setSessionInterviewerDraft(iv.interviewerName || '')
+        setSessionModalProjectId(ivCandidate?.projectId ?? null)
+        setShowSessionNameModal(true)
       }
       recorder.start(1000)
       updateInterview(iv.id, { status: 'recording', captureSource: hasSystemAudio ? 'mic+system' : 'mic' })
@@ -1238,7 +1246,8 @@ function App() {
     const defaultName = `Entrevista ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
     const finalName = sessionNameDraft.trim() || defaultName
     setShowSessionNameModal(false); setDiscardConfirming(false)
-    updateInterview(iId, { sessionName: finalName, ...(blob ? { recordingUrl: URL.createObjectURL(blob) } : {}) })
+    updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft, ...(blob ? { recordingUrl: URL.createObjectURL(blob) } : {}) })
+    setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
     toast('Grabación guardada')
   }
@@ -2510,16 +2519,6 @@ function App() {
 
   const renderInterviewsTab = () => {
     const ivProject = activeCandidate ? projects.find(p => p.id === activeCandidate.projectId) ?? null : null
-    const confirmAddInterviewer = (interviewId: string) => {
-      const name = newInterviewerDraft.trim()
-      setAddingInterviewerForId(null)
-      if (!name) { setNewInterviewerDraft(''); return }
-      if (ivProject && !ivProject.interviewers.includes(name)) {
-        updateProject(ivProject.id, { interviewers: [...ivProject.interviewers, name] })
-      }
-      updateInterview(interviewId, { interviewerName: name })
-      setNewInterviewerDraft('')
-    }
     return (
     <div className="interviews-tab">
       {!sttReady && (
@@ -2591,38 +2590,29 @@ function App() {
                     {fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}
                     {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
                   </span>
+                  {/* Aquí SOLO se elige entre los entrevistadores del proyecto. Darlos
+                      de alta es cosa del proyecto (Nuevo/Editar proyecto), para que la
+                      lista no se llene de nombres sueltos escritos sobre la marcha. */}
                   <span className="rec-row-interviewer" onClick={e => e.stopPropagation()}>
-                    {addingInterviewerForId === iv.id ? (
-                      <span className="rec-row-edit-wrap">
-                        <input
-                          type="text"
-                          className="rec-row-edit-input"
-                          placeholder="Nombre del entrevistador..."
-                          value={newInterviewerDraft}
-                          onChange={e => setNewInterviewerDraft(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') confirmAddInterviewer(iv.id)
-                            if (e.key === 'Escape') { setAddingInterviewerForId(null); setNewInterviewerDraft('') }
-                          }}
-                          autoFocus
-                        />
-                        <button type="button" className="btn-icon btn-icon--confirm" onClick={() => confirmAddInterviewer(iv.id)}><CheckIcon /></button>
-                        <button type="button" className="btn-icon" onClick={() => { setAddingInterviewerForId(null); setNewInterviewerDraft('') }}>✕</button>
-                      </span>
-                    ) : (
+                    {(ivProject?.interviewers.length ?? 0) > 0 ? (
                       <select
-                        className="rec-row-interviewer-select"
+                        className={`rec-row-interviewer-select${iv.interviewerName ? '' : ' rec-row-interviewer-select--empty'}`}
                         title="Entrevistador de esta llamada"
                         value={iv.interviewerName || ''}
-                        onChange={e => {
-                          if (e.target.value === '__add__') { setAddingInterviewerForId(iv.id); setNewInterviewerDraft('') }
-                          else updateInterview(iv.id, { interviewerName: e.target.value })
-                        }}
+                        onChange={e => updateInterview(iv.id, { interviewerName: e.target.value })}
                       >
-                        <option value="">Entrevistador: sin asignar</option>
-                        {(ivProject?.interviewers ?? []).map(name => <option key={name} value={name}>Entrevistador: {name}</option>)}
-                        <option value="__add__">+ Añadir entrevistador…</option>
+                        <option value="">Sin entrevistador</option>
+                        {(ivProject?.interviewers ?? []).map(name => <option key={name} value={name}>{name}</option>)}
                       </select>
+                    ) : (
+                      <button
+                        type="button"
+                        className="rec-row-interviewer-select rec-row-interviewer-select--empty rec-row-interviewer-link"
+                        title="Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto."
+                        onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers }); setEditingProjectId(ivProject.id); setShowEditProject(true) } }}
+                      >
+                        Añádelos en el proyecto
+                      </button>
                     )}
                   </span>
                   {iv.captureSource === 'mic' && (
@@ -3443,12 +3433,12 @@ function App() {
         <div className="proj-criteria-chips">
           {interviewersList.length > 0
             ? interviewersList.map(name => (
-                <span key={name} className="criteria-chip interviewer-chip">
+                <span key={name} className="interviewer-chip">
                   {name}
                   <button type="button" className="chip-remove-btn" title="Quitar" onClick={() => onChange(interviewersList.filter(n => n !== name))}>✕</button>
                 </span>
               ))
-            : <span className="criteria-chip criteria-chip--empty">Sin entrevistadores todavía</span>
+            : <span className="interviewer-chip interviewer-chip--empty">Sin entrevistadores todavía</span>
           }
         </div>
         <div className="interviewer-add-row">
@@ -3460,7 +3450,7 @@ function App() {
             onChange={e => setNewInterviewerDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addInterviewer() } }}
           />
-          <button type="button" className="secondary-btn" onClick={addInterviewer} disabled={!newInterviewerDraft.trim()}>+ Añadir</button>
+          <button type="button" className="secondary-btn" onClick={addInterviewer} disabled={!newInterviewerDraft.trim()}>Añadir</button>
         </div>
       </>
     )
@@ -3806,6 +3796,16 @@ function App() {
             <h2>Nombrar sesión</h2>
             <p>¿Cómo quieres llamar a esta sesión?</p>
             <label className="modal-label">Nombre<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder="Ej: Primera entrevista técnica (opcional)" autoFocus /></label>
+            {/* Quién ha llevado la llamada, en caliente y recién terminada. Se puede
+                cambiar luego desde la lista de grabaciones. */}
+            {sessionModalProject && sessionModalProject.interviewers.length > 0 && (
+              <label className="modal-label">Entrevistador
+                <select className="modal-input" value={sessionInterviewerDraft} onChange={e => setSessionInterviewerDraft(e.target.value)}>
+                  <option value="">Sin asignar</option>
+                  {sessionModalProject.interviewers.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
+            )}
             <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>Si lo dejas en blanco se usará la fecha y hora como nombre.</p>
             <div className="modal-actions">
               <button type="button" className="primary-btn" onClick={() => void handleConfirmSessionName()}>Guardar</button>

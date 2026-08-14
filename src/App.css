@@ -7,6 +7,9 @@
   --sidebar-text-bright: #111827;
   --primary: #2563EB;
   --primary-hover: #1D4ED8;
+  /* Los dos acompañantes del azul de marca en Figma: fondo claro y borde. */
+  --primary-soft: #EFF6FF;
+  --primary-border: #BFDBFE;
   --bg: #F8FAFC;
   --card: #FFFFFF;
   --border: #E2E8F0;
@@ -2415,12 +2418,55 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .rec-row-edit-wrap { display: flex; align-items: center; gap: 4px; }
 .rec-row-edit-input { border: 1px solid #bfdbfe; border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 13px; }
 
-.rec-row-interviewer { display: block; margin-top: 2px; }
+/* Entrevistador de la llamada. Era un <select> desnudo del sistema (sin borde, gris,
+   con la flecha nativa) al lado de píldoras, y cantaba. Ahora es una píldora con el
+   azul de marca, un icono de persona a la izquierda y su propia flecha. */
+.rec-row-interviewer { display: inline-flex; margin-top: 3px; }
 .rec-row-interviewer-select {
-  border: none; background: none; color: #808080; font-size: 12px; font-weight: 400;
-  padding: 0; cursor: pointer; max-width: 220px;
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 220px;
+  padding: 4px 22px 4px 24px;
+  border: 1px solid var(--primary-border);
+  border-radius: 999px;
+  background-color: var(--primary-soft);
+  color: var(--primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  background-repeat: no-repeat, no-repeat;
+  background-position: left 8px center, right 8px center;
+  background-size: 10px, 8px;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='5' r='3' fill='%232563EB'/%3E%3Cpath d='M2 14c0-3.3 2.7-5 6-5s6 1.7 6 5z' fill='%232563EB'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%232563EB' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-.rec-row-interviewer-select:hover { color: var(--primary); }
+.rec-row-interviewer-select:hover { background-color: #dbeafe; }
+
+/* Sin asignar todavía: la misma píldora en gris, para que no grite. */
+.rec-row-interviewer-select--empty {
+  border-color: #e5e7eb;
+  background-color: #f3f4f6;
+  color: var(--text-muted);
+  font-weight: 500;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='5' r='3' fill='%236b7280'/%3E%3Cpath d='M2 14c0-3.3 2.7-5 6-5s6 1.7 6 5z' fill='%236b7280'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.rec-row-interviewer-select--empty:hover { background-color: #e5e7eb; color: var(--text); }
+
+/* Proyecto sin entrevistadores: no se dan de alta aquí, solo se enlaza al proyecto,
+   así que no lleva flecha de desplegable. */
+.rec-row-interviewer-link {
+  padding-right: 10px;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='5' r='3' fill='%236b7280'/%3E%3Cpath d='M2 14c0-3.3 2.7-5 6-5s6 1.7 6 5z' fill='%236b7280'/%3E%3C/svg%3E");
+  background-position: left 8px center;
+  background-size: 10px;
+}
 
 .rec-row-badge {
   flex-shrink: 0;
@@ -4684,8 +4730,23 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .criteria-edit-panel { background: #fafafa; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 
 /* ── Interviewer chips + add row ──────────────────────────────────────────── */
-.interviewer-chip { display: inline-flex; align-items: center; gap: 6px; }
-.chip-remove-btn { background: none; border: none; padding: 0; margin: 0; font-size: 10px; line-height: 1; color: #3b5bdb; cursor: pointer; opacity: 0.7; }
+/* Píldoras con los colores de marca de Figma (--primary #2563EB sobre #EFF6FF con
+   borde #BFDBFE). Antes reutilizaban .criteria-chip, que va en un azul-violeta a
+   fuego (#3b5bdb) que no es el de la marca. */
+.interviewer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid var(--primary-border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.interviewer-chip--empty { background: #f3f4f6; color: #9ca3af; border-color: #e5e7eb; font-style: italic; }
+.chip-remove-btn { background: none; border: none; padding: 0; margin: 0; font-size: 10px; line-height: 1; color: currentColor; cursor: pointer; opacity: 0.7; }
 .chip-remove-btn:hover { opacity: 1; }
 .interviewer-add-row { display: flex; gap: 8px; margin-top: 10px; }
 .interviewer-add-row .modal-input { flex: 1; }
