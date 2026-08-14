@@ -49,15 +49,26 @@ El instalador queda en `release/`.
 
 ---
 
-## 2. Firma de código (code signing)
+## 2. Firma de código (code signing) — ❌ DESCARTADA 2026-08-14
 
-Sin firma, **Windows SmartScreen** muestra "Editor desconocido" al instalar. Para evitarlo hay
-que firmar con un certificado **OV** (~200-400 €/año, aviso desaparece tras ganar reputación) o
-**EV** (más caro, reputación inmediata + token hardware).
+**Decisión tomada: no se compra certificado.** Lo de abajo se conserva solo por si algún día
+se cambia de idea; hoy no aplica y `build.win.signtoolOptions` ya no está en `package.json`.
 
-La configuración ya está **lista** en `package.json` (`build.win.signtoolOptions`). electron-builder
-firma automáticamente **si** detecta las variables de entorno del certificado. Sin ellas, el build
-sale sin firmar (no falla).
+Qué implica no firmar, en la práctica:
+
+- **Windows SmartScreen** avisa de "editor desconocido" en cada instalación. Es un susto, no
+  un fallo: `Más información` → `Ejecutar de todas formas`.
+- **La app no se actualiza sola.** `electron-updater` se usa solo para avisar de que hay
+  versión nueva; el banner abre la página de releases y la instalación es manual.
+- Publicar una versión sigue siendo igual de válido: el `.exe` funciona perfectamente.
+
+<details>
+<summary>Si algún día se compra el certificado (referencia)</summary>
+
+Haría falta un certificado **OV** (~200-400 €/año, el aviso desaparece tras ganar reputación)
+o **EV** (más caro, reputación inmediata + token hardware). Habría que devolver
+`build.win.signtoolOptions` a `package.json` y volver a poner `autoDownload` /
+`autoInstallOnAppQuit` en `true` en `electron/main.cjs`.
 
 ### Cuando tengas el certificado (.pfx / .p12)
 
@@ -87,6 +98,8 @@ proveedor del certificado.
 "forceCodeSigning": true
 ```
 (Déjalo en `false`/omitido mientras no haya certificado.)
+
+</details>
 
 ---
 

@@ -23,7 +23,15 @@ let mainWindowRef = null
 let pendingCaptureSourceResolve = null
 let nextCaptureWantsVideo = false
 
-// ── Auto-actualización (electron-updater + GitHub Releases) ───────────────────
+// ── Aviso de nueva versión (electron-updater + GitHub Releases) ───────────────
+//
+// DECIDIDO 2026-08-14: no se compra certificado de firma. Sin él, Windows rechaza
+// aplicar el instalador descargado ("New version is not signed by the application
+// owner"), así que descargar los ~120 MB en cada arranque solo servía para fallar
+// en silencio. Ahora electron-updater se usa SOLO para enterarse de que hay versión
+// nueva; la instalación es manual, descargando el .exe desde GitHub Releases.
+const RELEASES_URL = 'https://github.com/Vankish/Call-transcriber/releases/latest'
+
 function sendUpdaterEvent(payload) {
   if (mainWindowRef && !mainWindowRef.isDestroyed()) {
     mainWindowRef.webContents.send('updater:event', payload)
@@ -33,8 +41,8 @@ function sendUpdaterEvent(payload) {
 function setupAutoUpdater() {
   log.transports.file.level = 'info'
   autoUpdater.logger = log
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('checking-for-update', () => sendUpdaterEvent({ status: 'checking' }))
   autoUpdater.on('update-available', (info) => sendUpdaterEvent({ status: 'available', version: info?.version }))
@@ -59,8 +67,11 @@ ipcMain.handle('updates:check', async () => {
   }
 })
 
-ipcMain.handle('updates:install', () => {
-  autoUpdater.quitAndInstall()
+// Sin firma no se puede instalar desde dentro de la app: se abre la página de
+// releases en el navegador para bajar el .exe a mano.
+ipcMain.handle('updates:open-releases', async () => {
+  await shell.openExternal(RELEASES_URL)
+  return { ok: true }
 })
 
 ipcMain.handle('app:get-version', () => app.getVersion())
@@ -335,6 +346,56 @@ ipcMain.handle('recording:ensure-duration', async (_event, { filePath }) => {
     return { ok: true, repaired: await writeDurationHeader(filePath) }
   } catch {
     return { ok: false, repaired: false }
+  }
+})
+
+// ── Puente para sincronizar audios con la nube ───────────────────────────────
+// El renderer es quien habla con Supabase Storage (tiene la sesión), pero no
+// puede leer ni escribir en disco. Estos tres canales le prestan ese acceso,
+// siempre restringido a la carpeta de grabaciones.
+
+// Devuelve true/false sin lanzar: sirve para saber si un audio está en ESTE PC.
+ipcMain.handle('recording:exists', async (_event, { filePath }) => {
+  try {
+    if (!filePath) return { exists: false }
+    const stat = await fs.stat(filePath)
+    return { exists: stat.isFile(), size: stat.size }
+  } catch {
+    return { exists: false }
+  }
+})
+
+// Lee un audio ya guardado para poder subirlo (grabaciones anteriores a esto).
+ipcMain.handle('recording:read-bytes', async (_event, { filePath }) => {
+  try {
+    const buffer = await fs.readFile(filePath)
+    // Uint8Array viaja por IPC como bytes; Buffer llegaría como objeto plano.
+    return { ok: true, bytes: new Uint8Array(buffer) }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) }
+  }
+})
+
+// Escribe un audio descargado de la nube en la carpeta de grabaciones. Solo
+// acepta un nombre de archivo, nunca una ruta, para que no se pueda escribir
+// fuera de esa carpeta.
+ipcMain.handle('recording:write-bytes', async (_event, { fileName, bytes }) => {
+  try {
+    const safeName = path.basename(String(fileName || ''))
+    if (!safeName) return { ok: false, error: 'nombre de archivo vacío' }
+    const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
+    await fs.mkdir(recordingsDir, { recursive: true })
+    const filePath = path.join(recordingsDir, safeName)
+    await fs.writeFile(filePath, Buffer.from(bytes))
+    // Las pistas .webm bajadas de la nube llegan sin duración en la cabecera si
+    // se subieron antes de repararla; se reaplica igual que al grabar.
+    if (/\.webm$/i.test(safeName) && !(await getAudioDurationSec(filePath))) {
+      await writeDurationHeader(filePath)
+    }
+    log.info(`[nube] descargado ${safeName} (${bytes.length} bytes)`)
+    return { ok: true, filePath }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) }
   }
 })
 

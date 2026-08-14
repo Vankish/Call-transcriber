@@ -1,7 +1,26 @@
 # Estado de lanzamiento — Call Transcriber
 
 > Documento de contexto para retomar el trabajo desde cualquier dispositivo.
-> Última actualización: 2026-07-29.
+> Última actualización: 2026-08-14.
+
+## ❌ DECIDIDO 2026-08-14: no se compra certificado de firma
+
+David decide no pagar los ~200-400 €/año. Consecuencias, ya aplicadas en el código:
+
+- **La app no se actualiza sola y no lo hará.** `autoDownload` y `autoInstallOnAppQuit`
+  están en `false`: antes se bajaban 120 MB en cada arranque para que Windows rechazara
+  instalarlos, fallando en silencio. Ahora electron-updater solo sirve para **enterarse**
+  de que hay versión nueva.
+- **El banner ahora dice la verdad**: "hay una nueva versión, la app no se actualiza sola"
+  con un botón **Descargar** que abre la página de releases en el navegador. Instalar es
+  manual: descargar el `.exe` y ejecutarlo.
+- **SmartScreen seguirá avisando** ("editor desconocido" → `Más información` →
+  `Ejecutar de todas formas`). Sin certificado no hay forma de quitarlo.
+- Se ha borrado `build.win.signtoolOptions` de `package.json` (era configuración muerta).
+  Si algún día se compra el certificado, está en el historial de git.
+
+⚠️ **Ojo si hay más usuarios con la app instalada**: `git pull` solo actualiza los equipos
+de desarrollo. Quien tenga el `.exe` instalado se queda donde está hasta que se le avise.
 
 ## Resumen
 
@@ -77,10 +96,9 @@ Test ejecutado el 2026-06-10 en el mismo equipo de desarrollo (sin segundo dispo
 ### Próximos pasos (en orden)
 
 1. ~~**Decidir** qué hacer con la firma~~ → **DECIDIDO 2026-07-29:** publicar sin firma
-   (v1.0.3). Instalación manual, auto-update sigue sin aplicarse. Se descartó de momento
-   desactivar `verifyUpdateCodeSignature` (apaño de desarrollo, no de producción).
-2. **Certificado OV/EV** (~200-400€/año): quita SmartScreen Y permite que electron-updater
-   aplique updates. Es la solución definitiva y sigue pendiente.
+   (v1.0.3). Instalación manual.
+2. ~~**Certificado OV/EV**~~ → **DESCARTADO 2026-08-14:** no se compra. La instalación es
+   manual para siempre y el aviso de SmartScreen se queda.
 3. **Groq API key en Supabase**: pendiente de reimplementar — se eliminó por seguridad pero
    tiene sentido vincularla a la cuenta del usuario (protegida por RLS) para que no haya que
    reintroducirla en cada dispositivo. Requiere: migración SQL (añadir columna `groq_api_key`
@@ -123,11 +141,32 @@ Instalador ya compilado y firmado: `release\Call Transcriber Setup 1.0.3.exe` (3
 La versión no se subió a propósito — es empaquetado local, no release. Si se publica, subir a
 1.0.4 en el mismo commit.
 
+## Audios en la nube (2026-08-14) 🔲 falta correr el SQL
+
+Antes los `.mp3` vivían solo en `Documents\CallTranscriber` del PC que grabó: en el otro
+equipo la entrevista salía en la lista pero sin audio, así que no se podía ni escuchar ni
+re-transcribir. Ahora se suben a **Supabase Storage** (bucket privado `recordings`).
+
+- **Se suben dos archivos por entrevista**: la mezcla (lo que se transcribe) y la pista de
+  sistema (voz limpia del interlocutor, necesaria para separar hablantes). Unos 60-70 MB por
+  hora de entrevista entre las dos.
+- **El vídeo NO se sube**: ~300 MB por entrevista, llenaría el plan gratuito con dos.
+- **Espacio**: 1 GB gratis ≈ **15 entrevistas**. Al borrar una entrevista/perfil/proyecto se
+  borran también sus audios de la nube, para no acumular huérfanos.
+- **Límite por archivo: 50 MB** en el plan gratuito. Una entrevista de ~2 h no subirá.
+- En la lista de grabaciones cada entrevista lleva un distintivo: `☁ En la nube` o
+  `↑ Solo en este PC · Subir` (este último es un botón, para las grabaciones antiguas).
+
+🔲 **PENDIENTE: correr `supabase-migration-audio-nube.sql`** en el SQL Editor de Supabase.
+Hasta entonces no existe el bucket ni las columnas y las subidas fallarán.
+
 ## Pendiente (acciones externas) ⏳
 
-- **Certificado de firma** (OV ~200-400€/año, o EV): quita el aviso de SmartScreen "editor desconocido".
+- ~~**Certificado de firma**~~ → **DESCARTADO 2026-08-14** (ver arriba). No se compra.
 - **Legal**: rellenar huecos `[ ]` de `legal/*.md` + revisión de abogado. Decidir **región de Supabase**
-  (recomendado UE) y verificar retención/transferencia de Groq (EE.UU.).
+  (recomendado UE) y verificar retención/transferencia de Groq (EE.UU.). ⚠️ Ahora también se
+  guardan **audios** de las entrevistas en Supabase, no solo texto: afecta a lo que hay que
+  contarle al candidato y a la región donde se alojan.
 - ~~**`build/` está en `.gitignore`**~~ → **ya resuelto** (verificado 2026-07-29): `build/icon.ico`
   está versionado en git y `build/` no está ignorado. Un clon limpio compila.
 

@@ -78,12 +78,19 @@ create table public.interviews (
   summary_type          text    not null default 'resumen',
   summary_context       text    not null default 'entrevista',
   interviewer_name      text    not null default '',
+  -- Nombre del archivo de la pista de sistema y marca de "audio subido a Storage".
+  -- Ver supabase-migration-audio-nube.sql (crea además el bucket `recordings`).
+  system_audio_file_name text   not null default '',
+  audio_uploaded        boolean not null default false,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
 );
 -- Migration (run if table already exists):
 -- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS summary_context text not null default 'entrevista';
 -- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS interviewer_name text not null default '';
+-- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS system_audio_file_name text not null default '';
+-- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS audio_uploaded boolean not null default false;
+-- El bucket de Storage y sus políticas van en supabase-migration-audio-nube.sql.
 
 -- ── Row Level Security ────────────────────────────────────────────────────────
 alter table public.profiles   enable row level security;

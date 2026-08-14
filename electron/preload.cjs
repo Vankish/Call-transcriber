@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('desktopApp', {
   generateSummary: (payload) => ipcRenderer.invoke('summary:generate', payload),
   deleteRecording: (payload) => ipcRenderer.invoke('recording:delete', payload),
   ensureRecordingDuration: (payload) => ipcRenderer.invoke('recording:ensure-duration', payload),
+  recordingExists: (payload) => ipcRenderer.invoke('recording:exists', payload),
+  readRecordingBytes: (payload) => ipcRenderer.invoke('recording:read-bytes', payload),
+  writeRecordingBytes: (payload) => ipcRenderer.invoke('recording:write-bytes', payload),
   openOAuthWindow: (url) => ipcRenderer.invoke('auth:open-oauth-window', url),
   exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
   getRecordingsDir: () => ipcRenderer.invoke('recordings:get-dir'),
@@ -24,7 +27,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   selectAudioFile: () => ipcRenderer.invoke('dialog:select-audio'),
   onMagicLinkTokens: (cb) => ipcRenderer.on('auth:magic-link-tokens', (_e, data) => cb(data)),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
-  installUpdate: () => ipcRenderer.invoke('updates:install'),
+  openReleasesPage: () => ipcRenderer.invoke('updates:open-releases'),
   onUpdaterEvent: (cb) => ipcRenderer.on('updater:event', (_e, data) => cb(data)),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 })

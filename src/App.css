@@ -2386,6 +2386,32 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   margin-top: 2px;
 }
 
+/* Dónde vive el audio de una grabación: en la nube o solo en este equipo. */
+.audio-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.audio-cloud--ok { color: #15803d; background: #f0fdf4; border-color: #bbf7d0; }
+.audio-cloud--busy { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.audio-cloud--local {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+  cursor: pointer;
+  font-family: inherit;
+}
+.audio-cloud--local:hover { background: #fef3c7; }
+.audio-cloud--error { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.audio-cloud--error:hover { background: #fee2e2; }
+
 .rec-row-edit-wrap { display: flex; align-items: center; gap: 4px; }
 .rec-row-edit-input { border: 1px solid #bfdbfe; border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 13px; }
 
