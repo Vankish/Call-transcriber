@@ -50,5 +50,6 @@ export interface DbInterview {
   summary_instructions: string; summary_text: string
   summary_status: string; summary_type: string
   summary_context?: string; interviewer_name?: string
+  system_audio_file_name?: string; audio_uploaded?: boolean
   created_at: string; updated_at: string
 }

@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import type { Session } from '@supabase/supabase-js'
-import { supabase } from './lib/supabase'
+import { supabase, isSupabaseConfigured } from './lib/supabase'
 import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
 import { AuthScreen } from './AuthScreen'
 
@@ -38,7 +38,11 @@ type Interview = {
   summaryType: 'resumen' | 'listado'
   summaryContext: SummaryContext
   interviewerName: string
+  // true = los audios de esta entrevista están en Supabase Storage y por tanto
+  // se pueden recuperar desde cualquier PC. false = viven solo en el que grabó.
+  audioUploaded: boolean
 }
+type AudioSyncState = 'uploading' | 'downloading' | 'error'
 type AudioDeviceOption = { id: string; name: string }
 type Toast = { id: string; message: string; sub?: string; type: 'success' | 'error' | 'info' | 'warning' }
 type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'candidates' | 'settings' | 'profile' | 'search'
@@ -132,6 +136,17 @@ const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${Str
 const fmtDate = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleString(locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 const fmtShort = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
+
+// ── Audios en la nube ──────────────────────────────────────────────────────
+// Bucket privado de Supabase Storage. Las rutas son {user_id}/{interview_id}/{archivo}
+// porque las políticas de seguridad comparan la primera carpeta con el usuario
+// autenticado (ver supabase-migration-audio-nube.sql).
+const RECORDINGS_BUCKET = 'recordings'
+// Las grabaciones antiguas guardaban la ruta absoluta en vez del nombre; en la nube
+// solo se usa el nombre, o las barras crearían carpetas fantasma.
+const baseName = (stored: string) => stored.split(/[\\/]/).pop() ?? stored
+const cloudAudioKey = (userId: string, interviewId: string, fileName: string) => `${userId}/${interviewId}/${fileName}`
+const audioMime = (fileName: string) => /\.mp3$/i.test(fileName) ? 'audio/mpeg' : /\.webm$/i.test(fileName) ? 'audio/webm' : /\.ogg$/i.test(fileName) ? 'audio/ogg' : /\.mp4|\.m4a$/i.test(fileName) ? 'audio/mp4' : 'application/octet-stream'
 const initials = (name: string) => name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
 const AVATAR_COLORS = ['#2563eb', '#10b981', '#f59e33', '#eb4566', '#8b5cf6', '#ec4899']
 const avatarColor = (id: string) => AVATAR_COLORS[id.charCodeAt(id.length - 1) % AVATAR_COLORS.length]
@@ -202,7 +217,11 @@ const ivFromDb    = (r: DbInterview): Interview => ({
   sessionName: r.session_name, status: r.status as RecordingStatus,
   durationSec: r.duration_sec, micDeviceId: r.mic_device_id, outputDeviceId: r.output_device_id,
   transcriptOriginal: r.transcript_original, transcriptEdited: r.transcript_edited,
-  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path, videoFilePath: null, systemAudioFilePath: null,
+  transcriptUpdatedAt: r.transcript_updated_at, recordingUrl: null, recordingFilePath: r.recording_file_path, videoFilePath: null,
+  // El nombre de la pista de sistema ya viaja por la nube; la caché local de
+  // localStorage sigue existiendo solo para entrevistas anteriores a esa columna.
+  systemAudioFilePath: r.system_audio_file_name || null,
+  audioUploaded: r.audio_uploaded ?? false,
   captureSource: r.capture_source as Interview['captureSource'],
   transcriptionStatus: r.transcription_status as Interview['transcriptionStatus'],
   summaryInstructions: r.summary_instructions, summaryText: r.summary_text,
@@ -228,6 +247,8 @@ const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
   if (patch.summaryType           !== undefined) db.summary_type          = patch.summaryType
   if (patch.summaryContext        !== undefined) db.summary_context       = patch.summaryContext
   if (patch.interviewerName       !== undefined) db.interviewer_name      = patch.interviewerName
+  if (patch.systemAudioFilePath   !== undefined) db.system_audio_file_name = patch.systemAudioFilePath ?? ''
+  if (patch.audioUploaded         !== undefined) db.audio_uploaded        = patch.audioUploaded
   return db
 }
 
@@ -341,6 +362,10 @@ function App() {
   const [projDetailTab, setProjDetailTab] = useState<'perfiles' | 'analisis'>('perfiles')
   const [showCriteriaEdit, setShowCriteriaEdit] = useState(false)
   const [recordingsDir, setRecordingsDir] = useState('')
+  // Subidas/bajadas de audio en curso, por id de entrevista. Solo para pintar el
+  // estado en la interfaz; la verdad de si un audio está en la nube es
+  // interview.audioUploaded.
+  const [audioSync, setAudioSync] = useState<Record<string, AudioSyncState>>({})
   const [exportFormat, setExportFormat] = useState<'pdf' | 'txt' | 'clipboard'>('clipboard')
   const [txLang, setTxLang] = useState('auto')
   const [userPhoto, setUserPhoto] = useState('')
@@ -589,7 +614,9 @@ function App() {
               return {
                 ...iv,
                 videoFilePath: videoPathCache[iv.id] ?? iv.videoFilePath,
-                systemAudioFilePath: systemAudioPathCache[iv.id] ?? iv.systemAudioFilePath,
+                // La nube manda; la caché local solo cubre las entrevistas
+                // anteriores a que el nombre de la pista de sistema se guardara allí.
+                systemAudioFilePath: iv.systemAudioFilePath ?? systemAudioPathCache[iv.id] ?? null,
                 summaryContext: legacyCtx ?? iv.summaryContext,
               }
             }))
@@ -1007,6 +1034,12 @@ function App() {
         const systemBlob = pendingSystemBlobRef.current
         pendingBlobRef.current = null; pendingVideoBlobRef.current = null; pendingSystemBlobRef.current = null
 
+        // Los nombres de archivo que se acaban de guardar. Se anotan aquí porque
+        // updateInterview actualiza el estado de React de forma asíncrona y la
+        // subida a la nube (al final de esta función) los necesita ya.
+        let savedAudioName: string | null = null
+        let savedSystemName: string | null = null
+
         // Si el usuario descarta la grabación MIENTRAS este guardado está en curso
         // (handleDiscardRecording marca iv.id en discardedInterviewIdsRef), no hay
         // ya ninguna entrevista en la lista donde enganchar la ruta del archivo —
@@ -1019,6 +1052,7 @@ function App() {
               void window.desktopApp.deleteRecording?.({ filePath: r.filePath })
             } else {
               const fileName = r.filePath.split(/[\\/]/).pop() ?? r.filePath
+              savedAudioName = fileName
               updateInterview(iv.id, { recordingFilePath: fileName })
             }
           } catch { /* ignore */ }
@@ -1046,6 +1080,7 @@ function App() {
               void window.desktopApp.deleteRecording?.({ filePath: sr.filePath })
             } else {
               const systemFileName = sr.filePath.split(/[\\/]/).pop() ?? sr.filePath
+              savedSystemName = systemFileName
               updateInterview(iv.id, { systemAudioFilePath: systemFileName })
               saveSystemAudioPathCache(iv.id, systemFileName)
             }
@@ -1054,6 +1089,14 @@ function App() {
 
         const wasDiscarded = discardedInterviewIdsRef.current.has(iv.id)
         discardedInterviewIdsRef.current.delete(iv.id)
+
+        // Subida a la nube en segundo plano, para que la grabación esté disponible
+        // en el otro equipo. `iv` es el objeto de antes de grabar, así que hay que
+        // releer la entrevista ya con las rutas que se acaban de guardar.
+        if (!wasDiscarded && savedAudioName) {
+          void uploadInterviewAudio({ ...iv, recordingFilePath: savedAudioName, systemAudioFilePath: savedSystemName }, { silent: true })
+        }
+
         if (!wasDiscarded && autoTranscribe) void handleTranscribe(iv.id)
       }
 
@@ -1107,7 +1150,7 @@ function App() {
       recordingUrl: null, recordingFilePath: filePath, videoFilePath: null, systemAudioFilePath: null,
       captureSource: 'none', transcriptionStatus: 'pending',
       summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
-      summaryContext: 'entrevista', interviewerName: '',
+      summaryContext: 'entrevista', interviewerName: '', audioUploaded: false,
     }
     setInterviews(c => [n, ...c])
     setSelectedInterviewId(n.id)
@@ -1122,7 +1165,7 @@ function App() {
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '' }
+    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '', audioUploaded: false }
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: n.interviewerName, created_at: n.createdAt, updated_at: n.createdAt })
@@ -1209,11 +1252,16 @@ function App() {
     if (!interview.recordingFilePath) { toast('Esta entrevista no tiene grabación asociada', 'error'); return }
     if (!window.desktopApp?.transcribeAudio) { toast('La transcripción solo funciona en la app de escritorio', 'error'); return }
     if (!sttReady) { toast('Configura un motor de transcripción', 'error', 'Ajustes → Motores de IA'); return }
-    const fullPath = resolveAudioPath(interview.recordingFilePath)
-    if (!fullPath) { toast('No se encuentra el archivo de la grabación', 'error', interview.recordingFilePath); return }
-    // Pista solo-sistema (voz limpia del interlocutor), si esta grabación la tiene.
-    // Su presencia activa la separación determinista de hablantes en el backend.
-    const systemPath = interview.systemAudioFilePath ? resolveAudioPath(interview.systemAudioFilePath) : null
+    // Si el audio se grabó en el otro equipo, se baja de la nube antes de seguir.
+    // `systemPath` es la pista solo-sistema (voz limpia del interlocutor): su
+    // presencia activa la separación determinista de hablantes en el backend.
+    const audio = await ensureLocalAudio(interview)
+    if (!audio) {
+      toast('No se encuentra el audio de esta entrevista', 'error',
+        interview.audioUploaded ? 'Falló la descarga desde la nube' : 'Se grabó en otro equipo y no se subió a la nube')
+      return
+    }
+    const { filePath: fullPath, systemFilePath: systemPath } = audio
     const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
     const interviewerName = (interview.interviewerName || userName || '').trim()
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
@@ -1254,16 +1302,25 @@ function App() {
     setPlayingInterviewId(null); setPlaybackProgress(0); setPlaybackCurrentTime(0); setPlaybackDuration(0)
   }
 
-  const handleTogglePlayback = (interview: Interview, startAt?: number) => {
-    const resolved = resolveAudioPath(interview.recordingFilePath)
-    const src = interview.recordingUrl ?? (resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null)
-    if (!src) return
+  const handleTogglePlayback = async (interview: Interview, startAt?: number) => {
     // Con startAt no se alterna: se salta a ese punto, esté sonando o no.
+    // Esto va ANTES de tocar el archivo: si ya está sonando no hay nada que bajar.
     if (playingInterviewId === interview.id) {
       if (startAt === undefined) { stopAudio(); return }
       handleSeek(startAt)
       void audioRef.current?.play()
       return
+    }
+    // Puede estar solo en la nube si se grabó en el otro equipo.
+    let src = interview.recordingUrl
+    if (!src) {
+      const audioFiles = await ensureLocalAudio(interview)
+      if (!audioFiles) {
+        toast('No se encuentra el audio de esta entrevista', 'error',
+          interview.audioUploaded ? 'Falló la descarga desde la nube' : 'Se grabó en otro equipo y no se subió a la nube')
+        return
+      }
+      src = 'file:///' + audioFiles.filePath.replace(/\\/g, '/')
     }
     stopAudio()
     if (startAt !== undefined) pendingSeekRef.current = startAt
@@ -1371,7 +1428,7 @@ function App() {
       void video.play()
       return
     }
-    handleTogglePlayback(iv, sec)
+    void handleTogglePlayback(iv, sec)
   }
 
   // Barra de tiempo/scrubber que aparece junto al play de la entrevista en reproducción.
@@ -1405,6 +1462,7 @@ function App() {
     if (interview?.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     if (interview?.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     if (interview?.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
+    if (interview) void deleteCloudAudio(interview)
     saveVideoPathCache(interviewId, null)
     saveSystemAudioPathCache(interviewId, null)
     setInterviews(c => c.filter(i => i.id !== interviewId))
@@ -1419,7 +1477,7 @@ function App() {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
     const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
-    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null) })
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); void deleteCloudAudio(i) })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId))
     setCandidates(c => c.filter(x => x.id !== candidateId))
     if (session) {
@@ -1438,7 +1496,7 @@ function App() {
     setPendingDeleteId(null)
     const projCandidates = candidates.filter(c => c.projectId === projectId)
     const projInterviewIds = interviews.filter(i => projCandidates.some(c => c.id === i.candidateId))
-    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }); if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.systemAudioFilePath }); saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null) })
+    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }); if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.systemAudioFilePath }); saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); void deleteCloudAudio(i) })
     setInterviews(c => c.filter(i => !projCandidates.some(pc => pc.id === i.candidateId)))
     setCandidates(c => c.filter(x => x.projectId !== projectId))
     setProjects(c => c.filter(p => p.id !== projectId))
@@ -1641,6 +1699,135 @@ function App() {
     const resolved = resolveAudioPath(stored)
     return resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null
   }, [resolveAudioPath])
+
+  // ── Audios en la nube ──────────────────────────────────────────────────────
+  // Los audios se guardan en Documents\CallTranscriber del PC que grabó. Antes se
+  // quedaban ahí: en el otro equipo la entrevista salía en la lista pero sin audio,
+  // así que no se podía ni escuchar ni re-transcribir. Ahora se suben también a
+  // Supabase Storage y se vuelven a bajar al PC que las necesite.
+  //
+  // Se suben DOS archivos por entrevista: la mezcla (lo que se transcribe) y la
+  // pista de sistema (la voz limpia del interlocutor, necesaria para separar
+  // hablantes). El VÍDEO no se sube — pesa ~300 MB y no cabe en el plan gratuito.
+  const uploadInterviewAudio = async (interview: Interview, opts?: { silent?: boolean }): Promise<boolean> => {
+    const userId = session?.user.id
+    if (!userId || !isSupabaseConfigured) return false
+    if (!interview.recordingFilePath || !window.desktopApp?.readRecordingBytes) return false
+
+    const names = [interview.recordingFilePath, interview.systemAudioFilePath].filter((n): n is string => !!n)
+    setAudioSync(s => ({ ...s, [interview.id]: 'uploading' }))
+    try {
+      let subidos = 0
+      for (const stored of names) {
+        const fullPath = resolveAudioPath(stored)
+        if (!fullPath) continue
+        const read = await window.desktopApp.readRecordingBytes({ filePath: fullPath })
+        // Si el archivo no está en este PC simplemente no hay nada que subir de él.
+        if (!read.ok || !read.bytes) continue
+        const fileName = baseName(stored)
+        const { error } = await supabase.storage
+          .from(RECORDINGS_BUCKET)
+          .upload(cloudAudioKey(userId, interview.id, fileName), new Blob([read.bytes], { type: audioMime(fileName) }), { upsert: true, contentType: audioMime(fileName) })
+        if (error) throw new Error(error.message)
+        subidos++
+      }
+      if (subidos === 0) throw new Error('no se encontró ningún archivo de audio en este equipo')
+      // Se persiste también el nombre de la pista de sistema: en grabaciones
+      // antiguas solo estaba en el localStorage de este equipo, y sin él el otro
+      // PC no sabría qué archivo bajar para separar hablantes.
+      updateInterview(interview.id, { audioUploaded: true, systemAudioFilePath: interview.systemAudioFilePath })
+      setAudioSync(s => { const rest = { ...s }; delete rest[interview.id]; return rest })
+      if (!opts?.silent) toast('Audio subido a la nube', 'success', 'Ya se puede transcribir desde el otro equipo')
+      return true
+    } catch (err) {
+      setAudioSync(s => ({ ...s, [interview.id]: 'error' }))
+      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      // El fallo más habitual es el límite de tamaño por archivo del plan (50 MB).
+      if (!opts?.silent) toast('No se pudo subir el audio', 'error', msg)
+      return false
+    }
+  }
+
+  // Devuelve rutas locales utilizables, bajando de la nube lo que falte en este PC.
+  // null = no hay forma de conseguir el audio (ni aquí ni subido).
+  const ensureLocalAudio = async (interview: Interview): Promise<{ filePath: string; systemFilePath: string | null } | null> => {
+    if (!interview.recordingFilePath) return null
+    const userId = session?.user.id
+
+    const ensureOne = async (stored: string): Promise<string | null> => {
+      const local = resolveAudioPath(stored)
+      if (local && (await window.desktopApp?.recordingExists?.({ filePath: local }))?.exists) return local
+      // No está en este equipo: intentar bajarlo.
+      if (!userId || !interview.audioUploaded || !window.desktopApp?.writeRecordingBytes) return null
+      const fileName = baseName(stored)
+      const { data, error } = await supabase.storage
+        .from(RECORDINGS_BUCKET)
+        .download(cloudAudioKey(userId, interview.id, fileName))
+      if (error || !data) return null
+      const written = await window.desktopApp.writeRecordingBytes({ fileName, bytes: new Uint8Array(await data.arrayBuffer()) })
+      return written.ok ? (written.filePath ?? null) : null
+    }
+
+    // Solo se anuncia "descargando" si de verdad falta el archivo principal aquí:
+    // en el PC que grabó esto no debe parpadear nada.
+    const mainLocal = resolveAudioPath(interview.recordingFilePath)
+    const yaEstaAqui = !!mainLocal && !!(await window.desktopApp?.recordingExists?.({ filePath: mainLocal }))?.exists
+    if (!yaEstaAqui) setAudioSync(s => ({ ...s, [interview.id]: 'downloading' }))
+    try {
+      const filePath = await ensureOne(interview.recordingFilePath)
+      if (!filePath) return null
+      // La pista de sistema es opcional: sin ella la transcripción sigue, solo
+      // pierde la separación determinista de hablantes.
+      const systemFilePath = interview.systemAudioFilePath ? await ensureOne(interview.systemAudioFilePath) : null
+      return { filePath, systemFilePath }
+    } finally {
+      setAudioSync(s => { const rest = { ...s }; delete rest[interview.id]; return rest })
+    }
+  }
+
+  // Al borrar una entrevista hay que vaciar también su carpeta del Storage: con
+  // 1 GB en el plan gratuito, dejar audios huérfanos se come el espacio deprisa.
+  const deleteCloudAudio = async (interview: Interview) => {
+    const userId = session?.user.id
+    if (!userId || !isSupabaseConfigured || !interview.audioUploaded) return
+    const keys = [interview.recordingFilePath, interview.systemAudioFilePath]
+      .filter((n): n is string => !!n)
+      .map(n => cloudAudioKey(userId, interview.id, baseName(n)))
+    if (keys.length === 0) return
+    const { error } = await supabase.storage.from(RECORDINGS_BUCKET).remove(keys)
+    if (error) console.error('Error borrando audio de la nube:', error.message)
+  }
+
+  // Distintivo de "¿dónde vive este audio?" en la lista de grabaciones. Sin esto
+  // no había forma de saber por qué una entrevista se podía transcribir en un
+  // equipo y en el otro no.
+  const renderAudioCloudBadge = (iv: Interview) => {
+    if (!iv.recordingFilePath || !isSupabaseConfigured || !session) return null
+    const estado = audioSync[iv.id]
+    if (estado === 'uploading' || estado === 'downloading') {
+      return (
+        <span className="audio-cloud audio-cloud--busy">
+          <span className="spinner" style={{ width: 8, height: 8, display: 'inline-block', verticalAlign: 'middle' }} />
+          {estado === 'uploading' ? 'Subiendo audio…' : 'Bajando audio…'}
+        </span>
+      )
+    }
+    if (iv.audioUploaded) {
+      return <span className="audio-cloud audio-cloud--ok" title="El audio está en la nube: se puede escuchar y transcribir desde cualquiera de tus equipos.">☁ En la nube</span>
+    }
+    return (
+      <button
+        type="button"
+        className={`audio-cloud audio-cloud--local${estado === 'error' ? ' audio-cloud--error' : ''}`}
+        title={estado === 'error'
+          ? 'La última subida falló. Pulsa para reintentar.'
+          : 'El audio vive solo en este equipo. Pulsa para subirlo y poder usarlo desde el otro PC.'}
+        onClick={e => { e.stopPropagation(); void uploadInterviewAudio(iv) }}
+      >
+        {estado === 'error' ? '⚠ No se pudo subir · Reintentar' : '↑ Solo en este PC · Subir'}
+      </button>
+    )
+  }
 
   // El vídeo de la pestaña de transcripción se muestra solo, sin desplegar nada, así
   // que la reparación de la cabecera se lanza al seleccionar la entrevista.
@@ -2443,13 +2630,14 @@ function App() {
                       ⚠ Sin audio del interlocutor
                     </span>
                   )}
+                  {renderAudioCloudBadge(iv)}
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
                   {isDone ? <><DotFilled /> Transcrita</> : isError ? <><WarnTriangle /> Error</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> Transcribiendo</> : <><DotRing /> Pendiente</>}
                 </span>
                 <div className="rec-row-actions" onClick={e => e.stopPropagation()}>
                   {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                    <button type="button" className="btn-icon" title="Reproducir" onClick={() => handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                    <button type="button" className="btn-icon" title="Reproducir" onClick={() => void handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                   )}
                   {renderSeekBar(iv)}
                   <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fd(iv.createdAt)) }}><PencilIcon /></button>
@@ -2536,7 +2724,7 @@ function App() {
                   <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}</span>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                     )}
                     {iv.recordingFilePath && iv.transcriptionStatus !== 'transcribing' && (
                       <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? '↺' : 'Transcribir'}</button>
@@ -2725,7 +2913,7 @@ function App() {
                   <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? <><DotFilled /> Con resumen</> : <><DotRing /> Sin resumen</>}</span>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                     )}
                   </div>
                 </div>
@@ -3475,19 +3663,13 @@ function App() {
   return (
     <div className="app-shell">
       {/* Banner de actualización */}
-      {updateStatus && (updateStatus.status === 'downloaded' || updateStatus.status === 'downloading') && (
-        <div className={`update-banner update-banner--${updateStatus.status}`}>
-          {updateStatus.status === 'downloading' ? (
-            <span>Descargando actualización… {updateStatus.percent ?? 0}%</span>
-          ) : (
-            <>
-              <span>Hay una nueva versión{updateStatus.version ? ` (${updateStatus.version})` : ''} lista para instalar.</span>
-              <button type="button" className="update-banner__btn" onClick={() => void window.desktopApp?.installUpdate?.()}>
-                Reiniciar e instalar
-              </button>
-              <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar">✕</button>
-            </>
-          )}
+      {updateStatus && updateStatus.status === 'available' && (
+        <div className="update-banner">
+          <span>Hay una nueva versión{updateStatus.version ? ` (${updateStatus.version})` : ''}. La app no se actualiza sola: hay que descargar e instalar el archivo.</span>
+          <button type="button" className="update-banner__btn" onClick={() => void window.desktopApp?.openReleasesPage?.()}>
+            Descargar
+          </button>
+          <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar">✕</button>
         </div>
       )}
       {/* Global top bar */}

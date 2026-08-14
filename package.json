@@ -37,13 +37,7 @@
       "icon": "build/icon.ico",
       "target": [
         "nsis"
-      ],
-      "signtoolOptions": {
-        "signingHashAlgorithms": [
-          "sha256"
-        ],
-        "publisherName": "Call Transcriber"
-      }
+      ]
     },
     "nsis": {
       "oneClick": false,

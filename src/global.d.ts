@@ -144,6 +144,9 @@ interface Window {
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
     ensureRecordingDuration: (payload: { filePath: string }) => Promise<{ ok: boolean; repaired: boolean }>
+    recordingExists: (payload: { filePath: string }) => Promise<{ exists: boolean; size?: number }>
+    readRecordingBytes: (payload: { filePath: string }) => Promise<{ ok: boolean; bytes?: Uint8Array<ArrayBuffer>; error?: string }>
+    writeRecordingBytes: (payload: { fileName: string; bytes: Uint8Array<ArrayBuffer> }) => Promise<{ ok: boolean; filePath?: string; error?: string }>
     openOAuthWindow: (url: string) => Promise<string | null>
     exportPdf: (payload: { html: string; fileName: string }) => Promise<{ ok: boolean; cancelled?: boolean; filePath?: string }>
     getRecordingsDir: () => Promise<string>
@@ -151,7 +154,7 @@ interface Window {
     selectAudioFile: () => Promise<string | null>
     onMagicLinkTokens: (cb: (data: Record<string, string>) => void) => void
     checkForUpdates: () => Promise<{ ok: boolean; dev?: boolean; version?: string; error?: string }>
-    installUpdate: () => Promise<void>
+    openReleasesPage: () => Promise<{ ok: boolean }>
     onUpdaterEvent: (cb: (data: UpdaterEvent) => void) => void
     getAppVersion: () => Promise<string>
   }
