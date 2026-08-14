@@ -27,10 +27,12 @@ create table public.projects (
   company              text    not null default '',
   status               text    not null default 'active',
   evaluation_criteria  jsonb   not null default '[]'::jsonb,
+  interviewers         jsonb   not null default '[]'::jsonb,
   created_at           timestamptz not null default now()
 );
 -- Migration (run if table already exists):
 -- ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS evaluation_criteria jsonb not null default '[]'::jsonb;
+-- ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS interviewers jsonb not null default '[]'::jsonb;
 
 -- Candidates
 create table public.candidates (
@@ -74,9 +76,14 @@ create table public.interviews (
   summary_text          text    not null default '',
   summary_status        text    not null default 'idle',
   summary_type          text    not null default 'resumen',
+  summary_context       text    not null default 'entrevista',
+  interviewer_name      text    not null default '',
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
 );
+-- Migration (run if table already exists):
+-- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS summary_context text not null default 'entrevista';
+-- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS interviewer_name text not null default '';
 
 -- ── Row Level Security ────────────────────────────────────────────────────────
 alter table public.profiles   enable row level security;

@@ -104,6 +104,7 @@ type TranscribeAudioPayload = {
   systemFilePath?: string
   language?: string
   candidateName?: string
+  interviewerName?: string
 }
 
 type TranscribeAudioResult = {
@@ -118,6 +119,7 @@ type GenerateSummaryPayload = {
   /** Enfoque: de qué tipo de sesión se trata. Cambia el rol del modelo y los apartados. */
   summaryContext?: 'entrevista' | 'reunion'
   candidateName?: string
+  interviewerName?: string
 }
 
 type GenerateSummaryResult = {
