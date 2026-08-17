@@ -3,6 +3,8 @@ import './App.css'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
+import { PROFILE_SORT_LABELS, isProfileSort, lastInterviewMap, sortProfiles } from './lib/sortProfiles'
+import type { ProfileSort } from './lib/sortProfiles'
 import { AuthScreen } from './AuthScreen'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -21,7 +23,7 @@ const EVALUATION_CRITERIA = [
   { id: 'adecuacion',    label: 'Adecuación al puesto' },
   { id: 'otros',         label: 'Otros' },
 ]
-type Candidate = { id: string; projectId: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null }
+type Candidate = { id: string; projectId: string; createdAt: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null }
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
 type Interview = {
@@ -209,9 +211,17 @@ function normalizeInterviews(arr: Interview[]): Interview[] {
   }))
 }
 
+// Los perfiles guardados antes de que existiera `createdAt` no lo traen. Se deja
+// vacío a propósito en vez de inventar la fecha de hoy: un perfil viejo fingiendo
+// ser de hoy se colaría arriba del todo al ordenar por recientes. Al ordenar, un
+// createdAt vacío cae a la fecha de su última entrevista (ver profileActivity).
+function normalizeCandidates(arr: Candidate[]): Candidate[] {
+  return arr.map(c => ({ ...c, createdAt: c.createdAt ?? '' }))
+}
+
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
 const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [] })
-const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
+const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, createdAt: r.created_at ?? '', name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
   sessionName: r.session_name, status: r.status as RecordingStatus,
@@ -277,6 +287,20 @@ const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: '
   </div>
 )
 
+// Un <select> nativo y no un menú propio: el desplegable del sistema ya sabe
+// abrirse hacia arriba cuando no cabe abajo, y se maneja con teclado sin que
+// haya que programarlo.
+const SortSelect = ({ value, onChange }: { value: ProfileSort; onChange: (v: ProfileSort) => void }) => (
+  <label className="sort-select">
+    <span className="sort-select-label">Ordenar</span>
+    <select className="sort-select-input" value={value} onChange={e => onChange(e.target.value as ProfileSort)}>
+      {(Object.keys(PROFILE_SORT_LABELS) as ProfileSort[]).map(k => (
+        <option key={k} value={k}>{PROFILE_SORT_LABELS[k]}</option>
+      ))}
+    </select>
+  </label>
+)
+
 function App() {
   // ── Core data ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([])
@@ -295,6 +319,10 @@ function App() {
   const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'active' | 'closed'>('all')
   const [projectsViewMode, setProjectsViewMode] = useState<'list' | 'grid'>('list')
   const [profilesViewMode, setProfilesViewMode] = useState<'list' | 'grid'>('list')
+  const [profilesSort, setProfilesSort] = useState<ProfileSort>(() => {
+    const saved = localStorage.getItem('ct-profiles-sort')
+    return isProfileSort(saved) ? saved : 'recent'
+  })
 
   // ── Interview selection ────────────────────────────────────────────────
   const [selectedInterviewId, setSelectedInterviewId] = useState<string | null>(null)
@@ -476,11 +504,24 @@ function App() {
   const activeProject = projects.find(p => p.id === activeProjectId) ?? null
   const activeCandidate = candidates.find(c => c.id === activeCandidateId) ?? null
   const projectCandidates = useMemo(() => candidates.filter(c => c.projectId === activeProjectId), [candidates, activeProjectId])
+
+  // ── Orden de los perfiles ──────────────────────────────────────────────
+  const lastInterviewAt = useMemo(() => lastInterviewMap(interviews), [interviews])
+  const sortByPref = useCallback(
+    (list: Candidate[]) => sortProfiles(list, profilesSort, lastInterviewAt),
+    [profilesSort, lastInterviewAt])
+
+  const changeProfilesSort = useCallback((v: ProfileSort) => {
+    setProfilesSort(v)
+    localStorage.setItem('ct-profiles-sort', v)
+  }, [])
+
   const filteredCandidates = useMemo(() => {
-    if (!searchQuery.trim()) return projectCandidates
-    const q = searchQuery.toLowerCase()
-    return projectCandidates.filter(c => c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.role.toLowerCase().includes(q))
-  }, [projectCandidates, searchQuery])
+    const q = searchQuery.trim().toLowerCase()
+    const list = !q ? projectCandidates
+      : projectCandidates.filter(c => c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.role.toLowerCase().includes(q))
+    return sortByPref(list)
+  }, [projectCandidates, searchQuery, sortByPref])
   const filteredProjects = useMemo(() => {
     let list = projects
     if (projectStatusFilter !== 'all') list = list.filter(p => p.status === projectStatusFilter)
@@ -551,9 +592,9 @@ function App() {
           const rawLocal = localStorage.getItem(V2_KEY)
           if (rawLocal) {
             const d = JSON.parse(rawLocal) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
-            const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
+            const projs = d.projects ?? []; const cands = normalizeCandidates(d.candidates ?? []); const ivs = normalizeInterviews(d.interviews ?? [])
             if (projs.length) await supabase.from('projects').upsert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })), { onConflict: 'id' })
-            if (cands.length) await supabase.from('candidates').upsert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: c.notes ?? '', candidate_status: c.candidateStatus ?? 'pendiente', consent_given: c.consentGiven ?? false, consent_at: c.consentAt ?? null })), { onConflict: 'id' })
+            if (cands.length) await supabase.from('candidates').upsert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: c.notes ?? '', candidate_status: c.candidateStatus ?? 'pendiente', consent_given: c.consentGiven ?? false, consent_at: c.consentAt ?? null, created_at: c.createdAt || new Date().toISOString() })), { onConflict: 'id' })
             for (const iv of ivs) {
               const cand = cands.find(c => c.id === iv.candidateId)
               if (!cand) continue
@@ -640,7 +681,7 @@ function App() {
           if (raw) {
             try {
               const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
-              const projs = d.projects ?? []; const cands = d.candidates ?? []; const ivs = normalizeInterviews(d.interviews ?? [])
+              const projs = d.projects ?? []; const cands = normalizeCandidates(d.candidates ?? []); const ivs = normalizeInterviews(d.interviews ?? [])
               if (projs.length || cands.length) {
                 if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })))
                 if (cands.length) await supabase.from('candidates').insert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: '' })))
@@ -681,7 +722,7 @@ function App() {
       if (raw) {
         const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
         setProjects(d.projects ?? [])
-        setCandidates(d.candidates ?? [])
+        setCandidates(normalizeCandidates(d.candidates ?? []))
         setInterviews(normalizeInterviews(d.interviews ?? []))
       }
     } catch { /* ignore */ }
@@ -1518,12 +1559,13 @@ function App() {
 
   const handleCreateCandidate = async () => {
     if (!candidateDraft.name.trim() || !activeProjectId) return
-    const consentAt = candidateConsentDraft ? new Date().toISOString() : null
-    const c: Candidate = { id: uid(), projectId: activeProjectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt }
+    const now = new Date().toISOString()
+    const consentAt = candidateConsentDraft ? now : null
+    const c: Candidate = { id: uid(), projectId: activeProjectId, createdAt: now, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt }
     setCandidates(curr => [...curr, c])
     setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false)
     if (session) {
-      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: new Date().toISOString() })
+      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: c.createdAt })
       if (error) { toast(`Error guardando perfil: ${error.message}`, 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
     }
     toast(`Perfil ${c.name} creado`)
@@ -2330,6 +2372,7 @@ function App() {
         <div className="proj-section-header">
           <h3 className="proj-section-title">Perfiles del proceso</h3>
           <div className="proj-section-header-actions">
+            <SortSelect value={profilesSort} onChange={changeProfilesSort} />
             <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
             <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>Nuevo perfil</button>
           </div>
@@ -2391,16 +2434,19 @@ function App() {
   }
 
   const renderCandidates = () => {
-    const allCandidates = candidates.filter(c => {
+    const allCandidates = sortByPref(candidates.filter(c => {
       if (!searchQuery.trim()) return true
       const q = searchQuery.toLowerCase()
       return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.role.toLowerCase().includes(q)
-    })
+    }))
     return (
       <div className="screen-content">
         <div className="content-header">
           <div><h2>Perfiles</h2><p className="screen-sub">{candidates.length} perfil{candidates.length !== 1 ? 'es' : ''}</p></div>
-          <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
+          <div className="content-header-actions">
+            <SortSelect value={profilesSort} onChange={changeProfilesSort} />
+            <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
+          </div>
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
