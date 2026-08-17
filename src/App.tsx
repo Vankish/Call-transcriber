@@ -54,7 +54,7 @@ type SettingsTab = 'api-keys' | 'grabacion' | 'general'
 // Aquí solo están los valores por defecto (Groq, que es gratis) y los ayudantes
 // para saber si un motor está listo para usarse.
 const DEFAULT_STT_CFG: ProviderConfig = { provider: 'groq', apiKey: '', model: 'whisper-large-v3' }
-const DEFAULT_LLM_CFG: ProviderConfig = { provider: 'groq', apiKey: '', model: 'llama-3.3-70b-versatile' }
+const DEFAULT_LLM_CFG: ProviderConfig = { provider: 'groq', apiKey: '', model: 'openai/gpt-oss-120b' }
 
 type ProviderTest = { ok: boolean; detail: string } | 'testing' | null
 

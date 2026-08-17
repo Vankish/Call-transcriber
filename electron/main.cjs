@@ -243,7 +243,7 @@ async function readConfig() {
     const raw = await fs.readFile(CONFIG_FILE(), 'utf-8')
     return JSON.parse(raw)
   } catch {
-    return { groqApiKey: null, transcriptionModel: 'whisper-large-v3', transcriptionLanguage: 'es', summaryModel: 'llama-3.3-70b-versatile' }
+    return { groqApiKey: null, transcriptionModel: 'whisper-large-v3', transcriptionLanguage: 'es', summaryModel: 'openai/gpt-oss-120b' }
   }
 }
 

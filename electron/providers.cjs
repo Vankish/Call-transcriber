@@ -113,8 +113,12 @@ const LLM_PRESETS = [
     keyHint: 'gsk_...',
     dialect: 'openai',
     baseUrl: 'https://api.groq.com/openai/v1',
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it'],
-    tpm: 12000,
+    // Groq retiró toda la familia LLaMA 3.x (comprobado contra /models el
+    // 2026-08-17: ya no aparece ninguna). Los sustitutos son estos.
+    models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'],
+    // 8000, no 12000: es lo que devuelve la cabecera x-ratelimit-limit-tokens
+    // del plan gratuito para los tres modelos de arriba.
+    tpm: 8000,
   },
   {
     id: 'openai',
@@ -194,6 +198,32 @@ function migrateLegacyModel(preset, model) {
   return preset.models.includes(model) ? model : (preset.models[0] || model)
 }
 
+// Modelos que el proveedor ha retirado y que devuelven 404 sin remedio. A
+// diferencia de lo de arriba, esto SÍ pisa lo que el usuario tenga guardado,
+// esté en formato viejo o nuevo: no es "no lo conozco", es "ya no existe en el
+// servidor", así que respetarlo solo sirve para que la app falle. Se sustituye
+// por el modelo por defecto del proveedor y se sigue.
+//
+// Solo entran aquí nombres confirmados como muertos contra la API real.
+const RETIRED_MODELS = {
+  groq: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-70b-versatile',
+    'llama-3.1-8b-instant',
+    'llama3-70b-8192',
+    'llama3-8b-8192',
+    'gemma2-9b-it',
+    'mixtral-8x7b-32768',
+    'distil-whisper-large-v3-en',
+  ],
+}
+
+function dropIfRetired(providerId, preset, model) {
+  const dead = RETIRED_MODELS[providerId] || []
+  if (model && dead.includes(model)) return preset.models[0] || model
+  return model
+}
+
 /** Traduce el config.json al formato nuevo {stt, llm}. Si ya está en el formato
  *  nuevo lo devuelve tal cual. Es el único sitio donde vive la migración. */
 function migrateConfig(config) {
@@ -216,7 +246,7 @@ function migrateConfig(config) {
 function resolveStt(config) {
   const raw = migrateConfig(config).stt
   const preset = findPreset(STT_PRESETS, raw.provider)
-  const model = raw.model || preset.models[0] || ''
+  const model = dropIfRetired(raw.provider, preset, raw.model) || preset.models[0] || ''
   const noSegments = (preset.noSegmentModels || []).includes(model)
   return {
     id: raw.provider || 'groq',
@@ -240,7 +270,7 @@ function resolveLlm(config) {
     dialect: raw.dialect || preset.dialect,
     baseUrl: String(raw.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
     apiKey: raw.apiKey || '',
-    model: raw.model || preset.models[0] || '',
+    model: dropIfRetired(raw.provider, preset, raw.model) || preset.models[0] || '',
     needsKey: !preset.noKey,
     tpm: preset.tpm || DEFAULT_TPM,
   }
