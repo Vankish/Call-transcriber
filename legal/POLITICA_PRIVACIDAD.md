@@ -45,8 +45,8 @@ A través de Call Transcriber se tratan las siguientes categorías de datos pers
 | Finalidad | Descripción |
 |---|---|
 | Grabación de la entrevista | Registrar el audio de la entrevista de trabajo. |
-| Transcripción | Convertir el audio a texto mediante un servicio de IA (Groq / modelo Whisper). |
-| Generación de resúmenes e informes de evaluación | Elaborar resúmenes y valoraciones del candidato mediante IA (Groq / modelo LLaMA). |
+| Transcripción | Convertir el audio a texto mediante el proveedor de IA configurado en Ajustes → Motores de IA. |
+| Generación de resúmenes e informes de evaluación | Elaborar resúmenes y valoraciones del candidato mediante el proveedor de IA configurado en Ajustes → Motores de IA. |
 | Gestión del proceso de selección | Organizar candidatos, proyectos y resultados de las entrevistas. |
 | Gestión de la cuenta de usuario | Permitir el acceso y uso de la aplicación por el reclutador. |
 

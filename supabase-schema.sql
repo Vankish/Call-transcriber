@@ -14,7 +14,7 @@ create table public.profiles (
   photo           text    not null default '',
   country         text    not null default '',
   tx_model        text    not null default 'whisper-large-v3',
-  sum_model       text    not null default 'llama-3.3-70b-versatile',
+  sum_model       text    not null default 'openai/gpt-oss-120b',
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
