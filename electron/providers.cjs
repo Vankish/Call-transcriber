@@ -218,35 +218,42 @@ const RETIRED_MODELS = {
   ],
 }
 
-function dropIfRetired(providerId, preset, model) {
-  const dead = RETIRED_MODELS[providerId] || []
-  if (model && dead.includes(model)) return preset.models[0] || model
-  return model
+function dropIfRetired(presets, raw) {
+  const dead = RETIRED_MODELS[raw.provider] || []
+  if (!raw.model || !dead.includes(raw.model)) return raw
+  const preset = findPreset(presets, raw.provider)
+  return { ...raw, model: preset.models[0] || raw.model }
 }
 
 /** Traduce el config.json al formato nuevo {stt, llm}. Si ya está en el formato
- *  nuevo lo devuelve tal cual. Es el único sitio donde vive la migración. */
+ *  nuevo lo devuelve tal cual. Es el único sitio donde vive la migración.
+ *
+ *  El saneamiento de modelos retirados se aplica AQUÍ y no en resolveStt/
+ *  resolveLlm porque por esta función pasa también `config:get`, que es lo que
+ *  ve la pantalla de Ajustes. Si solo se saneara al resolver, Ajustes seguiría
+ *  mostrando el modelo muerto y lo volvería a escribir en cuanto el usuario
+ *  pulsara Guardar. */
 function migrateConfig(config) {
   const groqStt = findPreset(STT_PRESETS, 'groq')
   const groqLlm = findPreset(LLM_PRESETS, 'groq')
   return {
-    stt: config.stt || {
+    stt: dropIfRetired(STT_PRESETS, config.stt || {
       provider: 'groq',
       apiKey: config.groqApiKey || '',
       model: migrateLegacyModel(groqStt, config.transcriptionModel),
-    },
-    llm: config.llm || {
+    }),
+    llm: dropIfRetired(LLM_PRESETS, config.llm || {
       provider: 'groq',
       apiKey: config.groqApiKey || '',
       model: migrateLegacyModel(groqLlm, config.summaryModel),
-    },
+    }),
   }
 }
 
 function resolveStt(config) {
   const raw = migrateConfig(config).stt
   const preset = findPreset(STT_PRESETS, raw.provider)
-  const model = dropIfRetired(raw.provider, preset, raw.model) || preset.models[0] || ''
+  const model = raw.model || preset.models[0] || ''
   const noSegments = (preset.noSegmentModels || []).includes(model)
   return {
     id: raw.provider || 'groq',
@@ -270,7 +277,7 @@ function resolveLlm(config) {
     dialect: raw.dialect || preset.dialect,
     baseUrl: String(raw.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
     apiKey: raw.apiKey || '',
-    model: dropIfRetired(raw.provider, preset, raw.model) || preset.models[0] || '',
+    model: raw.model || preset.models[0] || '',
     needsKey: !preset.noKey,
     tpm: preset.tpm || DEFAULT_TPM,
   }
