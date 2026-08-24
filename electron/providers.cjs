@@ -507,6 +507,45 @@ async function transcribeDeepgram(provider, { buffer, fileName, language }) {
 }
 
 // ── Resumen / chat ───────────────────────────────────────────────────────────
+//
+// Los modelos que "razonan" (gpt-oss, qwen3, la serie o de OpenAI) gastan el
+// presupuesto de `max_tokens` PENSANDO antes de escribir una sola palabra de la
+// respuesta. Con un techo ajustado el modelo se queda sin margen razonando y
+// devuelve HTTP 200 con el contenido VACÍO: no es un error, es un éxito sin
+// texto. Sin darse cuenta, quien llama se queda con "" y lo da por bueno.
+//
+// Dos defensas: pedir el menor esfuerzo de razonamiento posible, y tratar la
+// respuesta vacía por agotamiento como el error que en realidad es.
+
+// Cada modelo admite unos valores distintos (gpt-oss: low|medium|high; qwen3.6:
+// none|default) y otros ni conocen el parámetro. En vez de mantener una lista de
+// modelos que envejece mal, se pide el valor más barato y se aprende del
+// rechazo: la propia API contesta cuáles acepta.
+const EFFORT_PREFERENCE = ['none', 'minimal', 'low', 'default', 'medium', 'high']
+
+// Lo aprendido se guarda por modelo para no pagar el reintento en cada llamada.
+// Valor `null` = este modelo no admite el parámetro y hay que omitirlo.
+const effortByModel = new Map()
+
+// De "`reasoning_effort` must be one of `low`, `medium`, or `high`" saca los
+// valores válidos. El propio nombre del parámetro no cuela porque no está en la
+// lista de preferencia.
+const allowedEfforts = (detail) =>
+  (String(detail).match(/`([a-z]+)`/g) || [])
+    .map((s) => s.replace(/`/g, ''))
+    .filter((v) => EFFORT_PREFERENCE.includes(v))
+
+/** Respuesta vacía porque el modelo agotó `max_tokens` antes de escribir nada.
+ *  Se marca para que quien llama pueda reintentar con menos texto en vez de
+ *  tragarse el hueco. */
+function emptyByLengthError(provider, maxTokens) {
+  const err = new Error(
+    `${provider.label} agotó los ${maxTokens} tokens de respuesta antes de escribir nada ` +
+    '(el modelo los gastó razonando). Hace falta menos texto por petición.'
+  )
+  err.emptyByLength = true
+  return err
+}
 
 async function chat(provider, { system, user, temperature = 0.1, maxTokens = 8000 }) {
   if (!provider.baseUrl) throw new Error('No hay URL configurada para el servicio de resumen.')
@@ -515,13 +554,11 @@ async function chat(provider, { system, user, temperature = 0.1, maxTokens = 800
 }
 
 async function chatOpenAiCompatible(provider, { system, user, temperature, maxTokens }) {
-  const response = await fetchRetryingRateLimit(`${provider.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${provider.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  const cacheKey = `${provider.baseUrl}|${provider.model}`
+  let effort = effortByModel.has(cacheKey) ? effortByModel.get(cacheKey) : EFFORT_PREFERENCE[0]
+
+  for (;;) {
+    const body = {
       model: provider.model,
       messages: [
         { role: 'system', content: system },
@@ -529,11 +566,40 @@ async function chatOpenAiCompatible(provider, { system, user, temperature, maxTo
       ],
       temperature,
       max_tokens: maxTokens,
-    }),
-  })
-  if (!response.ok) throw await readError(response, provider.label)
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content || ''
+    }
+    if (effort) body.reasoning_effort = effort
+
+    const response = await fetchRetryingRateLimit(`${provider.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const err = await readError(response, provider.label)
+      // El modelo no admite el valor pedido: se coge el más barato de los que
+      // dice aceptar y, si no dice ninguno, se repite sin el parámetro. Al
+      // guardarlo, el reintento se paga una vez por modelo y no en cada llamada.
+      if (effort && response.status === 400 && /reasoning_effort/.test(err.message)) {
+        const fallback = EFFORT_PREFERENCE.find((v) => allowedEfforts(err.message).includes(v)) || null
+        if (fallback !== effort) {
+          effortByModel.set(cacheKey, fallback)
+          effort = fallback
+          continue
+        }
+      }
+      throw err
+    }
+
+    const data = await response.json()
+    const choice = data.choices?.[0]
+    const text = choice?.message?.content || ''
+    if (!text.trim() && choice?.finish_reason === 'length') throw emptyByLengthError(provider, maxTokens)
+    return text
+  }
 }
 
 async function chatAnthropic(provider, { system, user, temperature, maxTokens }) {
@@ -554,7 +620,9 @@ async function chatAnthropic(provider, { system, user, temperature, maxTokens })
   })
   if (!response.ok) throw await readError(response, provider.label)
   const data = await response.json()
-  return (data.content || []).map((c) => c.text || '').join('') || ''
+  const text = (data.content || []).map((c) => c.text || '').join('') || ''
+  if (!text.trim() && data.stop_reason === 'max_tokens') throw emptyByLengthError(provider, maxTokens)
+  return text
 }
 
 // ── Prueba de conexión (botón "Probar" en Ajustes) ───────────────────────────
