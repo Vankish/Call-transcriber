@@ -948,16 +948,29 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
 // pierde algo de matiz, pero es la diferencia entre tener informe y no tenerlo.
 
 const SUMMARY_MAX_TOKENS = 2500   // techo del informe final
-const NOTES_MAX_TOKENS = 1200     // techo de las notas de cada trozo
+const NOTES_MAX_TOKENS = 2200     // techo de las notas de cada trozo
+
+// Las notas copian lo concreto de cada fragmento, así que comprimen poco: en las
+// pruebas ocupan algo más de la mitad del texto del que salen. Por eso un trozo
+// no se mide solo por si CABE en la petición, sino por si CABEN SUS NOTAS en la
+// respuesta. Si no, el modelo se queda a medias y devuelve las notas cortadas —
+// o, con los modelos que razonan, nada en absoluto.
+const NOTES_COMPRESSION = 0.75
+
+// Cuántas veces se parte un fragmento que no ha dado notas antes de rendirse.
+const MAX_SPLIT_RETRIES = 2
 
 // Aproximación: en español un token ronda los 3,5 caracteres. Se queda corta a
 // propósito — si nos pasamos por poco, el reintento por trozos lo cubre; si nos
 // pasáramos de prudentes, trocearíamos entrevistas que sí cabían.
 const estimateTokens = (text) => Math.ceil(String(text || '').length / 3.5)
 
-// El proveedor rechaza por tamaño (413) o por cuota agotada (429). Ambos casos se
+// El proveedor rechaza por tamaño (413) o por cuota agotada (429), o acepta la
+// petición pero se queda sin tokens de respuesta antes de escribir nada
+// (`emptyByLength`, típico de los modelos que razonan). Los tres casos se
 // resuelven igual: con menos texto por petición.
 const isSizeOrRateError = (err) =>
+  err?.emptyByLength === true ||
   /\b(413|429)\b|too large|rate.?limit|tokens per minute/i.test(String(err?.message || err))
 
 /** Parte el texto en trozos de como mucho `maxTokens`, cortando por turnos de
@@ -1014,34 +1027,94 @@ function makePacer(tokensPerMinute) {
   }
 }
 
-/** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
- *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada. */
-async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag }) {
-  const system =
-    `Recibes un FRAGMENTO de la transcripción de una ${isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'}, ` +
-    `con los turnos etiquetados como [${ivTag}]: y [${cdTag}]:.\n` +
-    'Devuelve una lista de viñetas con TODO lo concreto que se diga en el fragmento. Cada viñeta empieza por la ' +
-    `etiqueta de quien lo dijo, así: "- [${cdTag}]: ...".\n` +
-    'REGLAS:\n' +
-    '- Copia literalmente cifras, fechas, plazos, importes y nombres de personas y empresas, y asócialos exactamente a aquello a lo que se referían. No los mezcles entre sí.\n' +
-    '- Los turnos empiezan por una marca de tiempo entre corchetes, tipo [12:34]. Conserva al principio de cada viñeta la del turno del que sale, pero no la trates nunca como un dato de lo que se habla.\n' +
-    '- No interpretes, no valores y no saques conclusiones: solo registra lo dicho.\n' +
-    '- No inventes ni completes nada que no aparezca en el fragmento.\n' +
-    '- Omite la charla intrascendente (saludos, cortesías, problemas de conexión).\n' +
-    '- Si el fragmento empieza o termina a media frase, no la completes.\n' +
-    'Responde en español y solo con las viñetas.'
+/** Pide las notas de UN fragmento. Si el proveedor lo rechaza por tamaño o
+ *  devuelve un hueco, se parte el fragmento en dos y se reintenta: la mitad de
+ *  texto necesita la mitad de notas, así que lo que no cabía, cabe.
+ *
+ *  Lo que nunca hace es devolver vacío. Un fragmento sin notas que pasa
+ *  desapercibido acaba en un informe pedido sobre notas que no existen, y el
+ *  modelo responde pidiéndolas — que es lo que se veía en pantalla. */
+async function notesForChunk(chunk, llm, { system, label, pace, depth = 0 }) {
+  let notes = ''
+  let fallo = null
+  try {
+    const user = `${label}:\n\n${chunk}`
+    await pace(estimateTokens(system) + estimateTokens(user) + NOTES_MAX_TOKENS)
+    notes = String(await providers.chat(llm, { system, user, temperature: 0, maxTokens: NOTES_MAX_TOKENS })).trim()
+  } catch (err) {
+    if (!isSizeOrRateError(err)) throw err
+    fallo = err
+  }
+  if (notes) return notes
 
-  const chunkTokens = Math.max(600, budget - estimateTokens(system) - NOTES_MAX_TOKENS - 100)
+  const motivo = fallo ? fallo.message : 'el modelo devolvió una respuesta vacía'
+  const mitades = depth < MAX_SPLIT_RETRIES
+    ? splitTranscript(chunk, Math.ceil(estimateTokens(chunk) / 2))
+    : []
+  if (mitades.length < 2) {
+    throw new Error(`No se pudieron extraer notas de un fragmento de la transcripción: ${motivo}`)
+  }
+
+  log.warn(`[resumen] "${label}" no dio notas (${motivo}); se reintenta partido en ${mitades.length}`)
+  const partes = []
+  for (let i = 0; i < mitades.length; i++) {
+    partes.push(await notesForChunk(mitades[i], llm, {
+      system, pace, depth: depth + 1, label: `${label}, parte ${i + 1} de ${mitades.length}`,
+    }))
+  }
+  return partes.join('\n')
+}
+
+/** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
+ *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada.
+ *
+ *  A partir del segundo pase lo que entra ya son notas, no conversación. Pedir
+ *  otra vez "copia todo lo concreto" sobre algo que ya es todo concreto no
+ *  comprime nada — el material se estanca y se gastan pases (y minutos de cuota)
+ *  para nada. En esa segunda vuelta se pide fusionar en vez de copiar. */
+async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag, pase = 1 }) {
+  const encuentro = isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'
+  const system = pase > 1
+    ? `Recibes un BLOQUE de notas ya extraídas de una ${encuentro}, en viñetas y en orden cronológico.\n` +
+      'Devuélvelas agrupadas y compactadas, en la mitad de viñetas o menos.\n' +
+      'REGLAS:\n' +
+      '- Conserva TODAS las cifras, fechas, plazos, importes y nombres de personas y empresas, cada uno asociado exactamente a aquello a lo que se refería.\n' +
+      '- Fusiona en una sola viñeta lo que se repita o sea la misma idea dicha dos veces, y conserva la marca de tiempo de la primera vez que se dijo.\n' +
+      '- Mantén la etiqueta de quien lo dijo al principio de cada viñeta y el orden cronológico.\n' +
+      '- No interpretes, no valores y no saques conclusiones.\n' +
+      '- No inventes ni completes nada que no esté en las notas.\n' +
+      'Responde en español y solo con las viñetas.'
+    : `Recibes un FRAGMENTO de la transcripción de una ${encuentro}, ` +
+      `con los turnos etiquetados como [${ivTag}]: y [${cdTag}]:.\n` +
+      'Devuelve una lista de viñetas con TODO lo concreto que se diga en el fragmento. Cada viñeta empieza por la ' +
+      `etiqueta de quien lo dijo, así: "- [${cdTag}]: ...".\n` +
+      'REGLAS:\n' +
+      '- Copia literalmente cifras, fechas, plazos, importes y nombres de personas y empresas, y asócialos exactamente a aquello a lo que se referían. No los mezcles entre sí.\n' +
+      '- Los turnos empiezan por una marca de tiempo entre corchetes, tipo [12:34]. Conserva al principio de cada viñeta la del turno del que sale, pero no la trates nunca como un dato de lo que se habla.\n' +
+      '- No interpretes, no valores y no saques conclusiones: solo registra lo dicho.\n' +
+      '- No inventes ni completes nada que no aparezca en el fragmento.\n' +
+      '- Omite la charla intrascendente (saludos, cortesías, problemas de conexión).\n' +
+      '- Si el fragmento empieza o termina a media frase, no la completes.\n' +
+      'Responde en español y solo con las viñetas.'
+
+  // Dos topes, y manda el menor: lo que cabe en la petición y lo que cabe de
+  // vuelta en las notas. La segunda vuelta pide fusionar a la mitad, así que
+  // admite el doble de texto de entrada por la misma salida.
+  const compresion = pase > 1 ? 0.5 : NOTES_COMPRESSION
+  const cabeEnLaPeticion = budget - estimateTokens(system) - NOTES_MAX_TOKENS - 100
+  const cabenSusNotas = Math.floor(NOTES_MAX_TOKENS / compresion)
+  const chunkTokens = Math.max(600, Math.min(cabeEnLaPeticion, cabenSusNotas))
   const chunks = splitTranscript(text, chunkTokens)
-  log.info(`[resumen] transcripción larga: se condensa en ${chunks.length} trozo(s)`)
+  const que = pase > 1 ? 'Bloque' : 'Fragmento'
+  log.info(`[resumen] pase ${pase}: ${chunks.length} ${que.toLowerCase()}(s) de ${text.length} caracteres`)
 
   const notes = []
   for (let i = 0; i < chunks.length; i++) {
-    const user = `Fragmento ${i + 1} de ${chunks.length}:\n\n${chunks[i]}`
-    await pace(estimateTokens(system) + estimateTokens(user) + NOTES_MAX_TOKENS)
-    notes.push(await providers.chat(llm, { system, user, temperature: 0, maxTokens: NOTES_MAX_TOKENS }))
+    notes.push(await notesForChunk(chunks[i], llm, {
+      system, pace, label: `${que} ${i + 1} de ${chunks.length}`,
+    }))
   }
-  return notes.map((n) => String(n).trim()).filter(Boolean).join('\n')
+  return notes.filter(Boolean).join('\n')
 }
 
 const CRITERIA_LABELS = {
@@ -1120,9 +1193,13 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // Cuando la transcripción no cabe en una petición, al modelo no le llega la
   // conversación sino las notas extraídas de ella. Conviene que lo sepa: si cree
   // que tiene la transcripción entera, da por no tratado lo que no ve.
+  // Y si además han tenido que recortarse, también: un informe que da por
+  // cubierta una conversación de la que le falta el final miente sin saberlo.
+  let recortado = false
   const bodyLabel = (isNotes) => isNotes
     ? 'Notas literales extraídas de la transcripción, en orden cronológico (la conversación era demasiado ' +
-      'larga para procesarla de una vez; estas notas son la única fuente disponible):'
+      'larga para procesarla de una vez; estas notas son la única fuente disponible' +
+      (recortado ? ', y aun así han tenido que recortarse: falta el tramo final de la conversación' : '') + '):'
     : 'Transcripción:'
 
   // Correspondencia explícita entre etiqueta y persona. Sin esto el modelo deduce
@@ -1215,8 +1292,31 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // se vuelve a condensar hasta que entre (con tope, para no dar vueltas si el
   // modelo deja de comprimir).
   for (let pase = 1; pase <= 3; pase++) {
-    material = await condenseTranscript(material, llm, { isMeeting, budget, pace, ivTag, cdTag })
+    const antes = material.length
+    material = await condenseTranscript(material, llm, { isMeeting, budget, pace, ivTag, cdTag, pase })
     if (fixedCost + estimateTokens(makeUserPrompt(material, true)) <= budget) break
+
+    // Si un pase apenas ha recortado, el siguiente tampoco lo hará: el modelo ya
+    // no ve de dónde quitar. Insistir solo gasta minutos de cuota, así que se
+    // corta por lo sano y se avisa al modelo de que le falta el tramo final —
+    // mejor un informe honesto sobre el 90% que un error tras diez minutos.
+    if (pase === 3 || material.length > antes * 0.9) {
+      const cabe = Math.floor((budget - fixedCost - 100) * 3.5)
+      log.warn(`[resumen] las notas no bajan de ${material.length} caracteres; se recortan a ${cabe}`)
+      material = material.slice(0, cabe)
+      recortado = true
+      break
+    }
+  }
+
+  // Última red: pedir el informe con el cuerpo vacío no da un error, da un modelo
+  // educado contestando "proporcióname las notas y con gusto lo redacto". Antes
+  // que devolver eso como si fuera el informe, se dice lo que ha pasado.
+  if (!material.trim()) {
+    throw new Error(
+      'No se pudo condensar la transcripción: el modelo de resumen no devolvió notas de ningún fragmento. ' +
+      'Prueba con otro modelo en Ajustes → Motores de IA.'
+    )
   }
 
   const notesPrompt = makeUserPrompt(material, true)
