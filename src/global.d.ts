@@ -112,8 +112,12 @@ type TranscribeAudioResult = {
 }
 
 type GenerateSummaryPayload = {
+  /** Solo para el progreso: identifica de qué entrevista son los avisos. */
+  interviewId?: string
   transcript: string
   criteria: string[]
+  /** Notas preparadas de antemano. Si vienen, solo queda redactar: una petición. */
+  notasPreparadas?: string | null
   /** Formato del informe. */
   summaryType: 'resumen' | 'listado'
   /** Enfoque: de qué tipo de sesión se trata. Cambia el rol del modelo y los apartados. */
@@ -124,6 +128,34 @@ type GenerateSummaryPayload = {
 
 type GenerateSummaryResult = {
   text: string
+  /** Notas que ha costado extraer, si hubo que trocear. Se guardan para que el
+   *  siguiente informe sobre la misma conversación no vuelva a pagarlas. */
+  notes?: string
+  recortado?: boolean
+}
+
+/** Notas ya extraídas de la conversación, listas para redactar el informe encima.
+ *  `needed: false` = la llamada cabía de una vez y no hay nada que preparar. */
+type PrepareSummaryResult = {
+  needed: boolean
+  notes?: string
+  /** Las notas no cabían ni condensadas y les falta el tramo final. */
+  recortado?: boolean
+}
+
+/** Señal de vida durante un resumen largo. El trabajo se cuenta en PETICIONES al
+ *  modelo, que es lo que de verdad tarda: cada una consume cuota del minuto y la
+ *  siguiente tiene que esperar a que la ventana se libere. */
+type SummaryProgress = {
+  interviewId?: string
+  fase: 'preparando' | 'analizando' | 'compactando' | 'redactando'
+  etiqueta: string
+  hechas: number
+  total: number
+  /** Segundos que se estima que quedan. Aproximado a propósito. */
+  etaSec: number
+  /** Si se está esperando cuota, momento (epoch ms) en que se reanuda. */
+  esperaHasta: number | null
 }
 
 interface Window {
@@ -142,6 +174,8 @@ interface Window {
     testProvider: (payload: { kind: 'stt' | 'llm'; draft: ProviderConfig }) => Promise<{ ok: boolean; detail: string }>
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>
     generateSummary: (payload: GenerateSummaryPayload) => Promise<GenerateSummaryResult>
+    prepareSummary: (payload: GenerateSummaryPayload) => Promise<PrepareSummaryResult>
+    onSummaryProgress: (cb: (data: SummaryProgress) => void) => () => void
     deleteRecording: (payload: { filePath: string }) => Promise<{ ok: boolean }>
     ensureRecordingDuration: (payload: { filePath: string }) => Promise<{ ok: boolean; repaired: boolean }>
     recordingExists: (payload: { filePath: string }) => Promise<{ exists: boolean; size?: number }>

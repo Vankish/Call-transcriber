@@ -15,6 +15,14 @@ contextBridge.exposeInMainWorld('desktopApp', {
   testProvider: (payload) => ipcRenderer.invoke('providers:test', payload),
   transcribeAudio: (payload) => ipcRenderer.invoke('transcription:run', payload),
   generateSummary: (payload) => ipcRenderer.invoke('summary:generate', payload),
+  prepareSummary: (payload) => ipcRenderer.invoke('summary:prepare', payload),
+  // Devuelve la función para desuscribirse: sin ella, cada recarga en desarrollo
+  // deja un oyente vivo y el mismo aviso se procesa varias veces.
+  onSummaryProgress: (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('summary:progress', handler)
+    return () => ipcRenderer.removeListener('summary:progress', handler)
+  },
   deleteRecording: (payload) => ipcRenderer.invoke('recording:delete', payload),
   ensureRecordingDuration: (payload) => ipcRenderer.invoke('recording:ensure-duration', payload),
   recordingExists: (payload) => ipcRenderer.invoke('recording:exists', payload),

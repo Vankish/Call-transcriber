@@ -97,6 +97,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .consent-badge {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
@@ -355,6 +356,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: none;
   border-radius: 8px;
   padding: 9px 16px;
@@ -371,6 +376,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 9px 16px;
@@ -605,12 +614,106 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .ctr-info { flex: 1; min-width: 0; }
-.ctr-name { display: block; font-size: 14px; font-weight: 600; }
+.ctr-name { display: block; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctr-meta { display: block; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ctr-status { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ctr-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .ctr-actions { display: flex; gap: 2px; }
 .ctr-open { border: none; background: none; color: var(--primary); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; padding: 6px 10px; border-radius: 6px; }
 .ctr-open:hover { background: #EFF6FF; }
+
+/* Estado del candidato (Apto / Finalista / Descartado). Los colores los pone
+   CandidateStatusPill; aqui solo la forma y la alineacion del icono. */
+.cand-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+
+/* ── Desplegable propio ──────────────────────────────────────────────────────
+   El recuadro cerrado sigue llevando las clases de siempre (.cfg-select,
+   .sum-type-select, .modal-select...), asi que no cambia de tamaño ni de sitio.
+   Lo nuevo es la lista que se abre: antes la pintaba Windows con cantos duros y
+   sin nada de la marca. */
+.select-trigger {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.select-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.select-trigger-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-trigger-label--placeholder { color: var(--text-muted); }
+
+/* Abierto: el borde se enciende y la flecha mira hacia arriba. */
+.select-trigger--open {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px #dbeafe;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%232563EB' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m18 15-6-6-6 6'/%3E%3C/svg%3E") !important;
+}
+
+.select-panel {
+  position: fixed;
+  z-index: 1000;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--card);
+  border: 1px solid var(--primary-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  animation: select-in 0.12s ease;
+}
+
+@keyframes select-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.select-panel--arriba { animation-name: select-in-arriba; }
+@keyframes select-in-arriba {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* La barra de scroll del sistema canta dentro de un panel redondeado. */
+.select-panel::-webkit-scrollbar { width: 8px; }
+.select-panel::-webkit-scrollbar-track { background: transparent; }
+.select-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; border: 2px solid var(--card); }
+.select-panel::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+.select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.select-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-option-check { flex-shrink: 0; color: var(--primary); }
+
+/* Marcada = donde esta el raton o el teclado. Seleccionada = el valor actual. */
+.select-option.is-marked { background: var(--primary-soft); }
+.select-option.is-selected { color: var(--primary); font-weight: 600; }
+.select-option.is-disabled { color: var(--text-muted); cursor: not-allowed; }
+.select-option.is-disabled.is-marked { background: transparent; }
 
 /* ── Candidate detail header ─────────────────────────────────────────────── */
 .cdh {
@@ -869,8 +972,8 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .modal-link-note a { color: var(--primary); }
 
 .modal-label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-muted); }
-.modal-input { border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; font: inherit; font-size: 14px; width: 100%; transition: border-color 0.15s; }
-.modal-input:focus { outline: none; border-color: var(--primary); }
+.modal-input { border: 1px solid var(--primary-border); border-radius: 10px; padding: 9px 10px; font: inherit; font-size: 14px; width: 100%; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.modal-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .modal-actions button:not(.primary-btn):not(.modal-action-btn):not(.modal-cancel-btn) { border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; background: transparent; font-size: 14px; cursor: pointer; }
@@ -878,7 +981,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 .modal-select {
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 32px;
@@ -932,6 +1035,22 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+
+/* Progreso del resumen: la espera puede ser de minutos, así que la barra ocupa
+   sitio de verdad en vez de ser un spinner de una línea. */
+.sum-progress { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--blue-50, #EFF6FF); border: 1px solid var(--blue-200, #BFDBFE); border-radius: 10px; }
+.sum-progress-head { display: flex; align-items: center; gap: 10px; }
+.sum-progress-label { flex: 1; font-size: 14px; font-weight: 600; color: #1E3A8A; }
+.sum-progress-pct { font-size: 13px; font-weight: 600; color: var(--primary); font-variant-numeric: tabular-nums; }
+.sum-progress-track { height: 6px; background: #DBEAFE; border-radius: 999px; overflow: hidden; }
+/* La anchura se anima porque el progreso llega a saltos de un fragmento entero:
+   sin transición la barra pega tirones que parecen un fallo de pintado. */
+.sum-progress-fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width 0.4s ease; }
+.sum-progress-eta { margin: 0; font-size: 13px; color: #1E40AF; font-variant-numeric: tabular-nums; }
+.sum-progress-note { margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: #3B5BA5; }
+
+/* Notas ya preparadas: verde discreto, no una alerta. Es una buena noticia. */
+.sum-ready-hint { margin: 0; padding: 7px 12px; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; font-size: 13px; color: #166534; }
 
 .warning-note { margin: 0; padding: 8px 12px; background: #FFFBEB; border: 1px solid #FCD34D; border-radius: 8px; font-size: 13px; color: #92400E; }
 .error-note { margin: 0; font-size: 13px; color: var(--red); }
@@ -1642,7 +1761,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   border: 1px solid var(--border);
   border-radius: 8px;
   background-color: #fff;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 9px center;
   color: #374151;
@@ -1709,6 +1828,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   font-weight: 700;
   color: #111827;
   margin: 0 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .plc--closed .plc-title { color: #808080; }
@@ -1717,11 +1839,17 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   font-size: 11px;
   color: #6b7280;
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .plc--closed .plc-meta { color: #ababab; }
 
 .plc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex-shrink: 0;
   padding: 4px 10px;
   border-radius: 999px;
@@ -1968,6 +2096,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .outline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: 1px solid var(--primary);
   background: #eff6ff;
   color: var(--primary);
@@ -2318,6 +2450,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .cand-status-badge {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 11px;
@@ -2374,14 +2507,6 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   position: relative;
 }
 
-.rec-row--expandable { cursor: pointer; }
-.rec-row--expandable:hover { background: #f9fbff; }
-
-.rec-row-chevron {
-  display: inline-block;
-  transition: transform 0.15s;
-}
-.rec-row-chevron--open { transform: rotate(-180deg); }
 
 .rec-row-accent {
   width: 4px;
@@ -2504,6 +2629,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .rec-row-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex-shrink: 0;
   padding: 4px 10px;
   border-radius: 999px;
@@ -2583,7 +2711,8 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   margin-bottom: 20px;
 }
 
-.trx-error-icon { font-size: 36px; color: #ffffff; }
+.trx-error-icon { font-size: 36px; line-height: 1; color: var(--red); }
+.trx-error-icon svg { width: 36px; height: 36px; }
 
 .trx-error-title {
   font-size: 22px;
@@ -2699,6 +2828,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .pill-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: 1.5px solid #bfdbfe;
   border-radius: 20px;
   padding: 7px 18px;
@@ -3184,6 +3317,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .trx-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   color: #9ca3af;
@@ -3192,6 +3328,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .trx-status-badge--done { color: #10b981; }
 
 .trx-transcribe-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   border: 1px solid #2563eb;
@@ -3235,6 +3375,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .trx-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 600;
   border-radius: 20px;
@@ -3255,18 +3399,25 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .trx-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .trx-lang-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
   font-size: 12px;
   font-weight: 500;
-  padding: 5px 8px;
-  border: 1.5px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
+  padding: 5px 24px 5px 8px;
+  border: 1.5px solid var(--primary-border);
+  border-radius: 999px;
+  background-color: #fff;
   color: #374151;
   cursor: pointer;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
   height: 30px;
 }
-.trx-lang-select:hover { border-color: #2563eb; }
+.trx-lang-select:hover { border-color: var(--primary); }
+.trx-lang-select:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 
 /* ── Transcript textarea ─────────────────────────────────────────────────── */
 .trx-textarea {
@@ -3350,19 +3501,27 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 /* ── Summary type select ─────────────────────────────────────────────────── */
 .sum-type-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
   font-size: 13px;
   font-weight: 600;
-  padding: 7px 12px;
-  border: 1.5px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
+  padding: 7px 28px 7px 12px;
+  border: 1.5px solid var(--primary-border);
+  border-radius: 999px;
+  background-color: #fff;
   color: #374151;
   cursor: pointer;
   flex-shrink: 0;
-  transition: border-color 0.15s, color 0.15s;
+  outline: none;
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
   min-width: 220px;
   height: 40px;
 }
+.sum-type-select:hover { border-color: var(--primary); }
+.sum-type-select:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 
 .sum-type-select--active {
   border: 1.5px solid #2563eb;
@@ -3595,6 +3754,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   font-size: 14px;
   font-weight: 600;
   color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pdc-row-meta {
@@ -3608,6 +3770,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .pdc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex-shrink: 0;
   padding: 4px 10px;
   border-radius: 999px;
@@ -3784,33 +3949,26 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   color: #6b7280;
 }
 
-.prof-avatar-link {
-  margin-top: 4px;
-  border: none;
-  background: none;
-  padding: 0;
+/* Antes eran dos enlaces de texto subrayados, que no eran de la casa. Ahora son
+   los mismos botones de pildora que el resto de la app. */
+.prof-avatar-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.prof-photo-btn {
+  padding: 7px 14px !important;
   font-size: 12px;
   font-weight: 600;
+  border-color: var(--primary-border);
   color: var(--primary);
-  cursor: pointer;
-  text-align: left;
+  background: var(--primary-soft);
 }
+.prof-photo-btn:hover { background: #dbeafe; border-color: var(--primary); }
 
-.prof-avatar-link:hover { text-decoration: underline; }
-
-.prof-avatar-remove {
-  margin-top: 2px;
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 500;
+.prof-photo-btn--danger {
+  border-color: #fecaca;
+  background: #fef2f2;
   color: var(--red);
-  cursor: pointer;
-  text-align: left;
 }
-
-.prof-avatar-remove:hover { text-decoration: underline; }
+.prof-photo-btn--danger:hover { background: #fee2e2; border-color: var(--red); }
 
 .prof-fields-grid {
   display: grid;
@@ -4063,6 +4221,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .cfg-fmt-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
 .cfg-fmt-btn.is-active { background: #2563eb; color: #ffffff; border-color: #2563eb; }
 
+.cfg-select:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 .cfg-input {
   width: 200px;
   height: 40px;
@@ -4076,17 +4235,27 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .cfg-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
   width: 280px;
   height: 40px;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  padding: 0 14px;
+  border: 1px solid var(--primary-border);
+  border-radius: 10px;
+  padding: 0 32px 0 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
   font: inherit;
   font-size: 14px;
   color: #141414;
-  background: #ffffff;
+  background-color: #ffffff;
   cursor: pointer;
 }
+
+/* Version corta, para la velocidad de reproduccion. */
+.cfg-select--mini { width: auto; min-width: 74px; height: 30px; font-size: 12px; padding: 0 26px 0 10px; border-radius: 999px; }
 
 /* ── Empty state: sin grabaciones (interviews tab) ───────────────────────── */
 .rec-empty-card {
@@ -4185,7 +4354,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 
 .rec-pip-caption {
   font-size: 12px;
-  color: #6b7380;
+  color: #6b7280;
 }
 
 .rec-screen-content {
@@ -4335,10 +4504,15 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .es-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 56px;
-  color: #ffffff;
+  color: var(--primary);
   line-height: 1;
 }
+
+.es-icon svg { width: 72px; height: 72px; }
 
 .es-title {
   font-size: 22px;
@@ -4434,9 +4608,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .modal-input--figma {
-  background: #f9fbff;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
+  background-color: #f9fbff;
+  border: 1px solid var(--primary-border);
+  border-radius: 10px;
+  outline: none;
   height: 40px;
   padding: 0 12px;
   font: inherit;
@@ -4446,7 +4621,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   transition: border-color 0.15s;
 }
 
-.modal-input--figma:focus { outline: none; border-color: var(--primary); }
+.modal-input--figma:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 
 .modal-textarea {
   height: auto !important;
@@ -4486,6 +4661,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .modal-cancel-btn:hover { background: #f9fbff; }
 
 .modal-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   flex: 1;
   height: 44px;
   border: none;
@@ -4807,7 +4986,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 /* ── Project analysis ─────────────────────────────────────────────────────── */
 .pa-layout { display: flex; flex-direction: column; gap: 24px; padding-bottom: 32px; }
 .pa-stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-.pa-stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+.pa-stat-card { display: flex; flex-direction: column; justify-content: center; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
 .pa-stat-n { display: block; font-size: 26px; font-weight: 700; color: var(--text); line-height: 1.1; }
 .pa-stat-l { display: block; font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .pa-section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; }
@@ -4849,7 +5028,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .gs-result-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
 .gs-result-card:hover { border-color: var(--primary); box-shadow: 0 0 0 3px #dbeafe; }
 .gs-result-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.gs-result-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.gs-result-name { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gs-result-proj { font-size: 12px; color: var(--primary); background: #eff6ff; border-radius: 99px; padding: 1px 8px; }
 .gs-result-session { font-size: 12px; color: var(--text-muted); }
 .gs-result-count { font-size: 11px; color: var(--text-muted); margin-left: auto; }
@@ -4877,6 +5056,9 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .rec-option-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
 
 .rec-video-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 10px;
   padding: 10px 12px;
   background: #eff6ff;
@@ -4886,17 +5068,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 /* ── Reproductor de vídeo (detalle de candidato) ─────────────────────────── */
-.video-player-card {
-  margin: 8px 0 16px;
-  padding: 14px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.video-player-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.video-player-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .video-player-el { width: 100%; max-height: 360px; border-radius: 8px; background: #1e293b; }
 .video-player-sub { font-size: 12px; color: var(--text-muted); }
 
@@ -5034,3 +5206,247 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
   padding: 4px 8px;
 }
 .seek-bar--full .seek-range { flex: 1 1 auto; width: auto; min-width: 0; }
+
+/* ── Compartir proyecto con compañeros ───────────────────────────────────── */
+/* Vive dentro de .modal-box--figma, justo debajo del bloque de entrevistadores,
+   así que hereda su lenguaje: input de 40px con borde #bfdbfe y radio 8, botones
+   en píldora y transiciones de 0.15s. */
+.share-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* flex-wrap en lugar de un breakpoint: el archivo no usa media queries y el
+   modal se estrecha con la ventana. Si no cabe, el botón cae a la línea de abajo. */
+.share-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.share-search-input {
+  background: #f9fbff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  height: 40px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  /* min-width:0 para que el input pueda encogerse dentro del flex en vez de
+     empujar el botón fuera de la caja. */
+  flex: 1 1 180px;
+  min-width: 0;
+  transition: border-color 0.15s;
+}
+
+.share-search-input:focus { outline: none; border-color: var(--primary); }
+
+/* Secundario a propósito: el azul sólido queda reservado para "Dar acceso". */
+.share-search-btn {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.share-search-btn:hover:not(:disabled) { background: var(--primary-soft); }
+.share-search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.share-hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+.share-error { font-size: 12px; color: var(--red); margin: 4px 0 0; }
+
+/* Tarjeta del usuario encontrado */
+.share-found {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  animation: share-found-in 0.15s ease-out;
+}
+
+@keyframes share-found-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.share-found-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.share-found-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Los correos largos no deben ensanchar el modal: se recortan. */
+.share-found-email {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-found-add {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.share-found-add:hover:not(:disabled) { background: var(--primary-hover); }
+.share-found-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Lista de gente con acceso */
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.share-chip-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.share-chip-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.share-chip-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-chip-email {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mismo gesto que .btn-trash: gris en reposo, rojo con fondo suave al pasar. */
+.share-chip-remove {
+  flex-shrink: 0;
+  min-width: 24px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.share-chip-remove:hover { color: var(--red); background: #fee2e2; }
+
+.share-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 14px 0;
+  margin: 0;
+}
+
+/* Señales fuera del modal, en las tarjetas de proyecto */
+.shared-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid var(--primary-border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* El dueño ya sabe que el proyecto es suyo: su píldora no compite en color. */
+.shared-badge--owner {
+  background: #f3f4f6;
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+/* Ámbar, no rojo: es un aviso de "solo lectura", no un fallo. Mismos valores
+   que .auth-setup-banner para no abrir una tercera variante de amarillo. */
+.readonly-note {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #92400e;
+}
+
+.readonly-note strong { font-weight: 700; }

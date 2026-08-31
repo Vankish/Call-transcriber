@@ -53,3 +53,10 @@ export interface DbInterview {
   system_audio_file_name?: string; audio_uploaded?: boolean
   created_at: string; updated_at: string
 }
+
+// El correo se guarda junto al id porque es lo único que se puede enseñar si el
+// perfil del compañero no es legible (RLS) o si borra su cuenta.
+export interface DbProjectShare {
+  id: string; project_id: string; owner_id: string
+  shared_with_id: string; shared_with_email: string; created_at: string
+}
