@@ -3,12 +3,62 @@ import './App.css'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 import type { DbCandidate, DbInterview, DbProject } from './lib/supabase'
+import { buscarUsuarioPorCorreo, compartirProyecto, dejarDeCompartir, listarComparticiones } from './lib/sharing'
+import type { ProjectShare, SharedUser } from './lib/sharing'
 import { PROFILE_SORT_LABELS, isProfileSort, lastInterviewMap, sortProfiles } from './lib/sortProfiles'
 import type { ProfileSort } from './lib/sortProfiles'
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BellIcon,
+  CameraIcon,
+  CheckIcon,
+  ChevronLeft,
+  ChevronRight,
+  CircleIcon,
+  ClipboardIcon,
+  CloseIcon,
+  CloudIcon,
+  CloudUploadIcon,
+  DocIcon,
+  DotFilled,
+  DotRing,
+  DownloadIcon,
+  FolderIcon,
+  GridViewIcon,
+  HomeIcon,
+  InfoIcon,
+  KeyIcon,
+  ListViewIcon,
+  LockIcon,
+  LogoutIcon,
+  MicIcon,
+  MonitorIcon,
+  PauseIconSm,
+  PencilIcon,
+  PlayIcon,
+  RefreshIcon,
+  SearchIcon,
+  SettingsIcon,
+  SquareFilled,
+  StarIcon,
+  TargetIcon,
+  TrashIcon,
+  UploadIcon,
+  UserIcon,
+  UsersIcon,
+  VideoIcon,
+  WarnTriangle,
+} from './icons'
+import { Select } from './Select'
 import { AuthScreen } from './AuthScreen'
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type Project = { id: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }
+// `ownerId` = quién creó la carpeta. Con las carpetas compartidas ya no basta
+// con "todo lo que veo es mío": hay que poder distinguir lo propio de lo que
+// otra persona te ha dejado ver, para no ofrecer botones que la base de datos
+// va a rechazar (renombrar, borrar, repartir accesos).
+type Project = { id: string; ownerId: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }
 
 const EVALUATION_CRITERIA = [
   { id: 'experiencia',   label: 'Experiencia laboral' },
@@ -27,7 +77,10 @@ type Candidate = { id: string; projectId: string; createdAt: string; name: strin
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
 type Interview = {
-  id: string; candidateId: string; createdAt: string; sessionName: string
+  // ownerId = dueño de la entrevista. Imprescindible para el audio: en Storage
+  // la ruta empieza por la carpeta del dueño, así que sin esto una entrevista de
+  // un proyecto compartido se buscaría en la carpeta equivocada y "no existiría".
+  id: string; ownerId: string; candidateId: string; createdAt: string; sessionName: string
   status: RecordingStatus; durationSec: number; micDeviceId: string; outputDeviceId: string
   transcriptOriginal: string; transcriptEdited: string; transcriptUpdatedAt: string | null
   recordingUrl: string | null; recordingFilePath: string | null
@@ -108,6 +161,35 @@ const getLegacySummaryContexts = (): Record<string, SummaryContext> => {
 // El vídeo de una entrevista solo se guarda en local (nunca sube a Supabase, pesa
 // demasiado), así que su ruta también hay que cachearla en local: si no, se pierde
 // cada vez que la app recarga las entrevistas desde la nube (que no sabe de vídeos).
+// Notas ya extraídas de una conversación larga. Se guardan aquí y no en Supabase
+// a propósito: son un intermedio reconstruible, ocupan bastante, y valen solo
+// para el equipo donde se prepararon.
+//
+// La huella evita el peor fallo posible: redactar un informe sobre las notas de
+// una transcripción que ya no existe. Si se edita la transcripción o se cambia
+// de entrevista a reunión, las notas dejan de valer y se rehacen.
+const SUMMARY_NOTES_KEY = 'ct-summary-notes'
+type NotasPreparadas = { notas: string; huella: string; recortado: boolean }
+const huellaTranscripcion = (texto: string, contexto: string) => {
+  // No hace falta criptografía, solo detectar que el texto ha cambiado. Se mezcla
+  // la longitud con una suma rodante barata sobre todo el contenido.
+  let h = 0
+  for (let i = 0; i < texto.length; i++) h = (Math.imul(31, h) + texto.charCodeAt(i)) | 0
+  return `${contexto}:${texto.length}:${h}`
+}
+const getNotesCache = (): Record<string, NotasPreparadas> => {
+  try { return JSON.parse(localStorage.getItem(SUMMARY_NOTES_KEY) ?? '{}') } catch { return {} }
+}
+const saveNotesCache = (interviewId: string, entry: NotasPreparadas | null) => {
+  const cache = getNotesCache()
+  if (entry) cache[interviewId] = entry
+  else delete cache[interviewId]
+  try { localStorage.setItem(SUMMARY_NOTES_KEY, JSON.stringify(cache)) } catch {
+    // Si el almacén local se llena, no vale la pena romper nada: sin notas
+    // guardadas el resumen sigue funcionando, solo que tarda lo de siempre.
+  }
+}
+
 const VIDEO_PATH_KEY = 'ct-video-paths'
 const getVideoPathCache = (): Record<string, string> => {
   try { return JSON.parse(localStorage.getItem(VIDEO_PATH_KEY) ?? '{}') } catch { return {} }
@@ -135,14 +217,22 @@ const saveSystemAudioPathCache = (interviewId: string, systemAudioFilePath: stri
 // ── Helpers ────────────────────────────────────────────────────────────────
 const uid = () => crypto.randomUUID()
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+// Tiempo restante en lenguaje de persona. Se redondea al alza y en minutos a
+// partir del minuto: prometer "2 min" y tardar 2:30 molesta menos que prometer
+// "1 min 47 s" y fallar por segundos en una estimación que ya es aproximada.
+const formatEta = (sec: number) => sec < 60
+  ? `${Math.max(5, Math.round(sec / 5) * 5)} s`
+  : `${Math.ceil(sec / 60)} min`
 const fmtDate = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleString(locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 const fmtShort = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 
 // ── Audios en la nube ──────────────────────────────────────────────────────
-// Bucket privado de Supabase Storage. Las rutas son {user_id}/{interview_id}/{archivo}
-// porque las políticas de seguridad comparan la primera carpeta con el usuario
-// autenticado (ver supabase-migration-audio-nube.sql).
+// Bucket privado de Supabase Storage. Las rutas son {dueño}/{interview_id}/{archivo}.
+// OJO: la primera carpeta es la del DUEÑO de la entrevista, no la de quien está
+// usando la app. En una carpeta compartida son personas distintas, y buscar el
+// audio en la carpeta equivocada equivale a que "no exista". Los permisos del
+// bucket contemplan los dos casos (ver supabase-migration-compartir.sql).
 const RECORDINGS_BUCKET = 'recordings'
 // Las grabaciones antiguas guardaban la ruta absoluta en vez del nombre; en la nube
 // solo se usa el nombre, o las barras crearían carpetas fantasma.
@@ -153,41 +243,16 @@ const initials = (name: string) => name.split(' ').slice(0, 2).map(w => w[0]?.to
 const AVATAR_COLORS = ['#2563eb', '#10b981', '#f59e33', '#eb4566', '#8b5cf6', '#ec4899']
 const avatarColor = (id: string) => AVATAR_COLORS[id.charCodeAt(id.length - 1) % AVATAR_COLORS.length]
 
-// ── Icons ──────────────────────────────────────────────────────────────────
-const TrashIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-const PencilIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-const PlayIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-const PauseIconSm = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-const HomeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-const FolderIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-
-const SettingsIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-const UserIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-const ChevronRight = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-const ChevronLeft = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-const DownloadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-const UploadIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-const UsersIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-const KeyIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
-const MicIcon = ({ size = 16 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', flexShrink: 0 }}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-const VideoIcon = ({ size = 16 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', flexShrink: 0 }}><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-const LockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-const BellIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-const StarIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-const DocIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-const ClipboardIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
-const CameraIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-const ListViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-const GridViewIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-
 const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[], interviewers: [] as string[] }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
 
 function normalizeInterviews(arr: Interview[]): Interview[] {
   return arr.map(i => ({
     ...i,
+    // Las entrevistas guardadas antes de que existieran las carpetas compartidas
+    // no traen dueño. Vacío = "de quien tenga la sesión abierta", que es lo que
+    // eran cuando se guardaron.
+    ownerId: i.ownerId ?? '',
     sessionName: i.sessionName ?? '',
     recordingUrl: null,
     recordingFilePath: i.recordingFilePath ?? null,
@@ -219,11 +284,17 @@ function normalizeCandidates(arr: Candidate[]): Candidate[] {
   return arr.map(c => ({ ...c, createdAt: c.createdAt ?? '' }))
 }
 
+// Igual que arriba: los proyectos que ya estaban en este equipo antes de las
+// carpetas compartidas no tienen dueño guardado.
+function normalizeProjects(arr: Project[]): Project[] {
+  return arr.map(p => ({ ...p, ownerId: p.ownerId ?? '' }))
+}
+
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
-const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [] })
+const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, ownerId: r.user_id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [] })
 const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, createdAt: r.created_at ?? '', name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
 const ivFromDb    = (r: DbInterview): Interview => ({
-  id: r.id, candidateId: r.candidate_id, createdAt: r.created_at,
+  id: r.id, ownerId: r.user_id, candidateId: r.candidate_id, createdAt: r.created_at,
   sessionName: r.session_name, status: r.status as RecordingStatus,
   durationSec: r.duration_sec, micDeviceId: r.mic_device_id, outputDeviceId: r.output_device_id,
   transcriptOriginal: r.transcript_original, transcriptEdited: r.transcript_edited,
@@ -262,19 +333,29 @@ const ivPatchToDb = (patch: Partial<Interview>): Record<string, unknown> => {
   return db
 }
 
-const DotFilled = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>
-const DotRing = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><circle cx="4" cy="4" r="3" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
-const SquareFilled = ({ size = 8 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 8 8" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><rect width="8" height="8" rx="1" fill="currentColor"/></svg>
-const WarnTriangle = ({ size = 12 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ display: 'inline', verticalAlign: 'middle', flexShrink: 0 }}><path d="M8 1L15 14H1L8 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><circle cx="8" cy="12.5" r="0.75" fill="currentColor"/></svg>
 
 const EmptyState = ({ icon, title, sub, btnLabel, onBtn }: { icon?: React.ReactNode; title: string; sub: string; btnLabel?: string; onBtn?: () => void }) => (
   <div className="empty-state">
-    <div className="es-circle"><span className="es-icon">{icon ?? '◎'}</span></div>
+    <div className="es-circle"><span className="es-icon">{icon ?? <TargetIcon />}</span></div>
     <h3 className="es-title">{title}</h3>
     <p className="es-sub">{sub}</p>
     {btnLabel && onBtn && <button type="button" className="primary-btn pill-btn es-btn" onClick={onBtn}>{btnLabel}</button>}
   </div>
 )
+
+// Estado del candidato. Estaba repetido en tres pantallas con los colores y las
+// etiquetas copiados a mano; ahora vive en un sitio.
+const CANDIDATE_STATUS: Record<string, { bg: string; color: string; icon: ReactNode; label: string }> = {
+  apto:       { bg: '#d1fae5', color: '#065f46', icon: <CheckIcon size={11} />, label: 'Apto' },
+  finalista:  { bg: '#dbeafe', color: '#1d4ed8', icon: <StarIcon size={11} />,  label: 'Finalista' },
+  descartado: { bg: '#fee2e2', color: '#991b1b', icon: <CloseIcon size={11} />, label: 'Descartado' },
+}
+
+const CandidateStatusPill = ({ status }: { status: Candidate['candidateStatus'] }) => {
+  const s = CANDIDATE_STATUS[status]
+  if (!s) return null
+  return <span className="cand-pill" style={{ background: s.bg, color: s.color }}>{s.icon} {s.label}</span>
+}
 
 const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: 'list' | 'grid') => void }) => (
   <div className="view-toggle">
@@ -287,17 +368,15 @@ const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: '
   </div>
 )
 
-// Un <select> nativo y no un menú propio: el desplegable del sistema ya sabe
-// abrirse hacia arriba cuando no cabe abajo, y se maneja con teclado sin que
-// haya que programarlo.
 const SortSelect = ({ value, onChange }: { value: ProfileSort; onChange: (v: ProfileSort) => void }) => (
   <label className="sort-select">
     <span className="sort-select-label">Ordenar</span>
-    <select className="sort-select-input" value={value} onChange={e => onChange(e.target.value as ProfileSort)}>
-      {(Object.keys(PROFILE_SORT_LABELS) as ProfileSort[]).map(k => (
-        <option key={k} value={k}>{PROFILE_SORT_LABELS[k]}</option>
-      ))}
-    </select>
+    <Select
+      className="sort-select-input"
+      value={value}
+      onChange={v => onChange(v as ProfileSort)}
+      options={(Object.keys(PROFILE_SORT_LABELS) as ProfileSort[]).map(k => ({ value: k, label: PROFILE_SORT_LABELS[k] }))}
+    />
   </label>
 )
 
@@ -327,6 +406,18 @@ function App() {
   // ── Interview selection ────────────────────────────────────────────────
   const [selectedInterviewId, setSelectedInterviewId] = useState<string | null>(null)
   const [transcriptDraft, setTranscriptDraft] = useState('')
+
+  // ── Progreso del resumen ───────────────────────────────────────────────
+  // Un resumen de una llamada larga son varios minutos, casi todos esperando la
+  // cuota por minuto del proveedor. Sin señales de vida parece que se ha colgado.
+  const [summaryProgress, setSummaryProgress] = useState<SummaryProgress | null>(null)
+  // Entrevistas cuya conversación se está leyendo en segundo plano tras transcribir.
+  const [preparingIds, setPreparingIds] = useState<string[]>([])
+  // Solo para repintar cuando se guardan notas nuevas: la verdad vive en el cache.
+  const [notesReadyTick, setNotesReadyTick] = useState(0)
+  // Solo para repintar la cuenta atrás. Corre únicamente mientras se espera cuota,
+  // que es cuando hay un número en pantalla que cambia solo.
+  const [, setClockTick] = useState(0)
 
   // ── Audio devices ──────────────────────────────────────────────────────
   const [micDevices, setMicDevices] = useState<AudioDeviceOption[]>([])
@@ -412,6 +503,15 @@ function App() {
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }>(EMPTY_PROJECT)
   const [newInterviewerDraft, setNewInterviewerDraft] = useState('')
+  // ── Compartir carpetas con compañeros ────────────────────────────────────
+  // `shares` son todos los accesos que ve este usuario: los que él ha repartido
+  // y los que le han dado a él. Ver src/lib/sharing.ts y
+  // supabase-migration-compartir.sql.
+  const [shares, setShares] = useState<ProjectShare[]>([])
+  const [shareEmailDraft, setShareEmailDraft] = useState('')
+  const [shareBuscando, setShareBuscando] = useState(false)
+  const [shareEncontrado, setShareEncontrado] = useState<SharedUser | null>(null)
+  const [shareError, setShareError] = useState('')
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
@@ -432,7 +532,14 @@ function App() {
 
   // ── Playback ───────────────────────────────────────────────────────────
   const [playingInterviewId, setPlayingInterviewId] = useState<string | null>(null)
-  const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null)
+  // Desde donde se abrio el perfil. Si vienes de "Perfiles" (la lista de todos),
+  // el panel de la izquierda tiene que seguir siendo esa lista: antes saltaba a
+  // la del proyecto y aparecia gente de otro proceso sin venir a cuento.
+  const [candidateFrom, setCandidateFrom] = useState<'project' | 'all'>('project')
+  // OJO: el tipo de proceso se elige pero no se guarda en el proyecto. Estaba asi
+  // desde antes (el <select> no tenia ni value ni onChange); queda pendiente de
+  // decidir si se persiste o se quita del modal.
+  const [projectTypeDraft, setProjectTypeDraft] = useState('')
   const [repairingVideoId, setRepairingVideoId] = useState<string | null>(null)
   const [videoReloadKey, setVideoReloadKey] = useState(0)
   const [videoTime, setVideoTime] = useState({ current: 0, total: 0 })
@@ -511,6 +618,10 @@ function App() {
     (list: Candidate[]) => sortProfiles(list, profilesSort, lastInterviewAt),
     [profilesSort, lastInterviewAt])
 
+  // La misma lista que se ve en la pantalla "Perfiles", para que el panel de la
+  // izquierda no cambie de contenido al abrir a alguien desde ahi.
+  const sidebarAllCandidates = useMemo(() => sortByPref(candidates), [candidates, sortByPref])
+
   const changeProfilesSort = useCallback((v: ProfileSort) => {
     setProfilesSort(v)
     localStorage.setItem('ct-profiles-sort', v)
@@ -564,7 +675,7 @@ function App() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
-      if (event === 'SIGNED_OUT') { setProjects([]); setCandidates([]); setInterviews([]) }
+      if (event === 'SIGNED_OUT') { setProjects([]); setCandidates([]); setInterviews([]); setShares([]) }
     })
 
     window.desktopApp?.onMagicLinkTokens?.((data: Record<string, string>) => {
@@ -592,7 +703,11 @@ function App() {
           const rawLocal = localStorage.getItem(V2_KEY)
           if (rawLocal) {
             const d = JSON.parse(rawLocal) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
-            const projs = d.projects ?? []; const cands = normalizeCandidates(d.candidates ?? []); const ivs = normalizeInterviews(d.interviews ?? [])
+            // Solo se reclama como propio lo que no tiene dueño (creado en este
+            // equipo sin sesión). Una carpeta compartida por otra persona nunca
+            // llega hasta aquí, pero si llegara, intentar apropiársela lo único
+            // que consigue es un error de permisos de Supabase.
+            const projs = (d.projects ?? []).filter(p => !p.ownerId || p.ownerId === userId); const cands = normalizeCandidates(d.candidates ?? []); const ivs = normalizeInterviews(d.interviews ?? []).filter(i => !i.ownerId || i.ownerId === userId)
             if (projs.length) await supabase.from('projects').upsert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })), { onConflict: 'id' })
             if (cands.length) await supabase.from('candidates').upsert(cands.map(c => ({ id: c.id, user_id: userId, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: c.notes ?? '', candidate_status: c.candidateStatus ?? 'pendiente', consent_given: c.consentGiven ?? false, consent_at: c.consentAt ?? null, created_at: c.createdAt || new Date().toISOString() })), { onConflict: 'id' })
             for (const iv of ivs) {
@@ -600,16 +715,23 @@ function App() {
               if (!cand) continue
               await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
             }
-            if (projs.length || cands.length || ivs.length) { localStorage.removeItem(V2_KEY); toast('Datos de este equipo sincronizados a la nube ✓') }
+            if (projs.length || cands.length || ivs.length) { localStorage.removeItem(V2_KEY); toast('Datos de este equipo sincronizados a la nube') }
           }
         } catch { /* si el merge falla, seguimos y cargamos lo que haya en la nube */ }
 
-        const [pRes, cRes, iRes, prRes] = await Promise.all([
-          supabase.from('projects').select('*').eq('user_id', userId).order('created_at'),
-          supabase.from('candidates').select('*').eq('user_id', userId).order('created_at'),
-          supabase.from('interviews').select('*').eq('user_id', userId).order('created_at'),
+        // OJO: aquí ya NO se filtra por user_id. Con las carpetas compartidas, lo
+        // que puedes ver lo decide Supabase con sus reglas de permisos (RLS), no
+        // esta consulta: pide "todo" y la base de datos devuelve lo tuyo más lo
+        // que te hayan compartido. Filtrar aquí por user_id volvería a esconder
+        // justamente lo compartido. Ver supabase-migration-compartir.sql.
+        const [pRes, cRes, iRes, prRes, sharesRes] = await Promise.all([
+          supabase.from('projects').select('*').order('created_at'),
+          supabase.from('candidates').select('*').order('created_at'),
+          supabase.from('interviews').select('*').order('created_at'),
           supabase.from('profiles').select('*').eq('id', userId).single(),
+          listarComparticiones(),
         ])
+        setShares(sharesRes)
         if (pRes.error) { toast(`Error cargando proyectos: ${pRes.error.message}`, 'error'); return }
         if (cRes.error) { toast(`Error cargando perfiles: ${cRes.error.message}`, 'error'); return }
         const hasRemote = (pRes.data?.length ?? 0) > 0 || (cRes.data?.length ?? 0) > 0
@@ -690,9 +812,9 @@ function App() {
                   if (!cand) continue
                   await supabase.from('interviews').insert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt })
                 }
-                setProjects(projs); setCandidates(cands); setInterviews(ivs)
+                setProjects(normalizeProjects(projs)); setCandidates(cands); setInterviews(ivs)
                 localStorage.removeItem(V2_KEY)
-                toast('Datos migrados a la nube ✓')
+                toast('Datos migrados a la nube')
               }
             } catch { /* ignore migration errors */ }
           }
@@ -721,7 +843,7 @@ function App() {
       const raw = localStorage.getItem(V2_KEY)
       if (raw) {
         const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
-        setProjects(d.projects ?? [])
+        setProjects(normalizeProjects(d.projects ?? []))
         setCandidates(normalizeCandidates(d.candidates ?? []))
         setInterviews(normalizeInterviews(d.interviews ?? []))
       }
@@ -801,6 +923,14 @@ function App() {
 
   // ── Load user photo ────────────────────────────────────────────────────
   useEffect(() => { const p = localStorage.getItem('ct-user-photo'); if (p) setUserPhoto(p) }, [])
+
+  useEffect(() => window.desktopApp?.onSummaryProgress?.(setSummaryProgress), [])
+
+  useEffect(() => {
+    if (!summaryProgress?.esperaHasta) return
+    const id = setInterval(() => setClockTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [summaryProgress?.esperaHasta])
 
   // ── Auto-clear pending delete ──────────────────────────────────────────
   useEffect(() => {
@@ -966,7 +1096,7 @@ function App() {
       if (!proceed) return
     }
     try {
-      setRecordingMessage('Solicitando permisos...')
+      setRecordingMessage('Solicitando permisos…')
       chunkRef.current = []
       videoChunkRef.current = []
       systemChunkRef.current = []
@@ -1192,7 +1322,7 @@ function App() {
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath
     const defaultName = `Importada ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
     const n: Interview = {
-      id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(),
+      id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(),
       sessionName: defaultName, status: 'stopped', durationSec: 0,
       micDeviceId: '', outputDeviceId: '',
       transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null,
@@ -1214,7 +1344,7 @@ function App() {
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '', audioUploaded: false }
+    const n: Interview = { id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '', audioUploaded: false }
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: n.interviewerName, created_at: n.createdAt, updated_at: n.createdAt })
@@ -1320,10 +1450,55 @@ function App() {
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast('Transcripción completada')
+      // La lectura de la conversación arranca sola aquí. Sin await: transcribir ya
+      // ha terminado y esto es un adelanto que corre por detrás.
+      void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
     } catch (err) {
       updateInterview(interviewId, { transcriptionStatus: 'error' })
       const msg = err instanceof Error ? err.message : 'Error desconocido'
       if (notifErrors) toast('Error al transcribir', 'error', msg)
+    }
+  }
+
+  /** Lee la conversación y guarda las notas, sin redactar nada todavía.
+   *
+   *  Es la parte cara: de las ~11 peticiones que cuesta resumir una llamada de
+   *  una hora, 10 son esto. Hacerlo al acabar de transcribir mueve la espera a un
+   *  momento en el que nadie la mira, y de propina deja el regenerar en segundos:
+   *  las notas no dependen del tipo de informe ni de los criterios. */
+  const prepareSummaryNotes = async (interviewId: string, transcript: string, contexto: SummaryContext) => {
+    if (!window.desktopApp?.prepareSummary || !transcript.trim()) return
+    const huella = huellaTranscripcion(transcript, contexto)
+    if (getNotesCache()[interviewId]?.huella === huella) return   // ya preparada
+    // Si ya se está redactando un informe de esta entrevista, ese camino saca las
+    // notas por su cuenta y las guarda al terminar. Prepararlas ahora en paralelo
+    // sería pagar dos veces exactamente el mismo trabajo.
+    if (interviews.find(i => i.id === interviewId)?.summaryStatus === 'generating') return
+    setPreparingIds(ids => ids.includes(interviewId) ? ids : [...ids, interviewId])
+    try {
+      const iv = interviews.find(i => i.id === interviewId)
+      const cand = candidates.find(c => c.id === iv?.candidateId)
+      const proj = cand ? projects.find(p => p.id === cand.projectId) : null
+      const res = await window.desktopApp.prepareSummary({
+        interviewId, transcript,
+        criteria: proj?.evaluationCriteria ?? [],
+        summaryType: iv?.summaryType ?? 'resumen',
+        summaryContext: contexto,
+        candidateName: cand?.name ?? '',
+        interviewerName: (iv?.interviewerName || userName || '').trim(),
+      })
+      // `needed: false` = cabía de una vez. No se guarda nada: no hay atajo que dar.
+      if (res.needed && res.notes) {
+        saveNotesCache(interviewId, { notas: res.notes, huella, recortado: !!res.recortado })
+        setNotesReadyTick(t => t + 1)
+      }
+    } catch (err) {
+      // Preparar es un adelanto, no un paso obligatorio: si falla, el resumen
+      // sigue funcionándole al usuario por el camino largo de siempre. Molestarle
+      // con un error por algo que no ha pedido no aporta nada.
+      console.error('No se pudieron preparar las notas del resumen:', err)
+    } finally {
+      setPreparingIds(ids => ids.filter(id => id !== interviewId))
     }
   }
 
@@ -1335,14 +1510,29 @@ function App() {
     const criteria = project?.evaluationCriteria ?? []
     const interviewerName = (interview.interviewerName || userName || '').trim()
     updateInterview(interviewId, { summaryStatus: 'generating' })
+    setSummaryProgress(null)
     try {
-      const result = await window.desktopApp.generateSummary({ transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, summaryContext: interview.summaryContext ?? 'entrevista', candidateName: candidate?.name ?? '', interviewerName })
+      const contexto = interview.summaryContext ?? 'entrevista'
+      const guardadas = getNotesCache()[interviewId]
+      const huella = huellaTranscripcion(interview.transcriptEdited, contexto)
+      // Solo valen si son de ESTA transcripción y de este enfoque. Si no coinciden
+      // se ignoran y se hace el camino largo, que sigue funcionando igual.
+      const notasPreparadas = guardadas?.huella === huella ? guardadas.notas : null
+      const result = await window.desktopApp.generateSummary({ interviewId, transcript: interview.transcriptEdited, criteria, summaryType: interview.summaryType, summaryContext: contexto, candidateName: candidate?.name ?? '', interviewerName, notasPreparadas })
       updateInterview(interviewId, { summaryText: result.text, summaryStatus: 'done' })
+      // Si ha habido que trocear, las notas vienen de vuelta: se guardan para que
+      // el próximo informe sobre esta misma conversación salga en segundos.
+      if (result.notes) {
+        saveNotesCache(interviewId, { notas: result.notes, huella, recortado: !!result.recortado })
+        setNotesReadyTick(t => t + 1)
+      }
       if (notifSummary) toast('Resumen generado')
     } catch (err) {
       updateInterview(interviewId, { summaryStatus: 'error' })
       const msg = err instanceof Error ? err.message : 'Error desconocido'
       if (notifErrors) toast('Error al generar resumen', 'error', msg)
+    } finally {
+      setSummaryProgress(null)
     }
   }
 
@@ -1435,19 +1625,6 @@ function App() {
   // que lleva leído y la barra avanza a saltos (llega al final en segundos y luego
   // se arrastra). La cabecera se escribe ahora al guardar, así que esto solo repara
   // las grabaciones anteriores, la primera vez que se abren.
-  const handleToggleVideo = (iv: Interview) => {
-    const opening = expandedVideoId !== iv.id
-    setExpandedVideoId(id => (id === iv.id ? null : iv.id))
-    if (!opening || !iv.videoFilePath || !window.desktopApp?.ensureRecordingDuration) return
-    const filePath = resolveAudioPath(iv.videoFilePath)
-    if (!filePath) return
-    setRepairingVideoId(iv.id)
-    void window.desktopApp.ensureRecordingDuration({ filePath })
-      // Si se ha reescrito el archivo hay que recargar el <video>: el que ya está
-      // en pantalla sigue con la duración mal calculada.
-      .then(r => { if (r.repaired) setVideoReloadKey(k => k + 1) })
-      .finally(() => setRepairingVideoId(null))
-  }
 
   // Busca (adelanta/atrasa) el audio en reproducción a un segundo concreto
   const handleSeek = (sec: number) => {
@@ -1514,6 +1691,7 @@ function App() {
     if (interview?.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(interview.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }
     if (interview) void deleteCloudAudio(interview)
     saveVideoPathCache(interviewId, null)
+    saveNotesCache(interviewId, null)
     saveSystemAudioPathCache(interviewId, null)
     setInterviews(c => c.filter(i => i.id !== interviewId))
     if (session) {
@@ -1527,7 +1705,7 @@ function App() {
     if (pendingDeleteId !== candidateId) { setPendingDeleteId(candidateId); return }
     setPendingDeleteId(null)
     const candidateInterviewIds = interviews.filter(i => i.candidateId === candidateId)
-    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); void deleteCloudAudio(i) })
+    candidateInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.recordingFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.videoFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.videoFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) { const fp = resolveAudioPath(i.systemAudioFilePath); if (fp) void window.desktopApp.deleteRecording({ filePath: fp }) }; saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); saveNotesCache(i.id, null); void deleteCloudAudio(i) })
     setInterviews(c => c.filter(i => i.candidateId !== candidateId))
     setCandidates(c => c.filter(x => x.id !== candidateId))
     if (session) {
@@ -1542,11 +1720,18 @@ function App() {
   }
 
   const handleDeleteProject = async (projectId: string) => {
+    // Una carpeta compartida solo la borra su dueño. El botón ya está oculto para
+    // los demás, pero esto cubre atajos de teclado y estados raros: sin esto, la
+    // app borraría la carpeta de la pantalla y Supabase la devolvería al recargar.
+    if (!esMiProyecto(projects.find(p => p.id === projectId))) {
+      toast('Esta carpeta no es tuya', 'warning', 'Solo quien la creó puede borrarla')
+      setPendingDeleteId(null); return
+    }
     if (pendingDeleteId !== projectId) { setPendingDeleteId(projectId); return }
     setPendingDeleteId(null)
     const projCandidates = candidates.filter(c => c.projectId === projectId)
     const projInterviewIds = interviews.filter(i => projCandidates.some(c => c.id === i.candidateId))
-    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }); if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.systemAudioFilePath }); saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); void deleteCloudAudio(i) })
+    projInterviewIds.forEach(i => { if (i.recordingFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.recordingFilePath }); if (i.videoFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.videoFilePath }); if (i.systemAudioFilePath && window.desktopApp?.deleteRecording) void window.desktopApp.deleteRecording({ filePath: i.systemAudioFilePath }); saveVideoPathCache(i.id, null); saveSystemAudioPathCache(i.id, null); saveNotesCache(i.id, null); void deleteCloudAudio(i) })
     setInterviews(c => c.filter(i => !projCandidates.some(pc => pc.id === i.candidateId)))
     setCandidates(c => c.filter(x => x.projectId !== projectId))
     setProjects(c => c.filter(p => p.id !== projectId))
@@ -1581,6 +1766,60 @@ function App() {
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast('Perfil actualizado')
   }
 
+  // ── Compartir carpetas ─────────────────────────────────────────────────
+  // Un proyecto sin dueño es de quien lo tenga delante: son las carpetas creadas
+  // en este equipo antes de que existiera el compartir, o sin haber entrado con
+  // cuenta. Solo el dueño puede renombrar, cerrar, borrar y repartir accesos; el
+  // compañero invitado sí puede trabajar dentro (transcribir, resumir, editar).
+  const esMiProyecto = (p: Project | null | undefined) =>
+    !p ? false : !p.ownerId || p.ownerId === session?.user.id
+
+  const comparticionesDe = (projectId: string) => shares.filter(sh => sh.projectId === projectId)
+
+  const limpiarBuscadorCompartir = () => {
+    setShareEmailDraft(''); setShareEncontrado(null); setShareError(''); setShareBuscando(false)
+  }
+
+  const handleBuscarCompanero = async () => {
+    setShareBuscando(true); setShareError(''); setShareEncontrado(null)
+    const res = await buscarUsuarioPorCorreo(shareEmailDraft)
+    setShareBuscando(false)
+    if (!res.ok) { setShareError(res.message); return }
+    // Ya tenía acceso: se avisa aquí en vez de dejar que falle el insert.
+    if (editingProjectId && comparticionesDe(editingProjectId).some(sh => sh.sharedWithId === res.user.id)) {
+      setShareError('Esa persona ya tiene acceso a este proyecto'); return
+    }
+    setShareEncontrado(res.user)
+  }
+
+  const handleDarAcceso = async () => {
+    if (!shareEncontrado || !editingProjectId || !session) return
+    const res = await compartirProyecto({ projectId: editingProjectId, ownerId: session.user.id, user: shareEncontrado })
+    if (!res.ok) { setShareError(res.message); return }
+    setShares(c => [...c, res.share])
+    limpiarBuscadorCompartir()
+    toast(`${shareEncontrado.name} ya puede ver este proyecto`, 'success', 'Tendrá que cerrar y abrir su app para verlo')
+  }
+
+  // Píldora de la tarjeta de proyecto: "de quién es esta carpeta". Solo aparece
+  // cuando hay algo que contar, para no ensuciar las carpetas normales.
+  const renderSharedBadge = (p: Project) => {
+    if (!esMiProyecto(p)) {
+      const mia = comparticionesDe(p.id).find(sh => sh.sharedWithId === session?.user.id)
+      return <span className="shared-badge" title="Otra persona te ha dado acceso a esta carpeta"><UsersIcon /> Compartido por {mia?.ownerName || 'un compañero'}</span>
+    }
+    const con = comparticionesDe(p.id).length
+    if (con === 0) return null
+    return <span className="shared-badge shared-badge--owner" title="Has dado acceso a esta carpeta"><UsersIcon /> Compartido con {con}</span>
+  }
+
+  const handleQuitarAcceso = async (share: ProjectShare) => {
+    const res = await dejarDeCompartir(share.id)
+    if (!res.ok) { toast('No se pudo quitar el acceso', 'error', res.message); return }
+    setShares(c => c.filter(x => x.id !== share.id))
+    toast(`${share.sharedWithName} ya no tiene acceso`)
+  }
+
   const updateProject = (id: string, changes: Partial<Project>) => {
     setProjects(c => c.map(p => p.id === id ? { ...p, ...changes } : p))
     if (changes.evaluationCriteria !== undefined) saveCriteriaCache(id, changes.evaluationCriteria)
@@ -1599,7 +1838,7 @@ function App() {
 
   const handleCreateProject = async () => {
     if (!projectDraft.name.trim()) return
-    const p: Project = { id: uid(), name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers }
+    const p: Project = { id: uid(), ownerId: session?.user.id ?? '', name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers }
     setProjects(c => [...c, p])
     setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
     if (session) {
@@ -1611,8 +1850,14 @@ function App() {
 
   const handleSaveEditProject = () => {
     if (!editingProjectId || !projectDraft.name.trim()) return
+    // Renombrar, cerrar o cambiar criterios es cosa del dueño. Si no lo eres, la
+    // pantalla se quedaría con un cambio que la nube nunca aceptó.
+    if (!esMiProyecto(projects.find(p => p.id === editingProjectId))) {
+      toast('Esta carpeta no es tuya', 'warning', 'Solo quien la creó puede cambiar sus datos')
+      setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir(); return
+    }
     updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers })
-    setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT)
+    setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir()
     toast('Proyecto actualizado')
   }
 
@@ -1685,8 +1930,9 @@ function App() {
   }
 
   const goToProject = (projectId: string) => { setActiveProjectId(projectId); setSearchQuery(''); setScreen('project-detail') }
-  const goToCandidate = (candidateId: string, projectId?: string) => {
+  const goToCandidate = (candidateId: string, projectId?: string, from: 'project' | 'all' = 'project') => {
     if (projectId) setActiveProjectId(projectId)
+    setCandidateFrom(from)
     setActiveCandidateId(candidateId); setActiveTab('entrevistas'); setScreen('candidate-detail')
   }
 
@@ -1751,6 +1997,26 @@ function App() {
     return resolved ? 'file:///' + resolved.replace(/\\/g, '/') : null
   }, [resolveAudioPath])
 
+  // Antes esto colgaba del desplegable de video de la lista de grabaciones. Ese
+  // desplegable ya no existe (el video vive en la pestaña Transcripcion), asi que
+  // la reparacion se lanza la primera vez que se muestra el video de cada entrevista.
+  const repairedVideosRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const iv = selectedInterview
+    if (activeTab !== 'transcripcion' || !iv?.videoFilePath) return
+    if (repairedVideosRef.current.has(iv.id)) return
+    if (!window.desktopApp?.ensureRecordingDuration) return
+    const filePath = resolveAudioPath(iv.videoFilePath)
+    if (!filePath) return
+    repairedVideosRef.current.add(iv.id)
+    setRepairingVideoId(iv.id)
+    void window.desktopApp.ensureRecordingDuration({ filePath })
+      // Si se ha reescrito el archivo hay que recargar el <video>: el que ya está
+      // en pantalla sigue con la duración mal calculada.
+      .then(r => { if (r.repaired) setVideoReloadKey(k => k + 1) })
+      .finally(() => setRepairingVideoId(null))
+  }, [activeTab, selectedInterview, resolveAudioPath])
+
   // ── Audios en la nube ──────────────────────────────────────────────────────
   // Los audios se guardan en Documents\CallTranscriber del PC que grabó. Antes se
   // quedaban ahí: en el otro equipo la entrevista salía en la lista pero sin audio,
@@ -1778,7 +2044,7 @@ function App() {
         const fileName = baseName(stored)
         const { error } = await supabase.storage
           .from(RECORDINGS_BUCKET)
-          .upload(cloudAudioKey(userId, interview.id, fileName), new Blob([read.bytes], { type: audioMime(fileName) }), { upsert: true, contentType: audioMime(fileName) })
+          .upload(cloudAudioKey(interview.ownerId || userId, interview.id, fileName), new Blob([read.bytes], { type: audioMime(fileName) }), { upsert: true, contentType: audioMime(fileName) })
         if (error) throw new Error(error.message)
         subidos++
       }
@@ -1813,7 +2079,7 @@ function App() {
       const fileName = baseName(stored)
       const { data, error } = await supabase.storage
         .from(RECORDINGS_BUCKET)
-        .download(cloudAudioKey(userId, interview.id, fileName))
+        .download(cloudAudioKey(interview.ownerId || userId, interview.id, fileName))
       if (error || !data) return null
       const written = await window.desktopApp.writeRecordingBytes({ fileName, bytes: new Uint8Array(await data.arrayBuffer()) })
       return written.ok ? (written.filePath ?? null) : null
@@ -1843,7 +2109,7 @@ function App() {
     if (!userId || !isSupabaseConfigured || !interview.audioUploaded) return
     const keys = [interview.recordingFilePath, interview.systemAudioFilePath]
       .filter((n): n is string => !!n)
-      .map(n => cloudAudioKey(userId, interview.id, baseName(n)))
+      .map(n => cloudAudioKey(interview.ownerId || userId, interview.id, baseName(n)))
     if (keys.length === 0) return
     const { error } = await supabase.storage.from(RECORDINGS_BUCKET).remove(keys)
     if (error) console.error('Error borrando audio de la nube:', error.message)
@@ -1864,7 +2130,7 @@ function App() {
       )
     }
     if (iv.audioUploaded) {
-      return <span className="audio-cloud audio-cloud--ok" title="El audio está en la nube: se puede escuchar y transcribir desde cualquiera de tus equipos.">☁ En la nube</span>
+      return <span className="audio-cloud audio-cloud--ok" title="El audio está en la nube: se puede escuchar y transcribir desde cualquiera de tus equipos."><CloudIcon size={12} /> En la nube</span>
     }
     return (
       <button
@@ -1875,7 +2141,7 @@ function App() {
           : 'El audio vive solo en este equipo. Pulsa para subirlo y poder usarlo desde el otro PC.'}
         onClick={e => { e.stopPropagation(); void uploadInterviewAudio(iv) }}
       >
-        {estado === 'error' ? '⚠ No se pudo subir · Reintentar' : '↑ Solo en este PC · Subir'}
+        {estado === 'error' ? <><WarnTriangle /> No se pudo subir · Reintentar</> : <><CloudUploadIcon size={12} /> Solo en este PC · Subir</>}
       </button>
     )
   }
@@ -1940,7 +2206,7 @@ function App() {
               onChange={e => setGlobalSearchQuery(e.target.value)}
               autoFocus
             />
-            {globalSearchQuery && <button type="button" className="gs-clear" onClick={() => setGlobalSearchQuery('')}>✕</button>}
+            {globalSearchQuery && <button type="button" className="gs-clear" onClick={() => setGlobalSearchQuery('')}><CloseIcon size={13} /></button>}
           </div>
           {q.length >= 2 && <p className="gs-count">{results.length} {results.length === 1 ? 'resultado' : 'resultados'}</p>}
         </div>
@@ -1948,11 +2214,11 @@ function App() {
         {q.length < 2 ? (
           <EmptyState icon={<SearchIcon />} title="Busca en tus entrevistas" sub="Escribe al menos 2 caracteres para buscar en todas las transcripciones y resúmenes." />
         ) : results.length === 0 ? (
-          <EmptyState title="Sin resultados" sub={`No se encontró "${globalSearchQuery}" en ninguna transcripción.`} />
+          <EmptyState title="Sin resultados" sub={`No se encontró «${globalSearchQuery}» en ninguna transcripción.`} />
         ) : (
           <div className="gs-results">
             {results.map(({ interview: iv, cand, proj, excerpt, matchCount, idx }) => (
-              <div key={iv.id} className="gs-result-card" onClick={() => { if (cand) { goToCandidate(cand.id, proj?.id); setSelectedInterviewId(iv.id); setActiveTab(iv.summaryText?.toLowerCase().includes(q) && !iv.transcriptEdited?.toLowerCase().includes(q) ? 'resumen' : 'transcripcion') } }}>
+              <div key={iv.id} className="gs-result-card" onClick={() => { if (cand) { goToCandidate(cand.id, proj?.id ?? cand.projectId, 'all'); setSelectedInterviewId(iv.id); setActiveTab(iv.summaryText?.toLowerCase().includes(q) && !iv.transcriptEdited?.toLowerCase().includes(q) ? 'resumen' : 'transcripcion') } }}>
                 <div className="gs-result-meta">
                   <span className="gs-result-name">{cand?.name ?? '—'}</span>
                   {proj && <span className="gs-result-proj">{proj.name}</span>}
@@ -1997,7 +2263,7 @@ function App() {
               <span className="dash-search-icon"><SearchIcon /></span>
               <input
                 type="text"
-                placeholder="Buscar por proyecto o empresa..."
+                placeholder="Buscar por proyecto o empresa…"
                 value={dashSearch}
                 onChange={e => setDashSearch(e.target.value)}
               />
@@ -2018,7 +2284,7 @@ function App() {
           <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.length === 0 ? (
               projects.length === 0
-                ? <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
+                ? <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles." btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
                 : <EmptyState title="Sin resultados" sub="Prueba otro filtro o búsqueda." />
             ) : filteredProjects.map(p => {
               const cCnt = candidates.filter(c => c.projectId === p.id).length
@@ -2034,9 +2300,10 @@ function App() {
                       <div className="plc-info">
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
+                        {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> Editar</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
                         </span>
@@ -2135,8 +2402,8 @@ function App() {
         <div className="proj-toolbar">
           <div className={`proj-search-bar${projectSearchQuery ? ' proj-search-bar--active' : ''}`}>
             <span className="proj-search-icon"><SearchIcon /></span>
-            <input type="text" placeholder="Buscar proyectos..." value={projectSearchQuery} onChange={e => setProjectSearchQuery(e.target.value)} />
-            {projectSearchQuery && <button type="button" className="proj-search-clear" onClick={() => setProjectSearchQuery('')}>✕</button>}
+            <input type="text" placeholder="Buscar proyectos…" value={projectSearchQuery} onChange={e => setProjectSearchQuery(e.target.value)} />
+            {projectSearchQuery && <button type="button" className="proj-search-clear" onClick={() => setProjectSearchQuery('')}><CloseIcon size={13} /></button>}
           </div>
           <div className="proj-filter-group">
             <button type="button" className={`proj-filter-btn${projectStatusFilter === 'active' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'active' ? 'all' : 'active')}>Activos</button>
@@ -2144,11 +2411,11 @@ function App() {
           </div>
           <ViewToggle mode={projectsViewMode} onChange={setProjectsViewMode} />
         </div>
-        {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para "${projectSearchQuery}"` : ''}</p>}
+        {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para «${projectSearchQuery}»` : ''}</p>}
         {filteredProjects.length === 0 ? (
           isFiltered
             ? <EmptyState title="Sin resultados" sub="No hay proyectos que coincidan con los filtros aplicados." />
-            : <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles" btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
+            : <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles." btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
         ) : (
           <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.map(p => {
@@ -2165,9 +2432,10 @@ function App() {
                       <div className="plc-info">
                         <h3 className="plc-title">{p.name}</h3>
                         <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
+                        {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true) }}><PencilIcon /> Editar</button>
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> Editar</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
                         </span>
@@ -2226,7 +2494,7 @@ function App() {
             </div>
             <div className="proj-header-actions">
               <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
-              <button
+              {esMiProyecto(activeProject) && <button
                 type="button"
                 className={`btn-trash${pendingDeleteId === activeProject.id ? ' confirming' : ''}`}
                 title={pendingDeleteId === activeProject.id ? '¿Confirmar?' : 'Eliminar proyecto'}
@@ -2235,7 +2503,7 @@ function App() {
                 {pendingDeleteId === activeProject.id
                   ? <><CheckIcon /><span className="confirming-label">Eliminar ({projectCandidates.length} perfiles)</span></>
                   : <TrashIcon />}
-              </button>
+              </button>}
             </div>
           </div>
         </div>
@@ -2252,7 +2520,7 @@ function App() {
                   const c = EVALUATION_CRITERIA.find(x => x.id === id)
                   return c ? <span key={id} className="criteria-chip">{c.label}</span> : null
                 })
-              : <span className="criteria-chip criteria-chip--empty">Sin criterios — el resumen usará estructura por defecto</span>
+              : <span className="criteria-chip criteria-chip--empty">Sin criterios. El resumen saldrá con la estructura por defecto.</span>
             }
             <button type="button" className="criteria-edit-btn" onClick={() => setShowCriteriaEdit(v => !v)}>
               {showCriteriaEdit ? 'Cerrar' : 'Editar criterios'}
@@ -2382,13 +2650,13 @@ function App() {
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
           <input type="text" placeholder="Buscar por nombre, email o puesto..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-          {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}>✕</button>}
+          {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}><CloseIcon size={13} /></button>}
         </div>
 
         {filteredCandidates.length === 0 ? (
           searchQuery
-            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
-            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas" btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
+            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con «${searchQuery}».`} />
+            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas." btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
         ) : (
           <div className={`pdc-list${profilesViewMode === 'grid' ? ' pdc-list--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, filteredCandidates.length) } as React.CSSProperties : undefined}>
             {filteredCandidates.map(c => {
@@ -2409,13 +2677,7 @@ function App() {
                       <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fs(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
-                    {c.candidateStatus !== 'pendiente' && (() => {
-                      const st = c.candidateStatus
-                      const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
-                      const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
-                      const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
-                      return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
-                    })()}
+                    {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
                       <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                       <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
@@ -2450,12 +2712,12 @@ function App() {
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
-          <input type="text" placeholder="Buscar por nombre, email o puesto..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-          {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}>✕</button>}
+          <input type="text" placeholder="Buscar por nombre, email o puesto…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}><CloseIcon size={13} /></button>}
         </div>
         {allCandidates.length === 0 ? (
           searchQuery
-            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con "${searchQuery}"`} />
+            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con «${searchQuery}».`} />
             : <EmptyState icon={<UsersIcon />} title="Sin perfiles" sub="Los perfiles aparecerán aquí cuando los añadas a un proyecto." />
         ) : (
           <div className={`candidates-table${profilesViewMode === 'grid' ? ' candidates-table--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, allCandidates.length) } as React.CSSProperties : undefined}>
@@ -2469,26 +2731,20 @@ function App() {
                 ? hasDone ? [<><DotFilled /> Transcrita</>, 'status-done'] : hasPending ? [<><DotRing /> Pendiente</>, 'status-pending'] : [<><DotRing /> Sin transcripción</>, 'status-pending']
                 : [<><DotRing /> Sin entrevista</>, 'status-none']
               return (
-                <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId)}>
+                <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId, 'all')}>
                   <div className="ctr-avatar">{initials(c.name)}</div>
                   <div className="ctr-info">
                     <span className="ctr-name">{c.name}</span>
                     <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fs(last.createdAt)}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
-                  {c.candidateStatus !== 'pendiente' && (() => {
-                    const st = c.candidateStatus
-                    const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
-                    const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
-                    const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
-                    return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
-                  })()}
+                  {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
                     <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                     <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
                   </div>
-                  <button type="button" className="ctr-open">Ver entrevistas →</button>
+                  <button type="button" className="ctr-open">Ver entrevistas <ArrowRightIcon size={12} /></button>
                 </div>
               )
             })}
@@ -2533,15 +2789,9 @@ function App() {
                 {hasError ? <><WarnTriangle /> Error</> : transcribedCount > 0 ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}
               </span>
               <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? `Consentimiento registrado el ${new Date(activeCandidate.consentAt).toLocaleString('es-ES')}` : 'Sin consentimiento registrado'}>
-                {activeCandidate.consentGiven ? '🔒 Consentimiento ✓' : '⚠ Sin consentimiento'}
+                {activeCandidate.consentGiven ? <><LockIcon size={12} /> Consentimiento</> : <><WarnTriangle /> Sin consentimiento</>}
               </span>
-              {activeCandidate.candidateStatus !== 'pendiente' && (() => {
-                const st = activeCandidate.candidateStatus
-                const bg = st === 'apto' ? '#d1fae5' : st === 'finalista' ? '#dbeafe' : '#fee2e2'
-                const cl = st === 'apto' ? '#065f46' : st === 'finalista' ? '#1d4ed8' : '#991b1b'
-                const lb = st === 'apto' ? '✓ Apto' : st === 'finalista' ? '⭐ Finalista' : '✗ Descartado'
-                return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: bg, color: cl, whiteSpace: 'nowrap' }}>{lb}</span>
-              })()}
+              {activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
                 <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
@@ -2550,8 +2800,14 @@ function App() {
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <>★ Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
-            <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => setActiveTab(tab)}>
+          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <><StarIcon /> Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
+            <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => {
+              setActiveTab(tab)
+              const iv = tab === 'resumen' ? interviews.find(i => i.id === selectedInterviewId) : null
+              if (iv?.transcriptionStatus === 'done') {
+                void prepareSummaryNotes(iv.id, iv.transcriptEdited, iv.summaryContext ?? 'entrevista')
+              }
+            }}>
               {label}
             </button>
           ))}
@@ -2569,27 +2825,20 @@ function App() {
     <div className="interviews-tab">
       {!sttReady && (
         <div className="warning-note" style={{ marginBottom: 12 }}>
-          ⚠ Sin motor de transcripción configurado — la transcripción no funcionará. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora →</button>
+          <WarnTriangle /> Todavía no has configurado un motor de transcripción, así que no se puede transcribir. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora <ArrowRightIcon size={12} /></button>
         </div>
       )}
       <div className="rec-section-header">
         <h3 className="rec-section-title">Grabaciones</h3>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {playingInterviewId && (
-            <select
-              className="cfg-select"
-              style={{ fontSize: 12, padding: '3px 6px', minWidth: 70 }}
-              value={playbackRate}
-              onChange={e => setPlaybackRate(parseFloat(e.target.value))}
+            <Select
+              className="cfg-select cfg-select--mini"
+              value={String(playbackRate)}
+              onChange={v => setPlaybackRate(parseFloat(v))}
               title="Velocidad de reproducción"
-            >
-              <option value="0.5">0.5×</option>
-              <option value="0.75">0.75×</option>
-              <option value="1">1×</option>
-              <option value="1.25">1.25×</option>
-              <option value="1.5">1.5×</option>
-              <option value="2">2×</option>
-            </select>
+              options={[{ value: '0.5', label: '0.5x' }, { value: '0.75', label: '0.75x' }, { value: '1', label: '1x' }, { value: '1.25', label: '1.25x' }, { value: '1.5', label: '1.5x' }, { value: '2', label: '2x' }]}
+            />
           )}
           {window.desktopApp?.selectAudioFile && (
             <button type="button" className="secondary-btn pill-btn" onClick={() => void handleImportAudio()}><UploadIcon /> Importar audio</button>
@@ -2604,8 +2853,8 @@ function App() {
           {candidateInterviews.length > 2 && (
             <div className="search-bar" style={{ marginBottom: 8 }}>
               <span className="search-icon"><SearchIcon /></span>
-              <input type="text" placeholder="Buscar grabación..." value={ivSearchQuery} onChange={e => setIvSearchQuery(e.target.value)} />
-              {ivSearchQuery && <button type="button" className="search-clear" onClick={() => setIvSearchQuery('')}>✕</button>}
+              <input type="text" placeholder="Buscar grabación…" value={ivSearchQuery} onChange={e => setIvSearchQuery(e.target.value)} />
+              {ivSearchQuery && <button type="button" className="search-clear" onClick={() => setIvSearchQuery('')}><CloseIcon size={13} /></button>}
             </div>
           )}
         <div className="rec-rows">
@@ -2615,10 +2864,7 @@ function App() {
             const isTranscribing = iv.transcriptionStatus === 'transcribing'
             return (
               <div key={iv.id}>
-              <div
-                className={`rec-row${iv.videoFilePath ? ' rec-row--expandable' : ''}`}
-                onClick={() => { if (iv.videoFilePath) handleToggleVideo(iv) }}
-              >
+              <div className="rec-row">
                 <div className="rec-row-accent" />
                 <div className="rec-row-info">
                   <div className="rec-row-top">
@@ -2626,36 +2872,34 @@ function App() {
                       <div className="rec-row-edit-wrap" onClick={e => e.stopPropagation()}>
                         <input type="text" className="rec-row-edit-input" value={editingNameDraft} onChange={e => setEditingNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) } if (e.key === 'Escape') setEditingInterviewId(null) }} autoFocus />
                         <button type="button" className="btn-icon btn-icon--confirm" onClick={() => { if (editingNameDraft.trim()) updateInterview(iv.id, { sessionName: editingNameDraft.trim() }); setEditingInterviewId(null) }}><CheckIcon /></button>
-                        <button type="button" className="btn-icon" onClick={() => setEditingInterviewId(null)}>✕</button>
+                        <button type="button" className="btn-icon" onClick={() => setEditingInterviewId(null)}><CloseIcon size={13} /></button>
                       </div>
                     ) : (
                       <span className="rec-row-name">{iv.sessionName || fd(iv.createdAt)}</span>
                     )}
                   </div>
                   <span className="rec-row-meta">
-                    {fs(iv.createdAt)}{iv.durationSec > 0 ? `  ·  ${fmt(iv.durationSec)}` : ''}
-                    {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo <span className={`rec-row-chevron${expandedVideoId === iv.id ? ' rec-row-chevron--open' : ''}`}>▾</span></> : ''}
+                    {fs(iv.createdAt)}{iv.durationSec > 0 ? ` · ${fmt(iv.durationSec)}` : ''}
+                    {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo</> : ''}
                   </span>
                   {/* Aquí SOLO se elige entre los entrevistadores del proyecto. Darlos
                       de alta es cosa del proyecto (Nuevo/Editar proyecto), para que la
                       lista no se llene de nombres sueltos escritos sobre la marcha. */}
                   <span className="rec-row-interviewer" onClick={e => e.stopPropagation()}>
                     {(ivProject?.interviewers.length ?? 0) > 0 ? (
-                      <select
+                      <Select
                         className={`rec-row-interviewer-select${iv.interviewerName ? '' : ' rec-row-interviewer-select--empty'}`}
                         title="Entrevistador de esta llamada"
                         value={iv.interviewerName || ''}
-                        onChange={e => updateInterview(iv.id, { interviewerName: e.target.value })}
-                      >
-                        <option value="">Sin entrevistador</option>
-                        {(ivProject?.interviewers ?? []).map(name => <option key={name} value={name}>{name}</option>)}
-                      </select>
+                        onChange={v => updateInterview(iv.id, { interviewerName: v })}
+                        options={[{ value: '', label: 'Sin entrevistador' }, ...(ivProject?.interviewers ?? []).map(name => ({ value: name, label: name }))]}
+                      />
                     ) : (
                       <button
                         type="button"
                         className="rec-row-interviewer-select rec-row-interviewer-select--empty rec-row-interviewer-link"
                         title="Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto."
-                        onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers }); setEditingProjectId(ivProject.id); setShowEditProject(true) } }}
+                        onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers }); setEditingProjectId(ivProject.id); setShowEditProject(true); limpiarBuscadorCompartir() } }}
                       >
                         Añádelos en el proyecto
                       </button>
@@ -2663,7 +2907,7 @@ function App() {
                   </span>
                   {iv.captureSource === 'mic' && (
                     <span className="rec-row-warning" title="No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.">
-                      ⚠ Sin audio del interlocutor
+                      <WarnTriangle /> Sin audio del interlocutor
                     </span>
                   )}
                   {renderAudioCloudBadge(iv)}
@@ -2684,50 +2928,11 @@ function App() {
                 {isDone ? (
                   <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={e => { e.stopPropagation(); setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
                 ) : iv.recordingFilePath && !isTranscribing ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{isError ? '↺ Reintentar' : '▶ Transcribir'}</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{isError ? <><RefreshIcon size={12} /> Reintentar</> : <><PlayIcon size={11} /> Transcribir</>}</button>
                 ) : isTranscribing ? (
                   <div className="rec-row-spinner"><span className="spinner" /></div>
                 ) : null}
               </div>
-              {iv.videoFilePath && expandedVideoId === iv.id && (
-                <div className="video-player-card" onClick={e => e.stopPropagation()}>
-                  <div className="video-player-title"><VideoIcon size={15} /> Vídeo de la grabación</div>
-                  <video
-                    key={videoReloadKey}
-                    className="video-player-el"
-                    controls
-                    src={resolveVideoUrl(iv.videoFilePath) ?? undefined}
-                    ref={el => { videoElRef.current = el; videoElInterviewRef.current = el ? iv.id : null; if (el) { el.playbackRate = videoPlaybackRate; el.volume = videoVolume; fixVideoDuration(el) } }}
-                    onTimeUpdate={e => {
-                      const el = e.currentTarget
-                      const d = el.duration
-                      setVideoTime({ current: el.currentTime, total: isFinite(d) && d > 0 ? d : 0 })
-                    }}
-                  />
-                  <div className="video-player-time">
-                    <span className="video-player-time-now">{fmt(Math.floor(videoTime.current))}</span>
-                    <span className="video-player-time-sep">/</span>
-                    <span>{videoTime.total > 0 ? fmt(Math.floor(videoTime.total)) : fmt(iv.durationSec)}</span>
-                    {repairingVideoId === iv.id && <span className="video-player-time-note">calibrando la barra…</span>}
-                  </div>
-                  <div className="video-player-controls">
-                    <label className="video-player-ctrl">Velocidad
-                      <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
-                        <option value="0.5">0.5×</option>
-                        <option value="0.75">0.75×</option>
-                        <option value="1">1×</option>
-                        <option value="1.25">1.25×</option>
-                        <option value="1.5">1.5×</option>
-                        <option value="2">2×</option>
-                      </select>
-                    </label>
-                    <label className="video-player-ctrl">Volumen
-                      <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
-                    </label>
-                  </div>
-                  <span className="video-player-sub"><VideoIcon size={12} /> Vídeo con audio  ·  {fs(iv.createdAt)}  ·  {fmt(iv.durationSec)}  ·  guardado en tu equipo</span>
-                </div>
-              )}
               </div>
             )
           })}
@@ -2763,7 +2968,7 @@ function App() {
                       <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                     )}
                     {iv.recordingFilePath && iv.transcriptionStatus !== 'transcribing' && (
-                      <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? '↺' : 'Transcribir'}</button>
+                      <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? <RefreshIcon size={11} /> : 'Transcribir'}</button>
                     )}
                     {iv.transcriptionStatus === 'transcribing' && <span className="spinner" style={{ width: 12, height: 12 }} />}
                   </div>
@@ -2797,17 +3002,16 @@ function App() {
                 <span className="video-player-time-now">{fmt(Math.floor(videoTime.current))}</span>
                 <span className="video-player-time-sep">/</span>
                 <span>{videoTime.total > 0 ? fmt(Math.floor(videoTime.total)) : fmt(selectedInterview.durationSec)}</span>
+                {repairingVideoId === selectedInterview.id && <span className="video-player-time-note">calibrando la barra…</span>}
               </div>
               <div className="video-player-controls">
                 <label className="video-player-ctrl">Velocidad
-                  <select value={videoPlaybackRate} onChange={e => setVideoPlaybackRate(parseFloat(e.target.value))}>
-                    <option value="0.5">0.5×</option>
-                    <option value="0.75">0.75×</option>
-                    <option value="1">1×</option>
-                    <option value="1.25">1.25×</option>
-                    <option value="1.5">1.5×</option>
-                    <option value="2">2×</option>
-                  </select>
+                  <Select
+                    className="cfg-select cfg-select--mini"
+                    value={String(videoPlaybackRate)}
+                    onChange={v => setVideoPlaybackRate(parseFloat(v))}
+                    options={[{ value: '0.5', label: '0.5x' }, { value: '0.75', label: '0.75x' }, { value: '1', label: '1x' }, { value: '1.25', label: '1.25x' }, { value: '1.5', label: '1.5x' }, { value: '2', label: '2x' }]}
+                  />
                 </label>
                 <label className="video-player-ctrl">Volumen
                   <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
@@ -2823,26 +3027,27 @@ function App() {
               <div className="trx-toolbar">
                 <div className="trx-search">
                   <SearchIcon />
-                  <input type="text" placeholder="Buscar en transcripción..." value={txSearchQuery} onChange={e => setTxSearchQuery(e.target.value)} />
+                  <input type="text" placeholder="Buscar en transcripción…" value={txSearchQuery} onChange={e => setTxSearchQuery(e.target.value)} />
                   {txSearchQuery.trim() && (() => {
                     const count = transcriptDraft ? (transcriptDraft.toLowerCase().split(txSearchQuery.toLowerCase()).length - 1) : 0
                     return <span style={{ fontSize: 11, color: count > 0 ? 'var(--primary)' : 'var(--text-muted)', whiteSpace: 'nowrap', marginLeft: 4 }}>{count} {count === 1 ? 'resultado' : 'resultados'}</span>
                   })()}
                 </div>
-                <select
+                <Select
                   className="trx-lang-select"
                   value={txLang}
-                  onChange={e => setTxLang(e.target.value)}
+                  onChange={setTxLang}
                   title="Idioma para transcripción"
-                >
-                  <option value="auto">🌐 Auto-detectar</option>
-                  <option value="es">🇪🇸 Español</option>
-                  <option value="en">🇬🇧 English</option>
-                  <option value="fr">🇫🇷 Français</option>
-                  <option value="de">🇩🇪 Deutsch</option>
-                  <option value="pt">🇵🇹 Português</option>
-                  <option value="it">🇮🇹 Italiano</option>
-                </select>
+                  options={[
+                    { value: 'auto', label: 'Auto-detectar' },
+                    { value: 'es', label: 'Español' },
+                    { value: 'en', label: 'English' },
+                    { value: 'fr', label: 'Français' },
+                    { value: 'de', label: 'Deutsch' },
+                    { value: 'pt', label: 'Português' },
+                    { value: 'it', label: 'Italiano' },
+                  ]}
+                />
                 {selectedInterview.recordingFilePath && (
                   <button
                     type="button"
@@ -2860,26 +3065,26 @@ function App() {
                     title={selectedInterview.transcriptEdited ? 'Volver a transcribir (sobreescribe la actual)' : 'Transcribir grabación'}
                   >
                     {selectedInterview.transcriptionStatus === 'transcribing'
-                      ? <><span className="spinner" /> Transcribiendo...</>
+                      ? <><span className="spinner" /> Transcribiendo…</>
                       : retranscribeConfirmId === selectedInterview.id
-                        ? '⚠ ¿Confirmar?'
-                        : selectedInterview.transcriptEdited ? '↺ Re-transcribir' : '▶ Transcribir'}
+                        ? <><WarnTriangle /> ¿Confirmar?</>
+                        : selectedInterview.transcriptEdited ? <><RefreshIcon size={12} /> Re-transcribir</> : <><PlayIcon size={11} /> Transcribir</>}
                   </button>
                 )}
                 <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar todo</button>
                 <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> Descargar .txt</button>
               </div>
-              {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso...</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
+              {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso…</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
               {selectedInterview.transcriptionStatus === 'error' && (
                 <div className="trx-error-card">
                   <div className="trx-error-accent" />
                   <div className="trx-error-body">
-                    <div className="trx-error-icon-wrap"><span className="trx-error-icon">⚠</span></div>
+                    <div className="trx-error-icon-wrap"><span className="trx-error-icon"><WarnTriangle size={36} /></span></div>
                     <h3 className="trx-error-title">Error al transcribir</h3>
                     <p className="trx-error-sub1">No se pudo completar la transcripción.</p>
                     <p className="trx-error-sub2">Verifica tu clave de {sttPreset?.label ?? 'transcripción'} o inténtalo de nuevo.</p>
-                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}>↺  Reintentar</button>
-                    <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}>← Volver a grabaciones</button>
+                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}><RefreshIcon /> Reintentar</button>
+                    <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}><ArrowLeftIcon /> Volver a grabaciones</button>
                   </div>
                 </div>
               )}
@@ -2888,7 +3093,7 @@ function App() {
                   <div className="trx-pending-state">
                     <div className="trx-pending-icon">⊙</div>
                     <p className="trx-pending-title">Esta grabación aún no ha sido transcrita</p>
-                    <p className="trx-pending-sub">Pulsa "Transcribir" en el panel izquierdo para procesarla con Whisper.</p>
+                    <p className="trx-pending-sub">Pulsa «Transcribir» en el panel izquierdo para procesarla con {sttPreset?.label ?? 'el motor configurado'}.</p>
                   </div>
                 ) : (
                   <textarea
@@ -2896,12 +3101,12 @@ function App() {
                     value={transcriptDraft}
                     onChange={e => setTranscriptDraft(e.target.value)}
                     onDoubleClick={e => handleTranscriptSeek(e.currentTarget, selectedInterview)}
-                    placeholder="La transcripción aparecerá aquí..."
+                    placeholder="La transcripción aparecerá aquí…"
                   />
                 )
               )}
               <div className="trx-footer">
-                <span className="trx-footer-info">✎ Haz clic para editar · Doble clic en un turno para escucharlo · {wordCount} palabras · {readingMin} min</span>
+                <span className="trx-footer-info"><PencilIcon size={12} /> Haz clic para editar · Doble clic en un turno para escucharlo · {wordCount} palabras · {readingMin} min</span>
                 <div className="trx-footer-actions">
                   <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
                   <button type="button" className="trx-footer-btn" onClick={() => { const orig = selectedInterview.transcriptOriginal; setTranscriptDraft(orig); updateInterview(selectedInterview.id, { transcriptEdited: orig, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción restaurada') }}>Restaurar original</button>
@@ -2964,33 +3169,98 @@ function App() {
             <>
               <div className="trx-toolbar">
                 {/* Enfoque: cambia de quién habla el informe y qué apartados cubre. */}
-                <select
+                <Select
                   className="sum-type-select"
                   value={selectedInterview.summaryContext ?? 'entrevista'}
-                  onChange={e => updateInterview(selectedInterview.id, { summaryContext: e.target.value as SummaryContext })}
-                >
-                  <option value="entrevista">Entrevista de selección ⌄</option>
-                  <option value="reunion">Reunión de negocio ⌄</option>
-                </select>
-                <select className={`sum-type-select${selectedInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`} value={selectedInterview.summaryType} onChange={e => updateInterview(selectedInterview.id, { summaryType: e.target.value as 'resumen' | 'listado' })}>
-                  <option value="resumen">Resumen descriptivo ⌄</option>
-                  <option value="listado">Listado por puntos ⌄</option>
-                </select>
-                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}>⎘ Copiar</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating'}>{selectedInterview.summaryText ? '↺ Regenerar' : '★ Generar'}</button>
+                  onChange={v => {
+                    const ctx = v as SummaryContext
+                    updateInterview(selectedInterview.id, { summaryContext: ctx })
+                    if (selectedInterview.transcriptionStatus === 'done') {
+                      void prepareSummaryNotes(selectedInterview.id, selectedInterview.transcriptEdited, ctx)
+                    }
+                  }}
+                  options={[
+                    { value: 'entrevista', label: 'Entrevista de selección' },
+                    { value: 'reunion', label: 'Reunión de negocio' },
+                  ]}
+                />
+                <Select
+                  className={`sum-type-select${selectedInterview.summaryType === 'resumen' ? ' sum-type-select--active' : ''}`}
+                  value={selectedInterview.summaryType}
+                  onChange={v => updateInterview(selectedInterview.id, { summaryType: v as 'resumen' | 'listado' })}
+                  options={[
+                    { value: 'resumen', label: 'Resumen descriptivo' },
+                    { value: 'listado', label: 'Listado por puntos' },
+                  ]}
+                />
+                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating' || preparingIds.includes(selectedInterview.id)}>{preparingIds.includes(selectedInterview.id) ? <><span className="spinner" /> Leyendo…</> : selectedInterview.summaryText ? <><RefreshIcon size={12} /> Regenerar</> : <><StarIcon size={12} /> Generar</>}</button>
               </div>
               {!llmReady && <p className="warning-note">Configura un motor de resumen en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
               {selectedInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
-              {selectedInterview.summaryStatus === 'generating' && <div className="spinner-row"><span className="spinner" /><span>Generando resumen...</span></div>}
+              {(preparingIds.includes(selectedInterview.id) || selectedInterview.summaryStatus === 'generating') && (() => {
+                const preparando = preparingIds.includes(selectedInterview.id)
+                // El progreso llega del proceso principal. Hasta el primer aviso
+                // (o si la entrevista que se está resumiendo no es la que se mira)
+                // se cae al spinner de siempre.
+                const p = summaryProgress?.interviewId === selectedInterview.id ? summaryProgress : null
+                if (!p) return <div className="spinner-row"><span className="spinner" /><span>{preparando ? 'Leyendo la conversación…' : 'Generando resumen…'}</span></div>
+                const pct = p.total > 0 ? Math.min(99, Math.round((p.hechas / p.total) * 100)) : 0
+                const espera = p.esperaHasta ? Math.max(0, Math.ceil((p.esperaHasta - Date.now()) / 1000)) : 0
+                return (
+                  <div className="sum-progress">
+                    <div className="sum-progress-head">
+                      <span className="spinner" />
+                      <span className="sum-progress-label">{p.etiqueta}</span>
+                      <span className="sum-progress-pct">{pct}%</span>
+                    </div>
+                    <div className="sum-progress-track">
+                      <div className="sum-progress-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="sum-progress-eta">
+                      {espera > 0
+                        ? <>Esperando cuota del proveedor · se reanuda en {espera}s</>
+                        : p.total > 1
+                          ? <>Paso {Math.min(p.hechas + 1, p.total)} de {p.total}{p.etaSec > 0 && <> · quedan {formatEta(p.etaSec)} aprox.</>}</>
+                          : <>La transcripción cabe en una sola petición: esto es cuestión de segundos</>}
+                    </p>
+                    {p.total > 4 && (
+                      <p className="sum-progress-note">
+                        {preparando
+                          ? <>Puedes cerrar esta pestaña o seguir a lo tuyo: esto corre por detrás. Cuando termine,
+                              el resumen se generará en segundos — y regenerarlo también.</>
+                          : <>Tarda porque el plan gratuito del motor de resumen limita cuánto texto admite por minuto,
+                              y una llamada larga no cabe de una vez. Se puede quitar cambiando de motor en Ajustes.</>}
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
+              {(() => {
+                // Notas listas y nada en marcha: merece la pena decirlo, porque
+                // cambia lo que el usuario espera al pulsar Generar.
+                if (preparingIds.includes(selectedInterview.id) || selectedInterview.summaryStatus === 'generating') return null
+                void notesReadyTick   // repinta cuando se guardan notas nuevas
+                const guardadas = getNotesCache()[selectedInterview.id]
+                const huella = huellaTranscripcion(selectedInterview.transcriptEdited, selectedInterview.summaryContext ?? 'entrevista')
+                if (guardadas?.huella !== huella) return null
+                return <p className="sum-ready-hint"><CheckIcon size={12} /> La conversación ya está leída, así que el resumen tarda unos segundos{guardadas.recortado ? <>. Fue tan larga que falta el tramo final.</> : <>.</>}</p>
+              })()}
               {selectedInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
               {(() => {
+                // En modo reunión los apartados son fijos (acuerdos, necesidades, objeciones,
+                // presupuesto) y los criterios del proyecto se ignoran a propósito: son de
+                // selección de personal. Pedirlos aquí solo confunde.
+                if ((selectedInterview.summaryContext ?? 'entrevista') === 'reunion') {
+                  return <p className="sum-criteria-hint">En una reunión de negocio los apartados son siempre estos: <strong>acuerdos y próximos pasos, necesidades del cliente, objeciones y riesgos, presupuesto y plazos</strong>. No hacen falta criterios.</p>
+                }
                 const cand = candidates.find(c => c.id === selectedInterview.candidateId)
                 const proj = cand ? projects.find(p => p.id === cand.projectId) : null
                 const crit = proj?.evaluationCriteria ?? []
                 const labels = crit.map(id => EVALUATION_CRITERIA.find(c => c.id === id)?.label).filter(Boolean)
                 return labels.length > 0
                   ? <p className="sum-criteria-hint">Criterios del proyecto: <strong>{labels.join(', ')}</strong></p>
-                  : <p className="sum-criteria-hint sum-criteria-hint--empty">Sin criterios definidos — configúralos en el proyecto para enfocar el resumen</p>
+                  : <p className="sum-criteria-hint sum-criteria-hint--empty">Este proyecto no tiene criterios. Si los defines, el resumen se centra en ellos.</p>
               })()}
               {selectedInterview.summaryText ? (
                 selectedInterview.summaryType === 'resumen' ? (
@@ -3012,7 +3282,7 @@ function App() {
               ) : (
                 selectedInterview.transcriptionStatus === 'done' && selectedInterview.summaryStatus !== 'generating' && (
                   <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady}>
-                    ★ Generar resumen con IA
+                    <StarIcon /> Generar resumen con IA
                   </button>
                 )
               )}
@@ -3045,14 +3315,17 @@ function App() {
         <p className="cfg-field-desc">{isStt ? 'Convierte el audio de la llamada en texto' : 'Redacta el informe a partir de la transcripción'}</p>
 
         <label className="modal-label">Servicio
-          <select className="modal-input modal-select" value={draft.provider} onChange={e => changeProvider(kind, e.target.value)}>
-            {presets.map(p => <option key={p.id} value={p.id}>{p.label}{p.note ? ` — ${p.note}` : ''}{p.unverified ? ' · sin probar' : ''}</option>)}
-          </select>
+          <Select
+            className="modal-input modal-select"
+            value={draft.provider}
+            onChange={v => changeProvider(kind, v)}
+            options={presets.map(p => ({ value: p.id, label: `${p.label}${p.note ? ` · ${p.note}` : ''}${p.unverified ? ' · sin probar' : ''}` }))}
+          />
         </label>
 
         {preset?.unverified && (
           <p className="warning-note cfg-unverified">
-            <strong>⚠ Sin probar.</strong> Este servicio está integrado pero todavía no se ha
+            <strong><WarnTriangle /> Sin probar.</strong> Este servicio está integrado pero todavía no se ha
             usado con {isStt ? 'audio' : 'una transcripción'} de verdad, así que puede fallar.
             Dale a <strong>Probar conexión</strong> aquí abajo y haz una prueba corta antes de
             usarlo en una entrevista importante.
@@ -3072,12 +3345,17 @@ function App() {
                 onChange={e => setDraft({ ...draft, baseUrl: e.target.value })} />
             </label>
             <label className="modal-label">Formato que habla
-              <select className="modal-input modal-select" value={draft.dialect ?? 'openai'} onChange={e => setDraft({ ...draft, dialect: e.target.value })}>
-                <option value="openai">Compatible con OpenAI (lo más habitual)</option>
-                {isStt
-                  ? <><option value="deepgram">Deepgram</option><option value="elevenlabs">ElevenLabs</option></>
-                  : <option value="anthropic">Anthropic</option>}
-              </select>
+              <Select
+                className="modal-input modal-select"
+                value={draft.dialect ?? 'openai'}
+                onChange={v => setDraft({ ...draft, dialect: v })}
+                options={[
+                  { value: 'openai', label: 'Compatible con OpenAI (lo más habitual)' },
+                  ...(isStt
+                    ? [{ value: 'deepgram', label: 'Deepgram' }, { value: 'elevenlabs', label: 'ElevenLabs' }]
+                    : [{ value: 'anthropic', label: 'Anthropic' }]),
+                ]}
+              />
             </label>
           </>
         )}
@@ -3111,7 +3389,7 @@ function App() {
             {test === 'testing' ? 'Probando…' : 'Probar conexión'}
           </button>
           {test && test !== 'testing' && (
-            <span className={test.ok ? 'cfg-test-ok' : 'cfg-test-fail'}>{test.ok ? '✓ ' : '✕ '}{test.detail}</span>
+            <span className={test.ok ? 'cfg-test-ok' : 'cfg-test-fail'}>{test.ok ? <CheckIcon size={12} /> : <CloseIcon size={12} />} {test.detail}</span>
           )}
         </div>
       </div>
@@ -3166,11 +3444,16 @@ function App() {
                 <div className="settings-section">
                   <div className="settings-section-label">CALIDAD DE GRABACIÓN</div>
                   <div className="settings-section-divider" />
-                  <select className="cfg-select" value={settingsRecordingQualityDraft} onChange={e => setSettingsRecordingQualityDraft(e.target.value)}>
-                    <option value="high">Alta (128 kbps)</option>
-                    <option value="medium">Media (64 kbps)</option>
-                    <option value="low">Baja (32 kbps)</option>
-                  </select>
+                  <Select
+                    className="cfg-select"
+                    value={settingsRecordingQualityDraft}
+                    onChange={setSettingsRecordingQualityDraft}
+                    options={[
+                      { value: 'high', label: 'Alta (128 kbps)' },
+                      { value: 'medium', label: 'Media (64 kbps)' },
+                      { value: 'low', label: 'Baja (32 kbps)' },
+                    ]}
+                  />
                 </div>
                 <div className="settings-section">
                   <div className="settings-section-label">VÍDEO</div>
@@ -3180,10 +3463,15 @@ function App() {
                     <button type="button" className={`toggle-btn${settingsRecordVideoDraft ? ' on' : ''}`} onClick={() => setSettingsRecordVideoDraft(t => !t)}><span className="toggle-circle" /></button>
                   </div>
                   <label className="modal-label" style={{ marginTop: 12 }}>Calidad de vídeo
-                    <select className="modal-input modal-select" value={settingsVideoQualityDraft} onChange={e => setSettingsVideoQualityDraft(e.target.value as '720p' | '1080p')}>
-                      <option value="1080p">1080p (Full HD)</option>
-                      <option value="720p">720p (HD)</option>
-                    </select>
+                    <Select
+                      className="modal-input modal-select"
+                      value={settingsVideoQualityDraft}
+                      onChange={v => setSettingsVideoQualityDraft(v as '720p' | '1080p')}
+                      options={[
+                        { value: '1080p', label: '1080p (Full HD)' },
+                        { value: '720p', label: '720p (HD)' },
+                      ]}
+                    />
                   </label>
                 </div>
                 <div className="settings-section">
@@ -3191,20 +3479,24 @@ function App() {
                   <div className="settings-section-divider" />
                   <p className="cfg-field-desc">Se usarán automáticamente al iniciar una grabación</p>
                   <label className="modal-label">Micrófono predeterminado (entrada)
-                    <select className="modal-input modal-select" value={settingsDefaultMicDraft} onChange={e => setSettingsDefaultMicDraft(e.target.value)}>
-                      {micDevices.length === 0
-                        ? <option value="">Sin dispositivos detectados</option>
-                        : micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
-                      }
-                    </select>
+                    <Select
+                      className="modal-input modal-select"
+                      value={settingsDefaultMicDraft}
+                      onChange={setSettingsDefaultMicDraft}
+                      options={micDevices.length === 0
+                        ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                        : micDevices.map(d => ({ value: d.id, label: d.name }))}
+                    />
                   </label>
                   <label className="modal-label" style={{ marginTop: 12 }}>Dispositivo de salida predeterminado
-                    <select className="modal-input modal-select" value={settingsDefaultOutputDraft} onChange={e => setSettingsDefaultOutputDraft(e.target.value)}>
-                      {outputDevices.length === 0
-                        ? <option value="">Sin dispositivos detectados</option>
-                        : outputDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
-                      }
-                    </select>
+                    <Select
+                      className="modal-input modal-select"
+                      value={settingsDefaultOutputDraft}
+                      onChange={setSettingsDefaultOutputDraft}
+                      options={outputDevices.length === 0
+                        ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                        : outputDevices.map(d => ({ value: d.id, label: d.name }))}
+                    />
                   </label>
                   <div className="toggle-row" style={{ marginTop: 12 }}>
                     <div><span className="toggle-label">Capturar audio del sistema</span><span className="notif-sub">Capturar también el audio que sale por los altavoces</span></div>
@@ -3243,11 +3535,16 @@ function App() {
                 <div className="settings-section">
                   <div className="settings-section-label">IDIOMA DE LA INTERFAZ</div>
                   <div className="settings-section-divider" />
-                  <select className="cfg-select" value={settingsLanguageDraft} onChange={e => setSettingsLanguageDraft(e.target.value)}>
-                    <option value="es">Español</option>
-                    <option value="en">English</option>
-                    <option value="fr">Français</option>
-                  </select>
+                  <Select
+                    className="cfg-select"
+                    value={settingsLanguageDraft}
+                    onChange={setSettingsLanguageDraft}
+                    options={[
+                      { value: 'es', label: 'Español' },
+                      { value: 'en', label: 'English' },
+                      { value: 'fr', label: 'Français' },
+                    ]}
+                  />
                 </div>
                 <div className="settings-section">
                   <div className="settings-section-label">GUARDADO AUTOMÁTICO</div>
@@ -3260,11 +3557,16 @@ function App() {
                 <div className="settings-section">
                   <div className="settings-section-label">FORMATO DE FECHA</div>
                   <div className="settings-section-divider" />
-                  <select className="cfg-select" value={settingsDateFormatDraft} onChange={e => setSettingsDateFormatDraft(e.target.value)}>
-                    <option value="DD/MM/YYYY">DD/MM/YYYY</option>
-                    <option value="MM/DD/YYYY">MM/DD/YYYY</option>
-                    <option value="YYYY-MM-DD">YYYY-MM-DD</option>
-                  </select>
+                  <Select
+                    className="cfg-select"
+                    value={settingsDateFormatDraft}
+                    onChange={setSettingsDateFormatDraft}
+                    options={[
+                      { value: 'DD/MM/YYYY', label: 'DD/MM/YYYY' },
+                      { value: 'MM/DD/YYYY', label: 'MM/DD/YYYY' },
+                      { value: 'YYYY-MM-DD', label: 'YYYY-MM-DD' },
+                    ]}
+                  />
                 </div>
                 <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
               </div>
@@ -3304,8 +3606,10 @@ function App() {
                   <div className="prof-avatar-info">
                     <p className="prof-avatar-name">{userName || 'Sin nombre'}</p>
                     <p className="prof-avatar-email">{userEmail || 'Sin email'}</p>
-                    <button type="button" className="prof-avatar-link" onClick={() => photoInputRef.current?.click()}>Cambiar foto →</button>
-                    {userPhoto && <button type="button" className="prof-avatar-remove" onClick={() => { setUserPhoto(''); localStorage.removeItem('ct-user-photo') }}>Eliminar foto</button>}
+                    <div className="prof-avatar-actions">
+                      <button type="button" className="secondary-btn pill-btn prof-photo-btn" onClick={() => photoInputRef.current?.click()}><CameraIcon /> Cambiar foto</button>
+                      {userPhoto && <button type="button" className="secondary-btn pill-btn prof-photo-btn prof-photo-btn--danger" onClick={() => { setUserPhoto(''); localStorage.removeItem('ct-user-photo') }}><TrashIcon /> Eliminar</button>}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3325,7 +3629,7 @@ function App() {
           {profileScreenTab === 'plan' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">Plan & Uso</h2>
+                <h2 className="panel-title">Plan y uso</h2>
                 <p className="panel-subtitle">Tu plan actual y estadísticas de uso</p>
               </div>
               <div className="panel-header-divider" />
@@ -3451,7 +3755,7 @@ function App() {
           <input
             type="text"
             className="modal-input modal-input--figma criteria-otros-input"
-            placeholder="Describe el criterio personalizado..."
+            placeholder="Describe el criterio personalizado…"
             value={otrosText}
             onChange={e => onChange([
               ...criteria.filter(x => !x.startsWith('otros:')),
@@ -3461,6 +3765,111 @@ function App() {
           />
         )}
       </>
+    )
+  }
+
+  // ── Caja "Compartir con" del modal de proyecto ─────────────────────────
+  // Solo el dueño reparte accesos. Al invitado se le enseña un aviso en vez de
+  // esconderle la sección sin explicación: así entiende por qué no puede tocar
+  // el nombre ni los criterios de una carpeta que sí ve.
+  const renderShareEditor = () => {
+    const proyecto = projects.find(p => p.id === editingProjectId)
+    if (!proyecto) return null
+
+    if (!esMiProyecto(proyecto)) {
+      const mia = comparticionesDe(proyecto.id).find(sh => sh.sharedWithId === session?.user.id)
+      return (
+        <div className="modal-field">
+          <div className="readonly-note">
+            Esta carpeta te la ha compartido {mia?.ownerName || 'un compañero'}. Puedes ver y trabajar
+            dentro (transcribir, resumir, editar textos), pero el nombre, los criterios y los accesos
+            solo los cambia quien la creó.
+          </div>
+        </div>
+      )
+    }
+
+    // Sin cuenta no hay a quién compartir: los datos viven solo en este equipo.
+    if (!session || !isSupabaseConfigured) {
+      return (
+        <div className="modal-field">
+          <span className="modal-field-label">Compartir con</span>
+          <div className="readonly-note">
+            Para compartir una carpeta hay que entrar con una cuenta: es lo que permite que los datos
+            viajen a la nube y tu compañero pueda verlos desde su equipo.
+          </div>
+        </div>
+      )
+    }
+
+    const lista = comparticionesDe(proyecto.id)
+    return (
+      <div className="modal-field">
+        <span className="modal-field-label">Compartir con</span>
+        <p className="modal-field-hint">
+          Escribe el correo de tu compañero. Tiene que tener ya una cuenta de Call Transcriber
+          creada con ese mismo correo.
+        </p>
+        <div className="share-box">
+          <div className="share-search">
+            <input
+              type="email"
+              className="modal-input modal-input--figma share-search-input"
+              placeholder="correo@empresa.com"
+              value={shareEmailDraft}
+              onChange={e => { setShareEmailDraft(e.target.value); setShareError(''); setShareEncontrado(null) }}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleBuscarCompanero() } }}
+            />
+            <button
+              type="button"
+              className="share-search-btn"
+              onClick={() => void handleBuscarCompanero()}
+              disabled={shareBuscando || !shareEmailDraft.trim()}
+            >
+              {shareBuscando ? 'Buscando…' : 'Buscar'}
+            </button>
+          </div>
+
+          {shareError && <p className="share-error">{shareError}</p>}
+
+          {shareEncontrado && (
+            <div className="share-found">
+              <div className="share-found-info">
+                <span className="share-found-name">{shareEncontrado.name}</span>
+                <span className="share-found-email">{shareEncontrado.email}</span>
+              </div>
+              <button type="button" className="share-found-add" onClick={() => void handleDarAcceso()}>Dar acceso</button>
+            </div>
+          )}
+
+          <div className="share-list">
+            {lista.length === 0
+              ? <span className="share-empty">Todavía no lo has compartido con nadie</span>
+              : lista.map(sh => (
+                  <div key={sh.id} className="share-chip">
+                    <span className="share-chip-avatar" style={{ background: avatarColor(sh.sharedWithId) }}>
+                      {(sh.sharedWithName[0] ?? '?').toUpperCase()}
+                    </span>
+                    <div className="share-chip-info">
+                      <span className="share-chip-name">{sh.sharedWithName}</span>
+                      <span className="share-chip-email">{sh.sharedWithEmail}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="share-chip-remove"
+                      title={`Quitar el acceso a ${sh.sharedWithName}`}
+                      onClick={() => void handleQuitarAcceso(sh)}
+                    ><CloseIcon size={13} /></button>
+                  </div>
+                ))
+            }
+          </div>
+          <p className="share-hint">
+            Verán las transcripciones y los resúmenes al instante. El audio solo si está subido a la
+            nube (el distintivo <CloudIcon size={12} /> de cada grabación); el vídeo nunca sale de este equipo.
+          </p>
+        </div>
+      </div>
     )
   }
 
@@ -3481,7 +3890,7 @@ function App() {
             ? interviewersList.map(name => (
                 <span key={name} className="interviewer-chip">
                   {name}
-                  <button type="button" className="chip-remove-btn" title="Quitar" onClick={() => onChange(interviewersList.filter(n => n !== name))}>✕</button>
+                  <button type="button" className="chip-remove-btn" title="Quitar" onClick={() => onChange(interviewersList.filter(n => n !== name))}><CloseIcon size={13} /></button>
                 </span>
               ))
             : <span className="interviewer-chip interviewer-chip--empty">Sin entrevistadores todavía</span>
@@ -3491,7 +3900,7 @@ function App() {
           <input
             type="text"
             className="modal-input modal-input--figma"
-            placeholder="Nombre del entrevistador..."
+            placeholder="Nombre del entrevistador…"
             value={newInterviewerDraft}
             onChange={e => setNewInterviewerDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addInterviewer() } }}
@@ -3512,14 +3921,14 @@ function App() {
           <div className="rec-pip">
             <div className="rec-pip-video-wrap">
               <video ref={pipVideoRef} className="rec-pip-video" autoPlay muted playsInline />
-              <span className="rec-pip-live-badge">● EN VIVO</span>
+              <span className="rec-pip-live-badge"><DotFilled /> EN VIVO</span>
             </div>
             <span className="rec-pip-caption"><VideoIcon size={13} /> Grabando ventana: {captureWindowLabel}</span>
           </div>
         )}
         <div className="rec-screen-content">
           <div className={`rec-badge${isRecording ? '' : ' rec-badge--paused'}`}>
-            {isRecording ? '● EN GRABACIÓN' : '‖ EN PAUSA'}
+            {isRecording ? <><DotFilled /> EN GRABACIÓN</> : <><PauseIconSm size={11} /> EN PAUSA</>}
           </div>
           <div className="rec-screen-timer">{fmt(activeRecordingInterview.durationSec)}</div>
           {contextLabel && <p className="rec-screen-context">{contextLabel}</p>}
@@ -3538,9 +3947,9 @@ function App() {
             </div>
             <div className="rec-screen-btn-wrap">
               {isRecording ? (
-                <button type="button" className="rec-pause-btn" onClick={handlePauseRecording}>‖</button>
+                <button type="button" className="rec-pause-btn" onClick={handlePauseRecording}><PauseIconSm size={13} /></button>
               ) : (
-                <button type="button" className="rec-pause-btn" onClick={handleResumeRecording}>▶</button>
+                <button type="button" className="rec-pause-btn" onClick={handleResumeRecording}><PlayIcon size={13} /></button>
               )}
               <span className="rec-btn-label">{isRecording ? 'Pausar' : 'Reanudar'}</span>
             </div>
@@ -3555,14 +3964,14 @@ function App() {
     const cand = candidates.find(c => c.id === transcribingInterview.candidateId)
     const step = (label: string, active: boolean, done: boolean) => (
       <div className={`proc-step${active ? ' active' : done ? ' done' : ''}`}>
-        <span className="proc-step-icon">{done ? '✓' : active ? <span className="spinner" /> : '○'}</span>
+        <span className="proc-step-icon">{done ? <CheckIcon size={13} /> : active ? <span className="spinner" /> : <CircleIcon size={13} />}</span>
         <span>{label}</span>
       </div>
     )
     return (
       <div className="modal-overlay">
         <div className="modal-box proc-modal">
-          <h2>Procesando grabación...</h2>
+          <h2>Procesando grabación…</h2>
           <p>Esto puede tardar unos segundos</p>
           {cand && <p className="proc-candidate">{cand.name} — {transcribingInterview.sessionName || fd(transcribingInterview.createdAt)}</p>}
           <div className="proc-steps">
@@ -3613,10 +4022,10 @@ function App() {
       }
     }
 
-    const options: { key: 'pdf' | 'txt' | 'clipboard'; icon: string; title: string; desc: string }[] = [
-      { key: 'pdf', icon: '≡', title: 'PDF', desc: 'Documento con diseño y formato' },
-      { key: 'txt', icon: '✎', title: 'Texto plano (.txt)', desc: 'Sin formato, solo texto' },
-      { key: 'clipboard', icon: '⎘', title: 'Copiar al portapapeles', desc: 'Copia el texto al clipboard' },
+    const options: { key: 'pdf' | 'txt' | 'clipboard'; icon: ReactNode; title: string; desc: string }[] = [
+      { key: 'pdf', icon: <DocIcon />, title: 'PDF', desc: 'Documento con diseño y formato' },
+      { key: 'txt', icon: <PencilIcon />, title: 'Texto plano (.txt)', desc: 'Sin formato, solo texto' },
+      { key: 'clipboard', icon: <ClipboardIcon />, title: 'Copiar al portapapeles', desc: 'Copia el texto al clipboard' },
     ]
 
     return (
@@ -3627,7 +4036,7 @@ function App() {
               <h2 className="modal-title">Exportar transcripción</h2>
               <p className="modal-subtitle">Selecciona el formato de exportación</p>
             </div>
-            <button type="button" className="modal-close" onClick={() => setShowExport(false)}>✕</button>
+            <button type="button" className="modal-close" onClick={() => setShowExport(false)}><CloseIcon size={13} /></button>
           </div>
           <div className="modal-header-divider" />
           <div className="exp-options">
@@ -3644,7 +4053,7 @@ function App() {
           <div className="modal-footer-divider" />
           <div className="modal-actions modal-actions--figma">
             <button type="button" className="modal-cancel-btn" onClick={() => setShowExport(false)}>Cancelar</button>
-            <button type="button" className="modal-action-btn" onClick={() => void handleExport()}>Exportar →</button>
+            <button type="button" className="modal-action-btn" onClick={() => void handleExport()}>Exportar <ArrowRightIcon /></button>
           </div>
         </div>
       </div>
@@ -3657,7 +4066,7 @@ function App() {
     <div className="auth-root">
       <div className="auth-card" style={{ alignItems: 'center', gap: 16 }}>
         <span className="spinner" style={{ width: 28, height: 28 }} />
-        <p style={{ color: 'var(--text-muted)', margin: 0 }}>Iniciando...</p>
+        <p style={{ color: 'var(--text-muted)', margin: 0 }}>Iniciando…</p>
       </div>
     </div>
   )
@@ -3705,7 +4114,7 @@ function App() {
           <button type="button" className="update-banner__btn" onClick={() => void window.desktopApp?.openReleasesPage?.()}>
             Descargar
           </button>
-          <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar">✕</button>
+          <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar"><CloseIcon size={13} /></button>
         </div>
       )}
       {/* Global top bar */}
@@ -3730,16 +4139,16 @@ function App() {
         {screen === 'candidate-detail' && activeProject ? (
           <aside className="sidebar sidebar--cands">
             <div className="csb-header">
-              <button type="button" className="csb-back" onClick={() => setScreen('project-detail')}><ChevronLeft /></button>
-              <span className="csb-project-name">{activeProject.name}</span>
+              <button type="button" className="csb-back" onClick={() => setScreen(candidateFrom === 'all' ? 'candidates' : 'project-detail')}><ChevronLeft /></button>
+              <span className="csb-project-name">{candidateFrom === 'all' ? 'Perfiles' : activeProject.name}</span>
             </div>
             <div className="csb-list">
-              {projectCandidates.map(c => (
-                <button key={c.id} type="button" className={`csb-item${c.id === activeCandidateId ? ' is-active' : ''}`} onClick={() => goToCandidate(c.id, activeProject.id)}>
+              {(candidateFrom === 'all' ? sidebarAllCandidates : projectCandidates).map(c => (
+                <button key={c.id} type="button" className={`csb-item${c.id === activeCandidateId ? ' is-active' : ''}`} onClick={() => goToCandidate(c.id, c.projectId, candidateFrom)}>
                   <div className="csb-avatar" style={{ background: avatarColor(c.id) }}>{initials(c.name)}</div>
                   <div className="csb-info">
                     <span className="csb-name">{c.name}</span>
-                    <span className="csb-role">{c.role || '—'}</span>
+                    {c.role && <span className="csb-role">{c.role}</span>}
                   </div>
                 </button>
               ))}
@@ -3808,10 +4217,10 @@ function App() {
             <div><p className="pp-name">{userName || 'Usuario'}</p><p className="pp-email">{userEmail}</p></div>
           </div>
           <div className="pp-divider" />
-          <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi perfil</button>
+          <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi Perfil</button>
           <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> Configuración</button>
           <div className="pp-divider" />
-          <button type="button" className="pp-item pp-item--danger" onClick={() => { setShowProfilePopup(false); void handleSignOut() }}>→ Cerrar sesión</button>
+          <button type="button" className="pp-item pp-item--danger" onClick={() => { setShowProfilePopup(false); void handleSignOut() }}><LogoutIcon /> Cerrar sesión</button>
         </div>
       )}
 
@@ -3821,13 +4230,13 @@ function App() {
           <div className="modal-box onboarding-box" onClick={e => e.stopPropagation()}>
             <div className="onboarding-logo"><div className="sidebar-logo-badge" style={{ width: 48, height: 48, fontSize: 18 }}>CT</div></div>
             <h2 style={{ textAlign: 'center', margin: 0 }}>Bienvenido a Call Transcriber</h2>
-            <p style={{ textAlign: 'center', margin: 0 }}>Para transcribir necesitas conectar un servicio de IA. Groq es gratuito y no pide tarjeta — pero puedes usar el que prefieras.</p>
+            <p style={{ textAlign: 'center', margin: 0 }}>Para transcribir hace falta conectar un servicio de IA. Groq es gratis y no pide tarjeta, pero puedes usar el que quieras.</p>
             <label className="modal-label">Tu API Key de Groq
               <input type="password" className="modal-input" value={onboardingKeyDraft} onChange={e => setOnboardingKeyDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && onboardingKeyDraft.trim()) void handleOnboardingSave() }} placeholder="gsk_..." autoFocus />
             </label>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>¿Cómo obtengo mi clave? → <a href="https://console.groq.com" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>console.groq.com</a></p>
             <div className="modal-actions" style={{ justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
-              <button type="button" className="primary-btn" style={{ width: '100%', padding: '12px' }} onClick={() => void handleOnboardingSave()} disabled={!onboardingKeyDraft.trim()}>Empezar a grabar →</button>
+              <button type="button" className="primary-btn" style={{ width: '100%', padding: '12px' }} onClick={() => void handleOnboardingSave()} disabled={!onboardingKeyDraft.trim()}>Empezar a grabar <ArrowRightIcon /></button>
               <button type="button" style={{ border: 'none', background: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }} onClick={skipOnboardingToSettings}>Ya uso otro servicio → configurarlo</button>
               <button type="button" style={{ border: 'none', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }} onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_KEY, '1') }}>Configurar más tarde</button>
             </div>
@@ -3846,10 +4255,12 @@ function App() {
                 cambiar luego desde la lista de grabaciones. */}
             {sessionModalProject && sessionModalProject.interviewers.length > 0 && (
               <label className="modal-label">Entrevistador
-                <select className="modal-input" value={sessionInterviewerDraft} onChange={e => setSessionInterviewerDraft(e.target.value)}>
-                  <option value="">Sin asignar</option>
-                  {sessionModalProject.interviewers.map(name => <option key={name} value={name}>{name}</option>)}
-                </select>
+                <Select
+                  className="modal-input"
+                  value={sessionInterviewerDraft}
+                  onChange={setSessionInterviewerDraft}
+                  options={[{ value: '', label: 'Sin asignar' }, ...sessionModalProject.interviewers.map(name => ({ value: name, label: name }))]}
+                />
               </label>
             )}
             <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>Si lo dejas en blanco se usará la fecha y hora como nombre.</p>
@@ -3878,7 +4289,7 @@ function App() {
                 <h2 className="modal-title">{editingCandidateId ? 'Editar perfil' : 'Nuevo perfil'}</h2>
                 <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -3901,16 +4312,21 @@ function App() {
             </div>
             <div className="modal-field">
               <span className="modal-field-label">Notas previas (opcional)</span>
-              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder="Puntos a tratar, perfil del CV, observaciones..." rows={3} />
+              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder="Puntos a tratar, perfil del CV, observaciones…" rows={3} />
             </div>
             <div className="modal-field">
               <span className="modal-field-label">Estado</span>
-              <select className="modal-input modal-input--figma modal-select" value={candidateStatusDraft} onChange={e => setCandidateStatusDraft(e.target.value as Candidate['candidateStatus'])}>
-                <option value="pendiente">⬜ Pendiente</option>
-                <option value="apto">✅ Apto</option>
-                <option value="finalista">⭐ Finalista</option>
-                <option value="descartado">❌ Descartado</option>
-              </select>
+              <Select
+                className="modal-input modal-input--figma modal-select"
+                value={candidateStatusDraft}
+                onChange={v => setCandidateStatusDraft(v as Candidate['candidateStatus'])}
+                options={[
+                  { value: 'pendiente', label: 'Pendiente' },
+                  { value: 'apto', label: 'Apto' },
+                  { value: 'finalista', label: 'Finalista' },
+                  { value: 'descartado', label: 'Descartado' },
+                ]}
+              />
             </div>
             <div className="modal-field">
               <label className="consent-check">
@@ -3936,7 +4352,7 @@ function App() {
                 <h2 className="modal-title">Nueva grabación</h2>
                 <p className="modal-subtitle">Elige qué quieres grabar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => setShowAudioSetupModal(false)}>✕</button>
+              <button type="button" className="modal-close" onClick={() => setShowAudioSetupModal(false)}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="rec-option-cards">
@@ -3964,29 +4380,25 @@ function App() {
             )}
             <div className="modal-field" style={{ marginTop: 16 }}>
               <span className="modal-field-label">Micrófono</span>
-              <select
+              <Select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingMicId}
-                onChange={e => setPendingMicId(e.target.value)}
-              >
-                {micDevices.length === 0
-                  ? <option value="">Sin dispositivos detectados</option>
-                  : micDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
-                }
-              </select>
+                onChange={setPendingMicId}
+                options={micDevices.length === 0
+                  ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                  : micDevices.map(d => ({ value: d.id, label: d.name }))}
+              />
             </div>
             <div className="modal-field" style={{ marginTop: 12 }}>
               <span className="modal-field-label">Altavoces / audio de la llamada</span>
-              <select
+              <Select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingOutputId}
-                onChange={e => setPendingOutputId(e.target.value)}
-              >
-                {outputDevices.length === 0
-                  ? <option value="">Sin dispositivos detectados</option>
-                  : outputDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
-                }
-              </select>
+                onChange={setPendingOutputId}
+                options={outputDevices.length === 0
+                  ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                  : outputDevices.map(d => ({ value: d.id, label: d.name }))}
+              />
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
@@ -4006,7 +4418,7 @@ function App() {
                 <h2 className="modal-title">Elige qué compartir</h2>
                 <p className="modal-subtitle">Selecciona la ventana o pantalla que quieres grabar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => pickCaptureSource(null)}>✕</button>
+              <button type="button" className="modal-close" onClick={() => pickCaptureSource(null)}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="source-picker-tabs">
@@ -4022,7 +4434,7 @@ function App() {
                   {filtered.map(s => (
                     <button key={s.id} type="button" className="source-picker-item" onClick={() => pickCaptureSource(s.id)}>
                       <span className="source-picker-thumb">
-                        {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback">🖥️</span>}
+                        {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback"><MonitorIcon size={28} /></span>}
                       </span>
                       <span className="source-picker-name">{s.name || 'Sin nombre'}</span>
                     </button>
@@ -4047,7 +4459,7 @@ function App() {
                 <h2 className="modal-title">Nuevo proyecto</h2>
                 <p className="modal-subtitle">Define el proceso de selección que vas a gestionar</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -4061,7 +4473,17 @@ function App() {
               </div>
               <div className="modal-field">
                 <span className="modal-field-label">Tipo de proceso</span>
-                <select className="modal-input modal-input--figma modal-select"><option value="">Seleccionar tipo...</option><option>Selección directa</option><option>ETT</option><option>Headhunting</option></select>
+                <Select
+                  className="modal-input modal-input--figma modal-select"
+                  value={projectTypeDraft}
+                  onChange={setProjectTypeDraft}
+                  placeholder="Seleccionar tipo…"
+                  options={[
+                    { value: 'directa', label: 'Selección directa' },
+                    { value: 'ett', label: 'ETT' },
+                    { value: 'headhunting', label: 'Headhunting' },
+                  ]}
+                />
               </div>
             </div>
             <div className="modal-field">
@@ -4091,14 +4513,14 @@ function App() {
 
       {/* Edit project modal */}
       {showEditProject && (
-        <div className="modal-overlay" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>
+        <div className="modal-overlay" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}>
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2 className="modal-title">Editar proyecto</h2>
                 <p className="modal-subtitle">Modifica los datos y criterios del proyecto</p>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>✕</button>
+              <button type="button" className="modal-close" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
@@ -4112,10 +4534,15 @@ function App() {
               </div>
               <div className="modal-field">
                 <span className="modal-field-label">Estado</span>
-                <select className="modal-input modal-input--figma modal-select" value={projectDraft.status} onChange={e => setProjectDraft(d => ({ ...d, status: e.target.value as 'active' | 'closed' }))}>
-                  <option value="active">Activo</option>
-                  <option value="closed">Cerrado</option>
-                </select>
+                <Select
+                  className="modal-input modal-input--figma modal-select"
+                  value={projectDraft.status}
+                  onChange={v => setProjectDraft(d => ({ ...d, status: v as 'active' | 'closed' }))}
+                  options={[
+                    { value: 'active', label: 'Activo' },
+                    { value: 'closed', label: 'Cerrado' },
+                  ]}
+                />
               </div>
             </div>
             <div className="modal-field">
@@ -4134,9 +4561,10 @@ function App() {
                 updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
               )}
             </div>
+            {renderShareEditor()}
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT) }}>Cancelar</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}>Cancelar</button>
               <button type="button" className="modal-action-btn" onClick={handleSaveEditProject} disabled={!projectDraft.name.trim()}>Guardar cambios</button>
             </div>
           </div>
@@ -4157,7 +4585,7 @@ function App() {
       {/* Toasts */}
       <div className="toast-container">
         {toasts.map(t => {
-          const icons: Record<Toast['type'], string> = { success: '✓', error: '✕', info: '⎘', warning: '⚠' }
+          const icons: Record<Toast['type'], ReactNode> = { success: <CheckIcon size={16} />, error: <CloseIcon size={16} />, info: <InfoIcon size={16} />, warning: <WarnTriangle size={16} /> }
           return (
             <div key={t.id} className={`toast toast--${t.type}`}>
               <div className="toast-accent" />
@@ -4166,7 +4594,7 @@ function App() {
                 <span className="toast-title">{t.message}</span>
                 {t.sub && <span className="toast-sub">{t.sub}</span>}
               </div>
-              <button type="button" className="toast-close" onClick={() => setToasts(x => x.filter(x2 => x2.id !== t.id))}>✕</button>
+              <button type="button" className="toast-close" onClick={() => setToasts(x => x.filter(x2 => x2.id !== t.id))}><CloseIcon size={13} /></button>
             </div>
           )
         })}

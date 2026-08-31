@@ -1011,7 +1011,7 @@ function splitLongLine(line, maxChars) {
 
 /** El límite es por MINUTO, así que tras gastar cuota no queda otra que esperar a
  *  que la ventana se libere. Mejor esperar que comerse un 429. */
-function makePacer(tokensPerMinute) {
+function makePacer(tokensPerMinute, onWait = () => {}) {
   let spent = []
   return async (tokens) => {
     for (;;) {
@@ -1021,7 +1021,11 @@ function makePacer(tokensPerMinute) {
       if (!spent.length || used + tokens <= tokensPerMinute) break
       const wait = 60000 - (now - spent[0].at) + 1000
       log.info(`[resumen] cuota del minuto agotada, esperando ${Math.round(wait / 1000)}s`)
+      // Estas esperas son la mayor parte del tiempo de un resumen largo. Quien
+      // mira la pantalla tiene derecho a saber que se está esperando, no fallando.
+      onWait(wait)
       await new Promise((r) => setTimeout(r, wait))
+      onWait(0)
     }
     spent.push({ at: Date.now(), tokens })
   }
@@ -1065,16 +1069,13 @@ async function notesForChunk(chunk, llm, { system, label, pace, depth = 0 }) {
   return partes.join('\n')
 }
 
-/** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
- *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada.
- *
- *  A partir del segundo pase lo que entra ya son notas, no conversación. Pedir
- *  otra vez "copia todo lo concreto" sobre algo que ya es todo concreto no
- *  comprime nada — el material se estanca y se gastan pases (y minutos de cuota)
- *  para nada. En esa segunda vuelta se pide fusionar en vez de copiar. */
-async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag, pase = 1 }) {
+/** El prompt de las notas. Vive aparte porque lo necesitan dos: quien extrae las
+ *  notas de verdad y quien calcula de antemano cuántas peticiones va a costar el
+ *  resumen. Su tamaño entra en la cuenta del fragmento, así que si los dos no
+ *  usan el mismo texto, la barra de progreso promete un total que no se cumple. */
+function notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }) {
   const encuentro = isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'
-  const system = pase > 1
+  return pase > 1
     ? `Recibes un BLOQUE de notas ya extraídas de una ${encuentro}, en viñetas y en orden cronológico.\n` +
       'Devuélvelas agrupadas y compactadas, en la mitad de viñetas o menos.\n' +
       'REGLAS:\n' +
@@ -1096,23 +1097,59 @@ async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, c
       '- Omite la charla intrascendente (saludos, cortesías, problemas de conexión).\n' +
       '- Si el fragmento empieza o termina a media frase, no la completes.\n' +
       'Responde en español y solo con las viñetas.'
+}
 
-  // Dos topes, y manda el menor: lo que cabe en la petición y lo que cabe de
-  // vuelta en las notas. La segunda vuelta pide fusionar a la mitad, así que
-  // admite el doble de texto de entrada por la misma salida.
+/** Tamaño de fragmento para un pase. Dos topes, y manda el menor: lo que cabe en
+ *  la petición y lo que cabe de vuelta en las notas. La segunda vuelta pide
+ *  fusionar a la mitad, así que admite el doble de texto por la misma salida. */
+function chunkTokensFor(pase, budget, systemTokens) {
   const compresion = pase > 1 ? 0.5 : NOTES_COMPRESSION
-  const cabeEnLaPeticion = budget - estimateTokens(system) - NOTES_MAX_TOKENS - 100
+  const cabeEnLaPeticion = budget - systemTokens - NOTES_MAX_TOKENS - 100
   const cabenSusNotas = Math.floor(NOTES_MAX_TOKENS / compresion)
-  const chunkTokens = Math.max(600, Math.min(cabeEnLaPeticion, cabenSusNotas))
-  const chunks = splitTranscript(text, chunkTokens)
+  return Math.max(600, Math.min(cabeEnLaPeticion, cabenSusNotas))
+}
+
+/** Cuántas peticiones al modelo va a costar el resumen. Repite la aritmética del
+ *  bucle de pases sin llamar a nadie, solo para poder pintar una barra que avance.
+ *
+ *  No es exacta y no puede serlo: un fragmento que el proveedor rechace se parte
+ *  y cuesta más de una petición, y el modelo puede comprimir mejor o peor de lo
+ *  previsto. Da el orden de magnitud, que es lo que hace falta para una espera
+ *  de minutos; el total se corrige sobre la marcha si se queda corto. */
+function planSummaryRequests(text, { budget, fixedCost, isMeeting, ivTag, cdTag }) {
+  let material = estimateTokens(text)
+  let peticiones = 0
+  for (let pase = 1; pase <= 3; pase++) {
+    const systemTokens = estimateTokens(notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }))
+    peticiones += Math.max(1, Math.ceil(material / chunkTokensFor(pase, budget, systemTokens)))
+    const antes = material
+    material = Math.round(material * (pase > 1 ? 0.5 : NOTES_COMPRESSION))
+    if (fixedCost + material <= budget) break
+    if (pase === 3 || material > antes * 0.9) break
+  }
+  return peticiones + 1   // + la petición que redacta el informe
+}
+
+/** Convierte la transcripción en una lista de hechos literales, trozo a trozo.
+ *  Es un paso de compresión, NO de redacción: aquí no se interpreta nada.
+ *
+ *  A partir del segundo pase lo que entra ya son notas, no conversación. Pedir
+ *  otra vez "copia todo lo concreto" sobre algo que ya es todo concreto no
+ *  comprime nada — el material se estanca y se gastan pases (y minutos de cuota)
+ *  para nada. En esa segunda vuelta se pide fusionar en vez de copiar. */
+async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag, pase = 1, onChunk = () => {}, onChunkDone = () => {} }) {
+  const system = notesSystemPrompt(pase, { isMeeting, ivTag, cdTag })
+  const chunks = splitTranscript(text, chunkTokensFor(pase, budget, estimateTokens(system)))
   const que = pase > 1 ? 'Bloque' : 'Fragmento'
   log.info(`[resumen] pase ${pase}: ${chunks.length} ${que.toLowerCase()}(s) de ${text.length} caracteres`)
 
   const notes = []
   for (let i = 0; i < chunks.length; i++) {
+    onChunk({ pase, indice: i + 1, total: chunks.length })
     notes.push(await notesForChunk(chunks[i], llm, {
       system, pace, label: `${que} ${i + 1} de ${chunks.length}`,
     }))
+    onChunkDone()
   }
   return notes.filter(Boolean).join('\n')
 }
@@ -1130,7 +1167,22 @@ const CRITERIA_LABELS = {
   adecuacion:     'Adecuación al puesto',
 }
 
-ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summaryType, summaryContext, candidateName, interviewerName }) => {
+// Un trabajo de resumen cada vez. La cuota por minuto es GLOBAL a la clave del
+// proveedor, asi que dos resumenes en paralelo no van al doble de velocidad: van
+// los dos a 429. Encolarlos cuesta lo mismo y termina antes.
+let colaResumen = Promise.resolve()
+function enColaDeResumen(fn) {
+  const turno = colaResumen.then(fn, fn)
+  colaResumen = turno.then(() => {}, () => {})
+  return turno
+}
+
+const errorSinNotas = () => new Error(
+  'No se pudo condensar la transcripción: el modelo de resumen no devolvió notas de ningún fragmento. ' +
+  'Prueba con otro modelo en Ajustes → Motores de IA.'
+)
+
+async function runSummary(event, { transcript, criteria, summaryType, summaryContext, candidateName, interviewerName, interviewId, soloPreparar = false, notasPreparadas = null }) {
   const config = await readConfig()
   const llm = providers.resolveLlm(config)
   if (llm.needsKey && !llm.apiKey) {
@@ -1269,10 +1321,83 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // Se aparta un margen del límite por minuto: la cuenta de tokens del proveedor
   // no tiene por qué coincidir con nuestra estimación.
   const budget = Math.max(2000, llm.tpm - 200)
-  const fixedCost = estimateTokens(systemPrompt) + SUMMARY_MAX_TOKENS
+  // Al preparar por adelantado no se sabe con que formato se pedira el informe
+  // luego. Medido: el prompt mas largo (descriptivo con criterios) ocupa 105
+  // tokens mas que el mas corto (listado). Se condensa contra el peor caso para
+  // que las mismas notas sirvan para cualquier formato sin recortar nada: es lo
+  // que hace que cambiar de formato y regenerar cueste segundos y no minutos.
+  const MARGEN_FORMATO = 150
+  const fixedCost = estimateTokens(systemPrompt) + SUMMARY_MAX_TOKENS + (soloPreparar ? MARGEN_FORMATO : 0)
+
+  // -- Progreso hacia la pantalla ---------------------------------------------
+  //
+  // Un resumen largo son varios minutos que casi enteros se van en esperar cuota.
+  // Con un spinner quieto eso es indistinguible de un cuelgue, y quien mira acaba
+  // cerrando la app a los dos minutos creyendo que se ha roto. Se cuenta por
+  // PETICIONES al modelo, que es la unidad real de trabajo y de espera.
+  const t0 = Date.now()
+  let hechas = 0
+  let total = 1
+  let fase = 'preparando'
+  let etiqueta = 'Preparando el resumen'
+  // Cuanto cuesta una peticion de notas, para traducir peticiones restantes a
+  // minutos: la cuota es por minuto, asi que el coste marca el ritmo maximo.
+  let costePeticion = fixedCost
+
+  const emit = (esperaHasta = null) => {
+    // Segundos por peticion: el suelo que impone la cuota y lo que estamos
+    // midiendo de verdad, lo que sea mayor. Solo con la media medida, la primera
+    // peticion (que no espera nada, porque la ventana del minuto esta vacia)
+    // haria prometer un total ridiculo que luego se multiplica por diez.
+    const porCuota = (60 * costePeticion) / budget
+    const medido = hechas > 0 ? (Date.now() - t0) / 1000 / hechas : 0
+    const restantes = Math.max(0, total - hechas)
+    const etaSec = Math.round(restantes * Math.max(porCuota, medido))
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('summary:progress', { interviewId, fase, etiqueta, hechas, total, etaSec, esperaHasta })
+    }
+  }
+  const paso = (f, e) => { fase = f; etiqueta = e; emit() }
+
+  /** Redacta el informe a partir de las notas: UNA peticion. Es lo unico que se
+   *  paga cuando la conversacion ya se leyó al acabar de transcribir. */
+  const redactarSobreNotas = async (notas, pace) => {
+    let cuerpo = notas
+    // Las notas pudieron prepararse contra un prompt algo mas corto (otros
+    // criterios, otro tipo de informe). Si ahora no caben, se recortan aqui en
+    // vez de dejar que el proveedor conteste 413 en la ultima peticion.
+    const cabe = Math.floor((budget - fixedCost - 100) * 3.5)
+    if (cuerpo.length > cabe) {
+      log.warn(`[resumen] las notas preparadas (${cuerpo.length}) no caben con este informe; se recortan a ${cabe}`)
+      cuerpo = cuerpo.slice(0, cabe)
+      recortado = true
+    }
+    if (!cuerpo.trim()) throw errorSinNotas()
+    if (hechas >= total) total = hechas + 1
+    paso('redactando', 'Redactando el informe')
+    // `recortado` ya está puesto: el prompt tiene que avisar al modelo de que le
+    // falta el tramo final ANTES de construirse, o el informe mentirá sin saberlo.
+    const notesPrompt = makeUserPrompt(cuerpo, true)
+    const esperar = pace || makePacer(budget, (ms) => emit(ms > 0 ? Date.now() + ms : null))
+    await esperar(fixedCost + estimateTokens(notesPrompt))
+    const text = await providers.chat(llm, {
+      system: systemPrompt, user: notesPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
+    })
+    return { text }
+  }
+
+  // Notas ya preparadas de antemano (el trabajo caro se hizo al acabar de
+  // transcribir). Solo queda redactar, que es UNA peticion.
+  if (notasPreparadas && notasPreparadas.trim()) {
+    return await redactarSobreNotas(notasPreparadas)
+  }
 
   const fullPrompt = makeUserPrompt(transcript, false)
   if (fixedCost + estimateTokens(fullPrompt) <= budget) {
+    // Cabe entera: no hay nada que preparar por adelantado, y quien pregunta se
+    // ahorra ensenar una barra de preparacion que no va a tardar nada.
+    if (soloPreparar) return { needed: false }
+    paso('redactando', 'Redactando el informe')
     try {
       const text = await providers.chat(llm, {
         system: systemPrompt, user: fullPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
@@ -1286,14 +1411,34 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
     }
   }
 
-  const pace = makePacer(budget)
+  // A partir de aqui hay trabajo de verdad que medir: se estima el total antes de
+  // empezar para que la barra tenga denominador desde el primer segundo.
+  // En modo preparar no se redacta, asi que la peticion del informe que incluye
+  // el plan no se va a gastar: si se contara, la barra se quedaria en el 90%.
+  total = Math.max(1, planSummaryRequests(transcript, { budget, fixedCost, isMeeting, ivTag, cdTag }) - (soloPreparar ? 1 : 0))
+  const sysNotasTokens = estimateTokens(notesSystemPrompt(1, { isMeeting, ivTag, cdTag }))
+  costePeticion = sysNotasTokens + chunkTokensFor(1, budget, sysNotasTokens) + NOTES_MAX_TOKENS
+  log.info(`[resumen] plan: ~${total} peticiones al modelo`)
+  paso('analizando', soloPreparar ? 'Leyendo la conversación' : 'Analizando la conversación')
+
+  const pace = makePacer(budget, (ms) => emit(ms > 0 ? Date.now() + ms : null))
   let material = transcript
   // Con transcripciones muy largas un solo pase de notas puede seguir sin caber:
   // se vuelve a condensar hasta que entre (con tope, para no dar vueltas si el
   // modelo deja de comprimir).
   for (let pase = 1; pase <= 3; pase++) {
     const antes = material.length
-    material = await condenseTranscript(material, llm, { isMeeting, budget, pace, ivTag, cdTag, pase })
+    material = await condenseTranscript(material, llm, {
+      isMeeting, budget, pace, ivTag, cdTag, pase,
+      onChunk: ({ pase: n, indice, total: cuantos }) => {
+        const previstas = hechas + (cuantos - indice + 1) + (soloPreparar ? 0 : 1)
+        if (previstas > total) total = previstas
+        paso(n > 1 ? 'compactando' : 'analizando', n > 1
+          ? `Compactando notas · bloque ${indice} de ${cuantos}`
+          : `Analizando la conversación · fragmento ${indice} de ${cuantos}`)
+      },
+      onChunkDone: () => { hechas++; emit() },
+    })
     if (fixedCost + estimateTokens(makeUserPrompt(material, true)) <= budget) break
 
     // Si un pase apenas ha recortado, el siguiente tampoco lo hará: el modelo ya
@@ -1312,20 +1457,26 @@ ipcMain.handle('summary:generate', async (_event, { transcript, criteria, summar
   // Última red: pedir el informe con el cuerpo vacío no da un error, da un modelo
   // educado contestando "proporcióname las notas y con gusto lo redacto". Antes
   // que devolver eso como si fuera el informe, se dice lo que ha pasado.
-  if (!material.trim()) {
-    throw new Error(
-      'No se pudo condensar la transcripción: el modelo de resumen no devolvió notas de ningún fragmento. ' +
-      'Prueba con otro modelo en Ajustes → Motores de IA.'
-    )
+  if (!material.trim()) throw errorSinNotas()
+
+  if (soloPreparar) {
+    log.info(`[resumen] notas preparadas: ${material.length} caracteres en ${hechas} peticiones`)
+    return { needed: true, notes: material, recortado }
   }
 
-  const notesPrompt = makeUserPrompt(material, true)
-  await pace(fixedCost + estimateTokens(notesPrompt))
-  const text = await providers.chat(llm, {
-    system: systemPrompt, user: notesPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
-  })
-  return { text }
-})
+  const informe = await redactarSobreNotas(material, pace)
+  // Las notas acaban de costar ~10 peticiones y varios minutos de espera. Se
+  // devuelven para guardarlas: sin esto, cambiar de formato las vuelve a pagar
+  // enteras, que es justo lo que este trabajo venia a evitar.
+  return { ...informe, notes: material, recortado }
+}
+
+// Los dos canales son el mismo trabajo partido en dos: 'prepare' hace la parte
+// cara (leer la conversacion y tomar notas) y 'generate' la barata (redactar).
+// Los dos entran por la misma cola: dos resumenes a la vez se pisan la cuota del
+// minuto y acaban los dos en 429.
+ipcMain.handle('summary:generate', (event, payload) => enColaDeResumen(() => runSummary(event, payload)))
+ipcMain.handle('summary:prepare', (event, payload) => enColaDeResumen(() => runSummary(event, { ...payload, soloPreparar: true })))
 
 // ── Catálogo y prueba de proveedores (Ajustes → Motores de IA) ───────────────
 

@@ -160,6 +160,40 @@ re-transcribir. Ahora se suben a **Supabase Storage** (bucket privado `recording
 🔲 **PENDIENTE: correr `supabase-migration-audio-nube.sql`** en el SQL Editor de Supabase.
 Hasta entonces no existe el bucket ni las columnas y las subidas fallarán.
 
+## Compartir carpetas con un compañero (2026-08-25) 🔲 falta correr el SQL
+
+Hasta ahora cada usuario solo veía sus propias carpetas: si dos personas entrevistaban para el
+mismo puesto, había que pasarse los textos a mano. Ahora el dueño de un proyecto puede **dar
+acceso a un compañero por su correo**, y ese compañero lo ve en su propia app etiquetado como
+**"Compartido por [nombre]"**.
+
+📄 **Guía completa paso a paso para David: [`docs/COMPARTIR.md`](COMPARTIR.md).**
+
+- **Cómo se comparte**: al editar un proyecto hay una caja **"Compartir con"** → escribes el
+  correo → **Buscar** → si esa persona tiene cuenta, sale su nombre y un botón **Dar acceso**.
+  Si no la tiene, sale *"No hay ninguna cuenta de Call Transcriber con ese correo"* y no se
+  puede añadir: **la app no manda invitaciones**, el compañero se registra él primero.
+- **Permisos del invitado**: puede ver y **trabajar** (leer transcripciones y resúmenes,
+  escuchar audios, transcribir, generar resúmenes, editar la transcripción, añadir candidatos).
+  **No** puede borrar el proyecto, ni compartirlo con otros, ni quitar a nadie. Eso es solo del
+  dueño. No hay modo "solo lectura".
+- **El vídeo NO viaja** (~300 MB por entrevista contra 1 GB de plan gratis). El compañero ve
+  texto y resumen; el vídeo se queda en el PC que grabó.
+- **El audio solo viaja si se subió** con el botón `☁` de cada grabación. Si sigue en
+  `↑ Solo en este PC`, el compañero verá la entrevista y su texto pero no podrá escucharla ni
+  re-transcribirla. **Antes de compartir una carpeta, repasar sus grabaciones y subir las
+  locales.**
+- **Límites del plan gratis**: 50 MB por archivo (un mp3 de 1 h ≈ 32 MB entra; uno de 2 h no) y
+  1 GB en total ≈ 15 entrevistas.
+
+✅ **Código hecho.**
+🔲 **PENDIENTE, en este orden:**
+1. Correr **`supabase-migration-compartir.sql`** en el SQL Editor de Supabase. Hasta entonces
+   el buscador de la app no encontrará a nadie. Es idempotente: se puede ejecutar varias veces.
+2. **Empaquetar la app** y distribuirla (`npm run build` + `electron-builder`; ver arriba).
+3. **Que el compañero se instale la app y se registre.** Mientras no exista su cuenta, su
+   correo no aparece en la búsqueda: es la causa nº 1 de "no me lo encuentra".
+
 ## Pendiente (acciones externas) ⏳
 
 - ~~**Certificado de firma**~~ → **DESCARTADO 2026-08-14** (ver arriba). No se compra.
@@ -173,6 +207,9 @@ Hasta entonces no existe el bucket ni las columnas y las subidas fallarán.
 ## Archivos clave
 
 - `docs/RELEASE_Y_FIRMA.md` — guía completa de release + firma.
+- `docs/COMPARTIR.md` — guía paso a paso para compartir carpetas con un compañero.
 - `supabase-migration-launch.sql` — migración (ya ejecutada).
+- `supabase-migration-audio-nube.sql` — audios en la nube (🔲 pendiente de ejecutar).
+- `supabase-migration-compartir.sql` — carpetas compartidas (🔲 pendiente de ejecutar).
 - `legal/` — documentos RGPD (borradores).
 - `electron/main.cjs` — IPC + autoUpdater. `src/App.tsx` — UI (banner update, badge versión, consentimiento).

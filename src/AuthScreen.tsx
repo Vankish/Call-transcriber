@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { SparkIcon } from './icons'
+import { Select } from './Select'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 
 type Mode = 'login' | 'register' | 'forgot'
@@ -112,9 +114,9 @@ export function AuthScreen() {
             Graba, transcribe y resume tus entrevistas con IA. Todo en un lugar.
           </p>
           <ul className="auth-features">
-            <li>✦&nbsp; Grabación de micrófono + sistema</li>
-            <li>✦&nbsp; Transcripción automática con Groq</li>
-            <li>✦&nbsp; Resúmenes IA y sincronización en la nube</li>
+            <li><SparkIcon /> Grabación de micrófono + sistema</li>
+            <li><SparkIcon /> Transcripción automática con IA</li>
+            <li><SparkIcon /> Resúmenes IA y sincronización en la nube</li>
           </ul>
         </div>
 
@@ -198,17 +200,14 @@ export function AuthScreen() {
                 </label>
 
                 <label className="auth-label">País
-                  <select
+                  <Select
                     className="auth-input auth-select"
                     value={country}
-                    onChange={e => setCountry(e.target.value)}
+                    onChange={setCountry}
                     disabled={loading}
-                  >
-                    <option value="">Selecciona tu país</option>
-                    {COUNTRIES.map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
+                    placeholder="Selecciona tu país"
+                    options={COUNTRIES.map(c => ({ value: c, label: c }))}
+                  />
                 </label>
               </>
             )}
