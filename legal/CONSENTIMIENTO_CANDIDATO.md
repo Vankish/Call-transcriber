@@ -8,7 +8,7 @@ Este texto debe presentarse y/o leerse al candidato **antes** de iniciar la grab
 
 ## Versión corta (para mostrar en la aplicación junto a un checkbox)
 
-> Vamos a **grabar esta entrevista en audio** para transcribirla y elaborar un resumen de evaluación con ayuda de inteligencia artificial. El tratamiento lo realiza **[NOMBRE DE LA EMPRESA]** como responsable, con el fin de gestionar este proceso de selección. La grabación se procesará mediante el proveedor **Groq (servidores en EE.UU.)** y se almacenará con las garantías legales aplicables (Cláusulas Contractuales Tipo). Puedes ejercer tus derechos de acceso, rectificación, supresión, oposición, portabilidad y limitación, y **retirar este consentimiento en cualquier momento**, escribiendo a **[EMAIL DE CONTACTO]**. Más información en nuestra Política de Privacidad.
+> Vamos a **grabar esta entrevista en audio** para transcribirla y elaborar un resumen de evaluación con ayuda de inteligencia artificial. El tratamiento lo realiza **[NOMBRE DE LA EMPRESA]** como responsable, con el fin de gestionar este proceso de selección. La grabación se procesará mediante el proveedor de inteligencia artificial **[PROVEEDOR, p. ej. ElevenLabs o Groq — servidores en EE.UU.]** y se almacenará con las garantías legales aplicables (Cláusulas Contractuales Tipo). Puedes ejercer tus derechos de acceso, rectificación, supresión, oposición, portabilidad y limitación, y **retirar este consentimiento en cualquier momento**, escribiendo a **[EMAIL DE CONTACTO]**. Más información en nuestra Política de Privacidad.
 >
 > ☐ **He sido informado/a y consiento la grabación, transcripción y análisis de esta entrevista.**
 
@@ -36,7 +36,9 @@ Tu nombre, correo electrónico, teléfono, el cargo al que optas, tu **voz** (gr
 Sobre tu **consentimiento** para la grabación y sobre el **interés legítimo** de la Empresa en gestionar el proceso de selección.
 
 **¿Quién más interviene?**
-La transcripción y el resumen se realizan mediante el proveedor **Groq, Inc.**, cuyos servidores están en **Estados Unidos**, lo que implica una **transferencia internacional de datos** amparada en las **Cláusulas Contractuales Tipo** de la Comisión Europea. Los datos estructurados se almacenan en el proveedor **Supabase** ([REGIÓN]). La grabación de audio se guarda además localmente en el equipo de la Empresa.
+La transcripción y el resumen se realizan mediante los proveedores de inteligencia artificial que la Empresa tenga configurados en la aplicación —**[PROVEEDOR DE TRANSCRIPCIÓN]** y **[PROVEEDOR DE RESUMEN]**—. Todos los que la aplicación incluye por defecto (ElevenLabs, Groq, OpenAI, Deepgram, Anthropic) tienen sus servidores en **Estados Unidos**, lo que implica una **transferencia internacional de datos** amparada en las **Cláusulas Contractuales Tipo** de la Comisión Europea.
+
+Los datos estructurados (tus datos de contacto, la transcripción y el resumen) se almacenan en el proveedor **Supabase** ([REGIÓN]). La **grabación de audio** se guarda en el equipo de la Empresa y, si esta decide subirla para poder consultarla desde otro equipo o compartirla con un compañero del proceso, también en Supabase. Si se graba **vídeo**, este no sale del equipo de la Empresa.
 
 **¿Decide una máquina sobre tu candidatura?**
 No. El informe de IA es solo una **ayuda**. La decisión final la toma siempre una **persona**.

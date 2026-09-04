@@ -27,7 +27,7 @@ El presente contrato regula el tratamiento de datos personales que el Encargado 
 El encargo tendrá vigencia desde **[FECHA DE INICIO]** y mientras dure la relación contractual de prestación del servicio. Finalizado el contrato, el Encargado procederá conforme a la cláusula 9 (devolución/supresión).
 
 ### 3. Naturaleza y finalidad del tratamiento
-El tratamiento tiene por finalidad permitir al Responsable gestionar y evaluar candidaturas en procesos de selección, mediante la grabación de audio, su transcripción (Whisper), la generación de resúmenes e informes (LLaMA) y el almacenamiento de los datos asociados.
+El tratamiento tiene por finalidad permitir al Responsable gestionar y evaluar candidaturas en procesos de selección, mediante la grabación de audio, su transcripción y la generación de resúmenes e informes con los modelos de inteligencia artificial que el Responsable configure en la aplicación, y el almacenamiento de los datos asociados.
 
 ### 4. Tipo de datos personales
 - Datos identificativos y de contacto del candidato: nombre, email, teléfono, cargo.
@@ -57,18 +57,20 @@ El Responsable **autoriza** al Encargado a recurrir a los siguientes subencargad
 
 | Subencargado | Finalidad | Ubicación |
 |---|---|---|
-| **Groq, Inc.** | Transcripción (Whisper) y resúmenes (LLaMA) mediante IA. | Estados Unidos |
-| **Supabase** | Almacenamiento de datos estructurados en la nube. | [REGIÓN] |
+| **[PROVEEDOR DE TRANSCRIPCIÓN]** (p. ej. ElevenLabs, Groq, OpenAI, Deepgram) | Convierte el audio de la entrevista en texto. | Estados Unidos |
+| **[PROVEEDOR DE RESUMEN]** (p. ej. Groq, OpenAI, Anthropic) | Genera el resumen de evaluación. | Estados Unidos |
+| **Supabase** | Almacenamiento en la nube de los datos estructurados **y de los archivos de audio** de las entrevistas. | [REGIÓN] |
 
 El Encargado garantizará que los subencargados queden vinculados por las **mismas obligaciones** de protección de datos mediante contrato. El Encargado informará al Responsable de cualquier **cambio** de subencargados, dando opción a oponerse.
 
-En lo relativo a **Groq (EE.UU.)**, la transferencia internacional se ampara en las **Cláusulas Contractuales Tipo (CCT/SCC)** de la Comisión Europea u otro mecanismo de adecuación vigente.
+En lo relativo a los proveedores de IA con servidores en **EE.UU.** —que son todos los que la aplicación incluye por defecto—, la transferencia internacional se ampara en las **Cláusulas Contractuales Tipo (CCT/SCC)** de la Comisión Europea u otro mecanismo de adecuación vigente. El Responsable debe actualizar este anexo cada vez que cambie de proveedor en la aplicación.
 
 ### 8. Medidas de seguridad
 Las partes aplicarán medidas técnicas y organizativas apropiadas, entre ellas:
 - Cifrado de los datos **en tránsito** (HTTPS/TLS).
 - Control de acceso basado en credenciales y autorización.
 - Almacenamiento local de las grabaciones en `Documentos/CallTranscriber`, bajo el control y responsabilidad de seguridad del **Responsable** (se recomienda cifrado de disco y control de acceso al equipo).
+- Almacenamiento de los audios subidos en un bucket privado de Supabase Storage, accesible únicamente por el usuario que los subió y por las personas con las que haya compartido el proyecto (control de acceso a nivel de fila y de archivo).
 - Medidas de los proveedores cloud (Supabase) conforme a sus estándares de seguridad.
 - [OTRAS MEDIDAS ESPECÍFICAS A DEFINIR]
 
