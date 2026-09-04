@@ -4,6 +4,7 @@
   "version": "1.0.3",
   "description": "Graba, transcribe y resume entrevistas de trabajo con IA.",
   "author": "Call Transcriber",
+  "license": "MIT",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
