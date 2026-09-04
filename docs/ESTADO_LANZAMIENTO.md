@@ -35,13 +35,43 @@ repositorio público es «todos los derechos reservados»: el código está a la
 nadie puede usarlo, copiarlo ni modificarlo. Con MIT cualquiera puede, manteniendo la
 atribución.
 
-## 🔲 2026-09-04 DECIDIDO: la app pasará a funcionar sin cuenta
+## ✅ 2026-09-04: la app ya funciona sin cuenta
 
-Hoy `src/App.tsx` corta en seco sin sesión (`if (!session) return <AuthScreen />`), así
-que quien clone el repo o instale el `.exe` sin credenciales de Supabase no pasa de la
-pantalla de login. **Decisión: modo local por defecto** — se instala y funciona contra
-el disco (grabar, transcribir, resumir), y la cuenta en la nube queda como opción
-posterior para sincronizar entre equipos y compartir carpetas. Pendiente de implementar.
+Antes `src/App.tsx` cortaba en seco sin sesión, así que quien instalara el `.exe` o
+clonara el repo sin credenciales de Supabase no pasaba del login. Ahora la pantalla de
+entrada ofrece **«Empezar sin cuenta»** y se entra directo: grabar, transcribir y resumir
+funcionan contra el disco de este equipo. La cuenta queda para lo que de verdad la
+necesita: sincronizar entre ordenadores y compartir carpetas.
+
+No hizo falta capa de datos nueva — el guardado en `localStorage` sin sesión ya existía,
+solo faltaba la puerta. Y al crear la cuenta más tarde, lo creado en local se sube solo.
+
+## 🔴 2026-09-04: el `.exe` publicado lleva TUS claves de Supabase dentro
+
+Vite compila `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` **dentro del bundle**. Como
+las releases se han construido siempre con tu `.env` presente, el instalador que hay
+publicado en GitHub (v1.0.3) contiene la URL y la clave publicable de tu proyecto. Está
+comprobado: la cadena `jqbtrduafmmdnyayewvc` aparece en el JavaScript compilado.
+
+**Qué significa:** cualquiera que se descargue ese `.exe` y se registre crea una cuenta
+**en tu proyecto de Supabase**, y los datos de sus candidatos entran en tu base de datos.
+Te convierte en responsable del tratamiento de entrevistas de gente que no conoces, y su
+consumo cuenta contra tu plan gratuito.
+
+🔲 **Comprobar** en Supabase → Authentication → Users si ya hay cuentas que no sean tuyas.
+
+🔲 **Al publicar la v1.1.0**, compilar **sin `.env`** (renombrarlo o moverlo antes de
+`npm run build`). Así el instalador público sale en modo local puro, que es justo lo
+decidido. Tu copia personal se compila aparte, con el `.env` en su sitio.
+
+## 🔲 Pendientes de esta tanda (2026-09-04)
+
+- **Falta el permiso `workflow` en `gh`** para poder subir `.github/workflows/ci.yml`,
+  que ya está escrito. Ejecutar `gh auth refresh -s workflow` y hacer el push.
+- **Ejecutar `supabase/setup.sql`** en el SQL Editor: cubre de una vez las dos migraciones
+  que seguían pendientes (audios en la nube y carpetas compartidas).
+- **Un par de capturas para el README**, sin datos de candidatos reales.
+- **Publicar la v1.1.0** con los 15+ commits sin publicar (ver el punto rojo de arriba).
 
 ## ❌ DECIDIDO 2026-08-14: no se compra certificado de firma
 
