@@ -1,7 +1,47 @@
 # Estado de lanzamiento — Call Transcriber
 
 > Documento de contexto para retomar el trabajo desde cualquier dispositivo.
-> Última actualización: 2026-08-14.
+> Última actualización: 2026-09-04.
+
+## ⚠️ 2026-09-04: SE REESCRIBIÓ EL HISTORIAL DE GIT
+
+**Si tienes un clon en otro PC, `git pull` va a fallar.** No está roto: el historial
+del repositorio es distinto al que tenías. Para ponerte al día en el otro equipo:
+
+```powershell
+git fetch origin
+git reset --hard origin/main
+```
+
+**Por qué se hizo:** `.claude/settings.local.json` estaba versionado desde el primer
+commit y guardaba un **token personal de Figma** dentro de una regla de permiso. El
+repositorio es público, así que el token estuvo a la vista meses. Se revocó en Figma y
+se borró el archivo de los 52 commits con `git filter-repo`, forzando el push de `main`,
+de la rama `feat/motores-ia-multiproveedor` y de los cuatro tags. Las releases de GitHub
+y sus `.exe` sobrevivieron intactas.
+
+⚠️ Reescribir el historial **no borra nada de internet**: GitHub conserva los commits
+viejos accesibles por su identificador y quien haya clonado o forkeado el repo se lo
+llevó. Lo que repara de verdad es la revocación del token, que ya está hecha.
+
+**A partir de ahora `.claude/` está en `.gitignore`.** Es configuración de cada equipo,
+no del proyecto, y `settings.local.json` acumula reglas de permiso que pueden llevar
+credenciales dentro.
+
+## ✅ 2026-09-04: el repo ya se puede usar legalmente (MIT)
+
+Se añadió `LICENSE` (MIT) y el campo `license` en `package.json`. Sin ese archivo, un
+repositorio público es «todos los derechos reservados»: el código está a la vista pero
+nadie puede usarlo, copiarlo ni modificarlo. Con MIT cualquiera puede, manteniendo la
+atribución.
+
+## 🔲 2026-09-04 DECIDIDO: la app pasará a funcionar sin cuenta
+
+Hoy `src/App.tsx` corta en seco sin sesión (`if (!session) return <AuthScreen />`), así
+que quien clone el repo o instale el `.exe` sin credenciales de Supabase no pasa de la
+pantalla de login. **Decisión: modo local por defecto** — se instala y funciona contra
+el disco (grabar, transcribir, resumir), y la cuenta en la nube queda como opción
+posterior para sincronizar entre equipos y compartir carpetas. Pendiente de implementar.
 
 ## ❌ DECIDIDO 2026-08-14: no se compra certificado de firma
 
