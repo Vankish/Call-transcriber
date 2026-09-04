@@ -126,6 +126,9 @@ const isProviderReady = (cfg: ProviderConfig, preset: ProviderPreset | undefined
 // ── Storage ────────────────────────────────────────────────────────────────
 const V2_KEY = 'call-transcriber-v2'
 const ONBOARDING_KEY = 'ct-onboarding-done'
+// Modo local: la app entera funciona sin cuenta, contra el disco de este equipo.
+// Se recuerda para no volver a pedir credenciales en cada arranque.
+const LOCAL_MODE_KEY = 'ct-modo-local'
 const CRITERIA_KEY = 'ct-criteria-cache'
 
 const getCriteriaCache = (): Record<string, string[]> => {
@@ -555,6 +558,20 @@ function App() {
 
   // ── Auth ───────────────────────────────────────────────────────────────
   const [session, setSession]       = useState<Session | null>(null)
+  const [modoLocal, setModoLocal] = useState(() => {
+    try { return localStorage.getItem(LOCAL_MODE_KEY) === '1' } catch { return false }
+  })
+
+  const entrarSinCuenta = () => {
+    try { localStorage.setItem(LOCAL_MODE_KEY, '1') } catch { /* modo incognito */ }
+    setModoLocal(true)
+  }
+
+  // Al entrar con una cuenta el modo local sobra: mandan los datos de la nube.
+  const salirDelModoLocal = () => {
+    try { localStorage.removeItem(LOCAL_MODE_KEY) } catch { /* modo incognito */ }
+    setModoLocal(false)
+  }
   const [authLoading, setAuthLoading] = useState(true)
   const [recoveryMode, setRecoveryMode] = useState(false)
   const [newPassword, setNewPassword] = useState('')
@@ -673,13 +690,21 @@ function App() {
 
   // ── Auth: session management ───────────────────────────────────────────
   useEffect(() => {
+    // En cuanto hay cuenta, el modo local sobra: mandan los datos de la nube, y el
+    // efecto de mas abajo se encarga de subir lo que se hubiera creado sin cuenta.
+    const olvidarModoLocal = () => {
+      try { localStorage.removeItem(LOCAL_MODE_KEY) } catch { /* modo incognito */ }
+      setModoLocal(false)
+    }
+
     void supabase.auth.getSession()
-      .then(({ data }) => { setSession(data.session) })
+      .then(({ data }) => { setSession(data.session); if (data.session) olvidarModoLocal() })
       .catch(() => {})
       .finally(() => setAuthLoading(false))
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
+      if (session) olvidarModoLocal()
       if (event === 'SIGNED_OUT') { setProjects([]); setCandidates([]); setInterviews([]); setShares([]) }
     })
 
@@ -861,7 +886,11 @@ function App() {
   }, [projects, candidates, interviews, session])
 
   const handleSignOut = async () => {
+    // Sin cuenta no hay sesion que cerrar: lo que se hace es volver a la pantalla
+    // de entrada para poder registrarse. Los datos locales se quedan donde estan.
+    if (!session) { salirDelModoLocal(); setScreen('dashboard'); return }
     await supabase.auth.signOut()
+    salirDelModoLocal()
     setScreen('dashboard')
   }
 
@@ -4075,7 +4104,7 @@ function App() {
     </div>
   )
 
-  if (!session) return <AuthScreen />
+  if (!session && !modoLocal) return <AuthScreen onUsarSinCuenta={entrarSinCuenta} />
 
   if (recoveryMode) return (
     <div className="auth-root">
@@ -4218,13 +4247,24 @@ function App() {
             <div className="pp-avatar" style={{ background: userPhoto ? 'transparent' : avatarColor(userEmail || 'u'), overflow: 'hidden', padding: 0 }}>
               {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
             </div>
-            <div><p className="pp-name">{userName || 'Usuario'}</p><p className="pp-email">{userEmail}</p></div>
+            <div>
+              <p className="pp-name">{userName || 'Usuario'}</p>
+              <p className="pp-email">{session ? userEmail : 'Solo en este equipo'}</p>
+            </div>
           </div>
           <div className="pp-divider" />
           <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi Perfil</button>
           <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> Configuración</button>
           <div className="pp-divider" />
-          <button type="button" className="pp-item pp-item--danger" onClick={() => { setShowProfilePopup(false); void handleSignOut() }}><LogoutIcon /> Cerrar sesión</button>
+          {/* Sin cuenta no hay sesion que cerrar: lo que ofrece el boton es entrar,
+              que ademas sube a la nube lo que se haya creado en este equipo. */}
+          <button
+            type="button"
+            className={session ? 'pp-item pp-item--danger' : 'pp-item'}
+            onClick={() => { setShowProfilePopup(false); void handleSignOut() }}
+          >
+            <LogoutIcon /> {session ? 'Cerrar sesión' : 'Entrar con una cuenta'}
+          </button>
         </div>
       )}
 

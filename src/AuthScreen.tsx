@@ -27,7 +27,9 @@ const COUNTRIES = [
   'Uruguay', 'Uzbekistán', 'Venezuela', 'Vietnam', 'Yemen', 'Zimbabue',
 ]
 
-export function AuthScreen() {
+// `onUsarSinCuenta` es la puerta al modo local: la app funciona entera contra el
+// disco de este equipo, sin cuenta. La nube es lo opcional, no al reves.
+export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void }) {
   const [mode, setMode]               = useState<Mode>('login')
   const [name, setName]               = useState('')
   const [email, setEmail]             = useState('')
@@ -128,8 +130,12 @@ export function AuthScreen() {
         <div className="auth-card">
           {!isSupabaseConfigured && (
             <div className="auth-setup-banner">
-              <strong>Configuración pendiente</strong>
-              <p>Añade tus credenciales de Supabase en el archivo <code>.env</code> y reconstruye la app.</p>
+              <strong>La sincronización no está configurada</strong>
+              <p>
+                No pasa nada: puedes usar la app entera en este equipo. Para sincronizar entre
+                ordenadores y compartir carpetas hace falta un proyecto de Supabase — está
+                explicado en el README.
+              </p>
             </div>
           )}
 
@@ -237,13 +243,24 @@ export function AuthScreen() {
               {mode === 'forgot' ? 'Inicia sesión' : mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
             </button>
           </p>
-          {mode === 'login' && (
+          {mode === 'login' && isSupabaseConfigured && (
             <p className="auth-switch" style={{ marginTop: 4 }}>
               <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
                 ¿Olvidaste tu contraseña?
               </button>
             </p>
           )}
+
+          <div className="auth-local">
+            <span className="auth-local-sep">o</span>
+            <button type="button" className="auth-local-btn" onClick={onUsarSinCuenta}>
+              Empezar sin cuenta
+            </button>
+            <p className="auth-local-note">
+              Graba, transcribe y resume igual. Los datos se quedan en este ordenador y no
+              viajan a ninguna parte. Puedes crear la cuenta más adelante.
+            </p>
+          </div>
         </div>
       </div>
     </div>
