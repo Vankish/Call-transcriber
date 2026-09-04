@@ -1,0 +1,41 @@
+# Comprobacion automatica en cada push y en cada pull request.
+#
+# Que hace: instalar, compilar y pasar el lint. Nada mas, a proposito: la app
+# necesita microfono, audio de sistema y una clave de IA para probarse de verdad,
+# asi que no hay tests que ejecutar todavia. Lo que si detecta esto es lo que mas
+# rompe en la practica: un import que no existe, un error de TypeScript o un
+# cambio que no compila.
+#
+# No empaqueta el .exe: eso se hace a mano con `npm run release:win` cuando se
+# publica una version (ver docs/RELEASE_Y_FIRMA.md).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` en vez de `npm install`: instala exactamente lo que dice
+      # package-lock.json, sin actualizar nada por su cuenta.
+      - run: npm ci
+
+      # Compila TypeScript y Vite. Si algo no compila, aqui se cae.
+      - run: npm run build
+
+      # El lint no falla por los avisos del compilador de React, que son deuda
+      # conocida y estan documentados en eslint.config.js. Si falla, es un error
+      # de verdad.
+      - run: npm run lint
