@@ -168,7 +168,7 @@ se usa la separación de hablantes que devuelve ElevenLabs y la pista de sistema
 decide cuál de los hablantes es el interlocutor.
 
 **Falta confirmarlo con una grabación real**, y solo se puede hacer en el PC donde se grabó
-(**PC-Usuari**): re-transcribir la reunión con Tessa Aparicio del 30/07 y comprobar que la
+(**PC-Usuari**): re-transcribir la reunión del 30/07 y comprobar que la
 voz del entrevistador sale completa. Los `.mp3` / `_system.webm` **no sincronizan** — solo
 viajan los metadatos y el texto, así que en el otro PC la entrevista aparece en la lista
 pero sin audio con el que trabajar.
@@ -197,8 +197,10 @@ re-transcribir. Ahora se suben a **Supabase Storage** (bucket privado `recording
 - En la lista de grabaciones cada entrevista lleva un distintivo: `☁ En la nube` o
   `↑ Solo en este PC · Subir` (este último es un botón, para las grabaciones antiguas).
 
-🔲 **PENDIENTE: correr `supabase-migration-audio-nube.sql`** en el SQL Editor de Supabase.
-Hasta entonces no existe el bucket ni las columnas y las subidas fallarán.
+🔲 **PENDIENTE: correr el SQL** en el SQL Editor de Supabase. Hasta entonces no existe el
+bucket ni las columnas y las subidas fallarán. Desde el 2026-09-04 basta con pasar
+**`supabase/setup.sql`**, que incluye esta migración y la de carpetas compartidas en el
+orden correcto — las dos de una vez.
 
 ## Compartir carpetas con un compañero (2026-08-25) 🔲 falta correr el SQL
 
@@ -248,6 +250,10 @@ acceso a un compañero por su correo**, y ese compañero lo ve en su propia app 
 
 - `docs/RELEASE_Y_FIRMA.md` — guía completa de release + firma.
 - `docs/COMPARTIR.md` — guía paso a paso para compartir carpetas con un compañero.
+- **`supabase/setup.sql` — el único que hay que ejecutar.** Los cinco de abajo encadenados
+  en el orden correcto e idempotente: sirve para montar un proyecto nuevo desde cero y
+  para poner al día uno existente. ⚠️ Generado el 2026-09-04 a partir de los cinco;
+  **no se ha ejecutado todavía contra una base de datos**.
 - `supabase-migration-launch.sql` — migración (ya ejecutada).
 - `supabase-migration-audio-nube.sql` — audios en la nube (🔲 pendiente de ejecutar).
 - `supabase-migration-compartir.sql` — carpetas compartidas (🔲 pendiente de ejecutar).
