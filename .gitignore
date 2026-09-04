@@ -28,3 +28,8 @@ release
 *.njsproj
 *.sln
 *.sw?
+
+# Configuracion local de Claude Code: es de cada equipo, no del proyecto.
+# Ademas settings.local.json guarda reglas de permiso que pueden llevar
+# credenciales dentro (asi se publico un token de Figma sin querer).
+.claude/

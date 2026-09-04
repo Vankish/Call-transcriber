@@ -29,12 +29,19 @@ npm install
 ```
 
 ## 3. Recrear el archivo `.env` (NO viaja por git, por seguridad)
-Crear un archivo llamado `.env` en la raíz del proyecto con este contenido
-(claves publicables de Supabase, protegidas por RLS — seguras de exponer):
+Copiar `.env.example` a `.env` y rellenar los dos valores con los del proyecto de
+Supabase: **supabase.com → tu proyecto → Project Settings → API**. Ahí están la
+*Project URL* y la *publishable key*.
+
 ```
-VITE_SUPABASE_URL=https://jqbtrduafmmdnyayewvc.supabase.co
-VITE_SUPABASE_ANON_KEY=sb_publishable_XXJT2-Isuef3XNSoFJdeuw_EiqzQB2_
+VITE_SUPABASE_URL=https://TU_PROYECTO.supabase.co
+VITE_SUPABASE_ANON_KEY=TU_CLAVE_PUBLICABLE
 ```
+
+> Las claves son publicables (van dentro de la app y las protege el RLS), pero
+> **este repositorio es público**: escritas aquí, cualquiera puede apuntar su copia
+> de la app a esta base de datos y meter sus candidatos dentro. Por eso se sacan
+> del panel de Supabase cada vez y no se dejan escritas en la documentación.
 
 ## 4. Arrancar la app
 ```bash
