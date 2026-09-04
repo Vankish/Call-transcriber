@@ -4911,6 +4911,59 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .auth-setup-banner strong { display: block; margin-bottom: 4px; }
 .auth-setup-banner code { background: rgba(0,0,0,0.07); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 
+/* ── Entrada sin cuenta (modo local) ─────────────────────────────────────── */
+/* Va debajo del formulario y separada por una linea con un "o" encima, para que
+   se lea como la otra opcion y no como un enlace secundario perdido al pie. */
+.auth-local {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.auth-local-sep {
+  position: relative;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+.auth-local-sep::before,
+.auth-local-sep::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 18px);
+  height: 1px;
+  background: var(--border);
+}
+.auth-local-sep::before { left: 0; }
+.auth-local-sep::after  { right: 0; }
+
+.auth-local-btn {
+  padding: 11px 16px;
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.auth-local-btn:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.auth-local-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+  margin: 0;
+}
+
 /* ── Sidebar sign-out button ─────────────────────────────────────────────── */
 .sidebar-bottom {
   display: flex;
