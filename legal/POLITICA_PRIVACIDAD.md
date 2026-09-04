@@ -69,21 +69,48 @@ El candidato puede retirar su consentimiento en cualquier momento, sin que ello 
 
 Los datos pueden ser comunicados a los siguientes proveedores que actúan como **encargados del tratamiento** por cuenta del Responsable, con contrato de encargo conforme al art. 28 RGPD:
 
+> ⚠️ **El proveedor de IA lo elige el Responsable dentro de la propia aplicación**
+> (Configuración → Motores de IA), y puede cambiarlo cuando quiera. Esta tabla debe
+> rellenarse con **el que se esté usando de verdad**, no con el que venga por defecto.
+
 | Encargado | Función | Ubicación de los servidores |
 |---|---|---|
-| **Groq, Inc.** | Transcripción de audio (Whisper) y generación de resúmenes (LLaMA) mediante IA. | **Estados Unidos** |
-| **Supabase** | Almacenamiento en la nube de datos estructurados (proyectos, candidatos, transcripciones, resúmenes, perfil del usuario). | **[REGIÓN]** (UE o EE.UU., según configuración del proyecto) |
+| **[PROVEEDOR DE TRANSCRIPCIÓN]** — p. ej. ElevenLabs (Scribe), Groq (Whisper), OpenAI, Deepgram | Convierte el audio de la entrevista en texto. **Recibe la grabación completa.** | **Estados Unidos** en todos los proveedores incluidos por defecto |
+| **[PROVEEDOR DE RESUMEN]** — p. ej. Groq, OpenAI, Anthropic | Genera el resumen de evaluación a partir de la transcripción. **Recibe el texto completo de la entrevista.** | **Estados Unidos** en todos los proveedores incluidos por defecto |
+| **Supabase** | Almacenamiento en la nube de los datos estructurados (proyectos, candidatos, transcripciones, resúmenes, perfil) **y de los archivos de audio de las entrevistas**. | **[REGIÓN]** (UE o EE.UU., según cómo se creó el proyecto) |
+
+La aplicación admite además un proveedor **personalizado**: si el Responsable configura
+una URL propia (un servidor suyo o un modelo local), el audio y el texto no salen de esa
+infraestructura y esta tabla debe reflejarlo.
 
 No se realizan otras cesiones de datos a terceros salvo obligación legal.
 
-### 5.1. Almacenamiento local
-Las **grabaciones de audio** se almacenan **localmente** en el equipo del usuario, en la carpeta `Documentos/CallTranscriber`. El Responsable es quien controla el acceso físico y lógico a dicho equipo y debe adoptar medidas de seguridad adecuadas (cifrado de disco, control de acceso, etc.).
+### 5.1. Dónde se guardan las grabaciones
+
+- **En el equipo del usuario**, en la carpeta `Documentos/CallTranscriber`: el audio, y
+  también el **vídeo** cuando se graba pantalla. El vídeo **nunca** sale del equipo.
+- **En Supabase Storage** (bucket privado `recordings`), cuando el usuario sube la
+  grabación para poder abrirla desde otro equipo o compartirla con un compañero. Se suben
+  dos archivos por entrevista: la mezcla y la pista con la voz del interlocutor.
+
+El Responsable controla el acceso físico y lógico al equipo local y debe adoptar medidas
+de seguridad adecuadas (cifrado de disco, control de acceso).
+
+### 5.2. Carpetas compartidas con otros usuarios
+
+El Responsable puede dar acceso a un proyecto a otra persona con cuenta en la aplicación.
+Esa persona pasa a ver los datos de los candidatos de ese proyecto —incluidas
+transcripciones, resúmenes y los audios que se hayan subido— y puede trabajar sobre ellos.
+**Es una comunicación de datos personales**: debe estar justificada y quedar documentada.
 
 ---
 
 ## 6. Transferencias internacionales de datos
 
-El uso de **Groq (EE.UU.)** implica una **transferencia internacional de datos personales** fuera del Espacio Económico Europeo. Dicha transferencia se ampara, según corresponda, en:
+Todos los proveedores de IA incluidos por defecto en la aplicación (ElevenLabs, Groq,
+OpenAI, Deepgram, Anthropic) tienen sus servidores en **Estados Unidos**, así que usar
+cualquiera de ellos implica una **transferencia internacional de datos personales** fuera
+del Espacio Económico Europeo. Dicha transferencia se ampara, según corresponda, en:
 
 - Las **Cláusulas Contractuales Tipo (CCT / SCC)** aprobadas por la Comisión Europea (Decisión de Ejecución (UE) 2021/914), y/o
 - Los mecanismos de adecuación vigentes (p. ej., adhesión del proveedor al marco *EU-U.S. Data Privacy Framework*, en caso de estar certificado — **a verificar por el Responsable**).

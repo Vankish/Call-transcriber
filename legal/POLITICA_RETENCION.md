@@ -11,7 +11,8 @@ Esta política define los plazos de conservación y los procedimientos de supres
 - Los datos se conservan **solo el tiempo necesario** para las finalidades para las que fueron recabados.
 - Transcurridos los plazos, los datos se **suprimen o anonimizan** de forma segura.
 - La supresión abarca **todas las ubicaciones**: almacenamiento local (`Documentos/CallTranscriber`) y almacenamiento en la nube (**Supabase**).
-- Los datos enviados a **Groq** para su procesamiento se rigen, además, por la política de retención del propio proveedor (a verificar y documentar por el Responsable; en principio no se conservan para fines propios bajo el contrato de encargo).
+- La supresión en la nube incluye los **archivos de audio** subidos a Supabase Storage (bucket `recordings`), no solo las filas de la base de datos. La aplicación los borra junto con la entrevista, el candidato o el proyecto al que pertenecen.
+- Los datos enviados al **proveedor de IA** configurado (transcripción y resumen) se rigen, además, por la política de retención de ese proveedor, que el Responsable debe verificar y documentar. Cambiar de proveedor en la aplicación cambia a quién se le envía el audio y el texto: hay que revisar este punto cada vez.
 
 ---
 
@@ -56,7 +57,7 @@ Esta política define los plazos de conservación y los procedimientos de supres
 2. Verificar que la eliminación es **definitiva** y no permanece en tablas de respaldo o "soft delete".
 3. Considerar el ciclo de **copias de seguridad** de Supabase: confirmar el plazo en que las copias que aún contengan el dato quedan sobrescritas.
 
-### 4.3. Datos en Groq
+### 4.3. Datos en el proveedor de IA
 - Confirmar con el proveedor que los datos enviados para procesamiento **no se conservan** una vez completada la transcripción/resumen, conforme al contrato de encargo. Documentar dicha política.
 
 ### 4.4. Solicitudes de supresión a petición del interesado
