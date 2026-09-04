@@ -439,7 +439,8 @@ function App() {
   const [pendingRecordVideo, setPendingRecordVideo] = useState(false)
 
   // ── Config ─────────────────────────────────────────────────────────────
-  const [configLoaded, setConfigLoaded] = useState(false)
+  // En el navegador (sin Electron) no hay config local que cargar: nace cargado.
+  const [configLoaded, setConfigLoaded] = useState(() => !window.desktopApp?.getConfig)
   // Motores de IA: transcripción y resumen se configuran por separado, cada uno
   // con su proveedor, su clave y su modelo. Ver electron/providers.cjs.
   const [sttCfg, setSttCfg] = useState<ProviderConfig>(DEFAULT_STT_CFG)
@@ -487,7 +488,11 @@ function App() {
   const [audioSync, setAudioSync] = useState<Record<string, AudioSyncState>>({})
   const [exportFormat, setExportFormat] = useState<'pdf' | 'txt' | 'clipboard'>('clipboard')
   const [txLang, setTxLang] = useState('auto')
-  const [userPhoto, setUserPhoto] = useState('')
+  // Se lee en el inicializador y no en un efecto: asi el avatar sale ya puesto en
+  // el primer render, sin el parpadeo de "inicial gris -> foto" que habia antes.
+  const [userPhoto, setUserPhoto] = useState(() => {
+    try { return localStorage.getItem('ct-user-photo') ?? '' } catch { return '' }
+  })
   const [candidateNotesDraft, setCandidateNotesDraft] = useState('')
   const [candidateStatusDraft, setCandidateStatusDraft] = useState<Candidate['candidateStatus']>('pendiente')
   const [candidateConsentDraft, setCandidateConsentDraft] = useState(false)
@@ -878,7 +883,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!window.desktopApp?.getConfig) { setConfigLoaded(true); return }
+    if (!window.desktopApp?.getConfig) return
     void window.desktopApp.getConfig().then(cfg => {
       // El proceso principal ya entrega stt/llm migrados desde el formato antiguo
       // si hacía falta (ver providers.migrateConfig).
@@ -922,7 +927,6 @@ function App() {
   // (data loaded from Supabase via the auth effect above)
 
   // ── Load user photo ────────────────────────────────────────────────────
-  useEffect(() => { const p = localStorage.getItem('ct-user-photo'); if (p) setUserPhoto(p) }, [])
 
   useEffect(() => window.desktopApp?.onSummaryProgress?.(setSummaryProgress), [])
 
