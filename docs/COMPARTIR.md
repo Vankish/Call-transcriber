@@ -26,8 +26,7 @@ buscador de la app **no encontrará a nadie**, por muy bien escrito que esté el
 
 1. Abre el navegador y entra en **https://supabase.com**.
 2. Pulsa **Sign in** e inicia sesión con tu cuenta.
-3. En el listado de proyectos, haz clic en **tu proyecto de Call Transcriber**
-   (el que empieza por `tu-proyecto`).
+3. En el listado de proyectos, haz clic en **tu proyecto de Call Transcriber**.
 4. En la barra lateral izquierda, haz clic en **SQL Editor** (el icono con el símbolo
    `>_`).
 5. Arriba a la izquierda del editor, pulsa el botón **+ New query**.

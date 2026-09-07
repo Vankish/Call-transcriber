@@ -1,6 +1,7 @@
 # Call Transcriber — Contexto del Proyecto
 
-> ⚡ **Estado actual / lanzamiento:** lee primero `docs/NOTAS.md`.
+> ⚡ **Estado actual / lanzamiento:** lee primero `notas-privadas/ESTADO.md`, que **no va
+> al repositorio** — son notas de trabajo del autor, no documentación del proyecto.
 
 ## Qué es esta app
 

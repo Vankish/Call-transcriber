@@ -131,8 +131,7 @@ npm run lint
 ⚠️ `electron-builder` **no compila nada**: empaqueta lo que haya en `dist/`. Si lo lanzas
 sin `npm run build` delante, reconstruyes el `.exe` con el código viejo.
 
-Más contexto del proyecto en [`CLAUDE.md`](CLAUDE.md) y en
-[`docs/NOTAS.md`](docs/NOTAS.md).
+Más contexto del proyecto en [`CLAUDE.md`](CLAUDE.md).
 
 ## Licencia
 

@@ -33,3 +33,6 @@ release
 # Ademas settings.local.json guarda reglas de permiso que pueden llevar
 # credenciales dentro.
 .claude/
+
+# Notas de trabajo del autor: contexto propio, no del proyecto.
+notas-privadas/
