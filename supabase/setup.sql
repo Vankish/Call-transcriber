@@ -124,6 +124,16 @@ create table if not exists public.interviews (
 -- ALTER TABLE public.interviews ADD COLUMN IF NOT EXISTS audio_uploaded boolean not null default false;
 -- El bucket de Storage y sus políticas van en supabase-migration-audio-nube.sql.
 
+-- ── Puesta al dia de instalaciones antiguas ───────────────────────────────────
+-- Las columnas de arriba solo se crean si la tabla no existia. Estas dos son las
+-- unicas que ningun apartado posterior vuelve a anadir, asi que en una base de
+-- datos anterior a ellas se quedarian fuera. Las demas (consentimiento, estado
+-- del candidato, entrevistadores, audios) llegan en los apartados 2 a 5.
+alter table public.profiles
+  add column if not exists country text not null default '';
+alter table public.projects
+  add column if not exists evaluation_criteria jsonb not null default '[]'::jsonb;
+
 -- ── Row Level Security ────────────────────────────────────────────────────────
 alter table public.profiles   enable row level security;
 alter table public.projects   enable row level security;
