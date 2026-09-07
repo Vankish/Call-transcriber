@@ -16,10 +16,13 @@ banner azul "Reiniciar e instalar". También se instala sola al cerrar la app.
 1. **Sube el número de versión** en `package.json` (`"version"`). electron-updater compara
    versiones semánticas, así que cada release debe tener una versión mayor que la anterior
    (p. ej. `1.0.0` → `1.0.1`).
-2. Crea un **Personal Access Token de GitHub** con permiso `repo` y expórtalo:
+2. Da acceso a GitHub. Lo más limpio es dejar que lo gestione la propia CLI de GitHub,
+   así no hay ningún credencial escrito en la terminal ni en un archivo:
    ```powershell
-   $env:GH_TOKEN = "TU_TOKEN"
+   $env:GH_TOKEN = (gh auth token).Trim()
    ```
+   Si el push se rechaza al tocar `.github/workflows/`, al token le falta el permiso
+   `workflow`: `gh auth refresh -s workflow -h github.com`.
 3. Ejecuta el script de publicación:
    ```powershell
    npm run release:win
