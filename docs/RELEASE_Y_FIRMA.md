@@ -38,6 +38,33 @@ Para generar el instalador sin tocar GitHub (pruebas):
 ```powershell
 npm run package:win    # === dist:win; usa --publish never
 ```
+
+### ⚠️ El instalador que se distribuye NO lleva ningún proyecto de Supabase
+
+Vite mete las variables `VITE_*` **dentro** del JavaScript compilado. Si se empaquetara con
+el `.env` de desarrollo, cada instalador repartido llevaría la URL y la clave del proyecto de
+Supabase de quien lo compiló, y cualquiera que lo descargase podría crearse una cuenta ahí y
+gastarle la cuota.
+
+Por eso `package:win`, `dist:win` y `release:win` no llaman a `npm run build`, sino a
+**`npm run build:publico`**, que compila forzando los valores de relleno de `.env.example`.
+La app detecta ese relleno, arranca en modo local y enseña el aviso de "la sincronización no
+está configurada", que ya explica al usuario cómo poner su propio proyecto.
+
+No hay que hacer nada especial: basta con usar los scripts de siempre. Lo que **no** hay que
+hacer es empaquetar a mano con `npm run build` delante.
+
+Para una copia personal *con* la nube conectada, que no se reparte a nadie:
+```powershell
+npm run package:win:personal    # usa tu .env; el .exe queda en release/
+```
+
+Comprobación rápida de que un instalador salió limpio (sustituye por tu id de proyecto):
+```powershell
+npm run build:publico
+Select-String -Path dist\assets\*.js -Pattern "tu-id-de-proyecto" -SimpleMatch
+# no debe devolver nada
+```
 El instalador queda en `release/`.
 
 > Nota: la primera ejecución de electron-builder descarga sus dependencias (winCodeSign,
@@ -112,5 +139,7 @@ proveedor del certificado.
 - [ ] (Si hay cert) exportar `CSC_LINK` y `CSC_KEY_PASSWORD`.
 - [ ] Exportar `GH_TOKEN`.
 - [ ] `npm run release:win`.
+- [ ] Comprobar que el compilado no lleva ningún proyecto de Supabase dentro
+      (ver "El instalador que se distribuye NO lleva ningún proyecto de Supabase").
 - [ ] Publicar el Release (borrador) en GitHub.
 - [ ] Probar la actualización desde una versión anterior instalada.

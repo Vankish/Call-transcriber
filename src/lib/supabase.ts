@@ -3,7 +3,15 @@ import { createClient } from '@supabase/supabase-js'
 const url  = import.meta.env.VITE_SUPABASE_URL  as string | undefined
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 
-const isConfigured = url && !url.startsWith('YOUR_') && anon && !anon.startsWith('YOUR_')
+// Un valor de relleno (el de .env.example, o el que mete `npm run build:publico`)
+// cuenta como "no configurado": la app arranca en modo local y ensena el aviso de
+// AuthScreen en vez de intentar hablar con un proyecto que no existe.
+//
+// Se busca 'YOUR_' en cualquier posicion, no solo al principio: la URL de ejemplo
+// es https://YOUR_PROJECT.supabase.co, que empieza por 'https://' y se colaba.
+const esRelleno = (v?: string) => !v || v.includes('YOUR_') || v.includes('placeholder')
+
+const isConfigured = !esRelleno(url) && !esRelleno(anon)
 
 export const supabase = createClient(
   isConfigured ? url! : 'https://placeholder.supabase.co',
