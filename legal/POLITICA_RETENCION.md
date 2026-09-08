@@ -46,6 +46,8 @@ Esta política define los plazos de conservación y los procedimientos de supres
 
 ## 4. Procedimiento de supresión
 
+> ⚠️ **La aplicación no suprime nada por antigüedad.** Borra los audios de la nube cuando se borra la entrevista, el candidato o el proyecto, pero **ningún dato caduca solo**: los plazos de esta política se ejecutan a mano. Antes de publicar plazos, hay que fijar quién los revisa y cada cuánto — una política de retención que nadie ejecuta deja por escrito que se prometió borrar y no se borró.
+
 ### 4.1. Supresión en el equipo local (`Documentos/CallTranscriber`)
 1. Identificar los archivos de audio asociados al candidato/proceso cuyo plazo ha vencido.
 2. **Eliminar de forma segura** los archivos de la carpeta `Documentos/CallTranscriber`.
