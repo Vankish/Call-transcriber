@@ -36,3 +36,6 @@ release
 
 # Notas de trabajo del autor: contexto propio, no del proyecto.
 notas-privadas/
+
+# Cursor: configuracion del editor, no del proyecto.
+.cursor/
