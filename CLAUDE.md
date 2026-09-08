@@ -66,7 +66,7 @@ sin `npm run build` delante, reconstruyes el `.exe` con el código viejo.
 
 El diseño se define primero en Figma y luego se implementa aquí. Los identificadores del
 archivo, los node IDs de cada pantalla y cómo conectar el MCP están en
-`.claude/figma-privado.md`, que **no va al repositorio** (es un archivo de cliente).
+`.claude/figma-privado.md`, que **no va al repositorio**.
 
 ### Colores de marca
 - Azul principal: `#2563EB`
@@ -79,5 +79,5 @@ archivo, los node IDs de cada pantalla y cómo conectar el MCP están en
   ffmpeg, por qué el límite es 8.000 tokens y no 12.000. Mantén esa costumbre.
 - **Mensajes de commit en español, en minúscula, con prefijo** (`feat:`, `fix:`,
   `docs:`, `chore:`) y **sin acentos**.
-- **Nunca escribas credenciales** en archivos versionados — ni dentro de reglas de
-  permiso de `.claude/`, que fue justo como se filtró un token en agosto de 2026.
+- **Nunca escribas credenciales** en archivos versionados — tampoco dentro de las reglas
+  de permiso de `.claude/`, que es un sitio fácil de olvidar.
