@@ -247,6 +247,31 @@ async function readConfig() {
   }
 }
 
+// Los proyectos, candidatos y entrevistas se guardaban en el localStorage del
+// navegador. Ahí caben ~5 MB por origen, y una sola entrevista transcrita pasa de
+// 12.000 caracteres: con unas decenas de llamadas la cuota revienta, el navegador
+// tira el registro entero y el histórico desaparece sin avisar. Por eso viven aquí,
+// en un archivo del disco, igual que la configuración.
+const DATA_FILE = () => path.join(app.getPath('userData'), 'call-transcriber-datos.json')
+
+async function readData() {
+  try {
+    const raw = await fs.readFile(DATA_FILE(), 'utf-8')
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+// Se escribe a un temporal y se renombra: si la app se cierra a media escritura,
+// el archivo bueno sigue intacto en vez de quedarse a medio JSON.
+async function writeData(payload) {
+  const target = DATA_FILE()
+  const tmp = `${target}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(payload), 'utf-8')
+  await fs.rename(tmp, target)
+}
+
 function convertToFormat(inputPath, outputPath, format) {
   return new Promise((resolve, reject) => {
     const args = format === 'wav'
@@ -433,6 +458,13 @@ ipcMain.handle('config:get', async () => {
 
 ipcMain.handle('config:save', async (_event, payload) => {
   await fs.writeFile(CONFIG_FILE(), JSON.stringify(payload), 'utf-8')
+  return { ok: true }
+})
+
+ipcMain.handle('data:get', async () => readData())
+
+ipcMain.handle('data:save', async (_event, payload) => {
+  await writeData(payload)
   return { ok: true }
 })
 

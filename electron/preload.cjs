@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   setCaptureMode: (wantsVideo) => ipcRenderer.invoke('capture:set-mode', wantsVideo),
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (payload) => ipcRenderer.invoke('config:save', payload),
+  getLocalData: () => ipcRenderer.invoke('data:get'),
+  saveLocalData: (payload) => ipcRenderer.invoke('data:save', payload),
   getProviderCatalog: () => ipcRenderer.invoke('providers:catalog'),
   testProvider: (payload) => ipcRenderer.invoke('providers:test', payload),
   transcribeAudio: (payload) => ipcRenderer.invoke('transcription:run', payload),

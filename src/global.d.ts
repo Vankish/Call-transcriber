@@ -158,6 +158,17 @@ type SummaryProgress = {
   esperaHasta: number | null
 }
 
+/**
+ * Los datos de trabajo cuando no hay nube: proyectos, candidatos y entrevistas.
+ * Se tipan sueltos a propósito — el modelo real vive en App.tsx y aquí solo
+ * viajan de ida y vuelta al archivo del disco.
+ */
+interface LocalDataPayload {
+  projects?: unknown[]
+  candidates?: unknown[]
+  interviews?: unknown[]
+}
+
 interface Window {
   desktopApp?: {
     platform: string
@@ -170,6 +181,8 @@ interface Window {
     setCaptureMode: (wantsVideo: boolean) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>
     saveConfig: (payload: SaveConfigPayload) => Promise<SaveConfigResult>
+    getLocalData: () => Promise<LocalDataPayload | null>
+    saveLocalData: (payload: LocalDataPayload) => Promise<{ ok: boolean }>
     getProviderCatalog: () => Promise<ProviderCatalog>
     testProvider: (payload: { kind: 'stt' | 'llm'; draft: ProviderConfig }) => Promise<{ ok: boolean; detail: string }>
     transcribeAudio: (payload: TranscribeAudioPayload) => Promise<TranscribeAudioResult>

@@ -131,6 +131,28 @@ const ONBOARDING_KEY = 'ct-onboarding-done'
 const LOCAL_MODE_KEY = 'ct-modo-local'
 const CRITERIA_KEY = 'ct-criteria-cache'
 
+type DatosLocales = { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
+
+// El trabajo hecho sin cuenta vive en un archivo del disco (ver `data:save` en
+// main.cjs). El localStorage se sigue mirando por detrás porque las instalaciones
+// anteriores a ese cambio guardaban ahí: si no, al iniciar sesión por primera vez
+// no se encontraría nada que subir y el usuario perdería lo que llevaba hecho.
+const leerDatosLocales = async (): Promise<DatosLocales | null> => {
+  const delDisco = await window.desktopApp?.getLocalData?.().catch(() => null)
+  if (delDisco) return delDisco as DatosLocales
+  try {
+    const raw = localStorage.getItem(V2_KEY)
+    return raw ? JSON.parse(raw) as DatosLocales : null
+  } catch { return null }
+}
+
+// Una vez subido a la nube, la copia local sobra. Se vacía el archivo y se retira
+// la clave antigua para no volver a subir lo mismo en el siguiente arranque.
+const limpiarDatosLocales = async () => {
+  await window.desktopApp?.saveLocalData?.({ projects: [], candidates: [], interviews: [] }).catch(() => {})
+  try { localStorage.removeItem(V2_KEY) } catch { /* modo incógnito */ }
+}
+
 const getCriteriaCache = (): Record<string, string[]> => {
   try { return JSON.parse(localStorage.getItem(CRITERIA_KEY) ?? '{}') } catch { return {} }
 }
@@ -559,6 +581,10 @@ function App() {
   // ── Auth ───────────────────────────────────────────────────────────────
   const [session, setSession]       = useState<Session | null>(null)
   const [modoLocal, setModoLocal] = useState(() => {
+    // Sin nube configurada no hay ninguna cuenta contra la que identificarse:
+    // enseñar la pantalla de acceso sería pedir unas credenciales que no existen.
+    // Se entra directo al trabajo, que es lo que hace la app en local.
+    if (!isSupabaseConfigured) return true
     try { return localStorage.getItem(LOCAL_MODE_KEY) === '1' } catch { return false }
   })
 
@@ -690,6 +716,11 @@ function App() {
 
   // ── Auth: session management ───────────────────────────────────────────
   useEffect(() => {
+    // Sin nube no hay sesión que gestionar. Se sale antes de montar nada: el
+    // cliente de relleno no tiene un servidor detrás y dejarlo escuchando solo
+    // sirve para que intente refrescar un token que no existe.
+    if (!isSupabaseConfigured) { setAuthLoading(false); return }
+
     // En cuanto hay cuenta, el modo local sobra: mandan los datos de la nube, y el
     // efecto de mas abajo se encarga de subir lo que se hubiera creado sin cuenta.
     const olvidarModoLocal = () => {
@@ -730,9 +761,8 @@ function App() {
         // Antes, si la nube ya tenía datos, los locales se descartaban en silencio
         // → "datos que se pierden de dispositivo a dispositivo".
         try {
-          const rawLocal = localStorage.getItem(V2_KEY)
-          if (rawLocal) {
-            const d = JSON.parse(rawLocal) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
+          const d = await leerDatosLocales()
+          if (d) {
             // Solo se reclama como propio lo que no tiene dueño (creado en este
             // equipo sin sesión). Una carpeta compartida por otra persona nunca
             // llega hasta aquí, pero si llegara, intentar apropiársela lo único
@@ -745,7 +775,7 @@ function App() {
               if (!cand) continue
               await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
             }
-            if (projs.length || cands.length || ivs.length) { localStorage.removeItem(V2_KEY); toast('Datos de este equipo sincronizados a la nube') }
+            if (projs.length || cands.length || ivs.length) { await limpiarDatosLocales(); toast('Datos de este equipo sincronizados a la nube') }
           }
         } catch { /* si el merge falla, seguimos y cargamos lo que haya en la nube */ }
 
@@ -828,11 +858,10 @@ function App() {
             }
           }
         } else {
-          // First login: migrate localStorage data to Supabase
-          const raw = localStorage.getItem(V2_KEY)
-          if (raw) {
+          // Primer inicio de sesión: lo trabajado sin cuenta se sube a Supabase.
+          const d = await leerDatosLocales()
+          if (d) {
             try {
-              const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
               const projs = d.projects ?? []; const cands = normalizeCandidates(d.candidates ?? []); const ivs = normalizeInterviews(d.interviews ?? [])
               if (projs.length || cands.length) {
                 if (projs.length) await supabase.from('projects').insert(projs.map(p => ({ id: p.id, user_id: userId, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria ?? [], interviewers: p.interviewers ?? [], created_at: p.createdAt })))
@@ -843,7 +872,7 @@ function App() {
                   await supabase.from('interviews').insert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt })
                 }
                 setProjects(normalizeProjects(projs)); setCandidates(cands); setInterviews(ivs)
-                localStorage.removeItem(V2_KEY)
+                await limpiarDatosLocales()
                 toast('Datos migrados a la nube')
               }
             } catch { /* ignore migration errors */ }
@@ -865,24 +894,45 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user.id])
 
-  // ── LocalStorage fallback when no Supabase session ────────────────────
+  // ── Datos de trabajo cuando no hay sesión en la nube ───────────────────
+  // Viven en un archivo del disco, no en el localStorage: el navegador da ~5 MB
+  // por origen y una entrevista transcrita pasa de 12.000 caracteres, así que al
+  // llegar a unas decenas de llamadas la cuota se agota y el registro entero se
+  // pierde de golpe. El localStorage solo se lee ya para rescatar lo que quedara
+  // de instalaciones anteriores.
   useEffect(() => {
     if (authLoading || session || localDataLoaded.current) return
     localDataLoaded.current = true
-    try {
-      const raw = localStorage.getItem(V2_KEY)
-      if (raw) {
+    const cargar = async () => {
+      try {
+        const delDisco = await window.desktopApp?.getLocalData?.()
+        if (delDisco) {
+          setProjects(normalizeProjects((delDisco.projects ?? []) as Project[]))
+          setCandidates(normalizeCandidates((delDisco.candidates ?? []) as Candidate[]))
+          setInterviews(normalizeInterviews((delDisco.interviews ?? []) as Interview[]))
+          return
+        }
+        // Primer arranque tras la actualización: lo que hubiera en el navegador se
+        // sube al archivo y se retira de allí, para no dejar dos copias que se
+        // pisen entre sí.
+        const raw = localStorage.getItem(V2_KEY)
+        if (!raw) return
         const d = JSON.parse(raw) as { projects?: Project[]; candidates?: Candidate[]; interviews?: Interview[] }
-        setProjects(normalizeProjects(d.projects ?? []))
-        setCandidates(normalizeCandidates(d.candidates ?? []))
-        setInterviews(normalizeInterviews(d.interviews ?? []))
-      }
-    } catch { /* ignore */ }
+        const projects = normalizeProjects(d.projects ?? [])
+        const candidates = normalizeCandidates(d.candidates ?? [])
+        const interviews = normalizeInterviews(d.interviews ?? [])
+        setProjects(projects); setCandidates(candidates); setInterviews(interviews)
+        const guardado = await window.desktopApp?.saveLocalData?.({ projects, candidates, interviews })
+        if (guardado?.ok) { try { localStorage.removeItem(V2_KEY) } catch { /* modo incógnito */ } }
+      } catch { /* ignore */ }
+    }
+    void cargar()
   }, [authLoading, session])
 
   useEffect(() => {
     if (!localDataLoaded.current || session) return
-    localStorage.setItem(V2_KEY, JSON.stringify({ projects, candidates, interviews }))
+    void window.desktopApp?.saveLocalData?.({ projects, candidates, interviews })
+      .catch(() => { /* si el disco falla, lo que hay en pantalla sigue intacto */ })
   }, [projects, candidates, interviews, session])
 
   const handleSignOut = async () => {
