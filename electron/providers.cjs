@@ -627,9 +627,12 @@ async function chatAnthropic(provider, { system, user, temperature, maxTokens })
 
 // ── Prueba de conexión (botón "Probar" en Ajustes) ───────────────────────────
 
+// 256 y no 16: los modelos que razonan antes de contestar (gpt-oss, o1, R1) gastan
+// tokens pensando y con un techo corto devuelven la respuesta vacia. gpt-oss-120b
+// necesita 44 para decir "OK", asi que con 16 la conexion salia fallida con la clave buena.
 async function testLlm(provider) {
   try {
-    const out = await chat(provider, { system: 'Responde solo con la palabra OK.', user: 'ping', maxTokens: 16 })
+    const out = await chat(provider, { system: 'Responde solo con la palabra OK.', user: 'ping', maxTokens: 256 })
     return { ok: true, detail: out.trim().slice(0, 40) || 'respuesta vacía' }
   } catch (err) {
     return { ok: false, detail: String(err?.message || err) }
