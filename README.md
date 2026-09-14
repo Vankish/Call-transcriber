@@ -11,6 +11,24 @@ tarjeta) y listo.
 > **Solo Windows 10/11.** La captura del audio del sistema usa `loopback`, que en la
 > práctica es de Windows. En macOS y Linux compila, pero no graba.
 
+![Resumen de una entrevista generado con IA, ordenado por los criterios del proyecto](docs/capturas/resumen.png)
+
+<details>
+<summary>Más capturas</summary>
+
+**Inicio:** proyectos activos y actividad reciente.
+![Pantalla de inicio](docs/capturas/inicio.png)
+
+**Un proyecto:** criterios de evaluación y el estado de cada perfil.
+![Detalle de un proyecto](docs/capturas/proyecto.png)
+
+**Transcripción:** separada por hablante, con marcas de tiempo y editable.
+![Transcripción de una entrevista](docs/capturas/transcripcion.png)
+
+</details>
+
+*Todos los nombres y datos de las capturas son inventados.*
+
 ---
 
 ## Qué hace
@@ -40,7 +58,7 @@ tarjeta) y listo.
    actualiza sola**: te avisa cuando hay versión nueva y te abre esta misma página para que
    descargues el instalador.
 
-3. Ábrela y pulsa **Empezar sin cuenta**.
+3. Ábrela. Entra directa, sin cuenta ni registro.
 4. Te pedirá una **API key de IA**. La de Groq es gratis y no pide tarjeta:
    [console.groq.com](https://console.groq.com) → *API Keys* → crear una → pegarla.
 
@@ -92,7 +110,9 @@ npm install
    VITE_SUPABASE_ANON_KEY=TU_CLAVE_PUBLICABLE
    ```
 
-4. `npm run package:win` genera tu instalador en `release/`.
+4. `npm run package:win:personal` genera tu instalador en `release/`. Ojo: `package:win` a
+   secas **no sirve** para esto, porque compila con credenciales de relleno a propósito (es
+   el que se publica y no debe llevar las de nadie dentro).
 
 Con eso aparece el registro en la pantalla de entrada. Al crear la cuenta, lo que ya
 tuvieras en local se sube solo.
