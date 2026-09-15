@@ -52,6 +52,8 @@ import {
 } from './icons'
 import { Select } from './Select'
 import { AuthScreen } from './AuthScreen'
+import { esIdioma, getIdioma, idiomaDelSistema, k, locale, setIdioma, t } from './i18n'
+import type { Idioma } from './i18n'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 // `ownerId` = quién creó la carpeta. Con las carpetas compartidas ya no basta
@@ -60,18 +62,20 @@ import { AuthScreen } from './AuthScreen'
 // va a rechazar (renombrar, borrar, repartir accesos).
 type Project = { id: string; ownerId: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }
 
+// Las etiquetas se traducen al pintarlas. Lo que se guarda es el id, así que un
+// proyecto creado en español se ve bien en inglés y al revés.
 const EVALUATION_CRITERIA = [
-  { id: 'experiencia',   label: 'Experiencia laboral' },
-  { id: 'formacion',     label: 'Formación académica' },
-  { id: 'situacion',     label: 'Situación personal' },
-  { id: 'habilidades',   label: 'Habilidades técnicas' },
-  { id: 'idiomas',       label: 'Idiomas' },
-  { id: 'disponibilidad',label: 'Disponibilidad' },
-  { id: 'salario',       label: 'Pretensiones salariales' },
-  { id: 'motivacion',    label: 'Motivación y expectativas' },
-  { id: 'blandas',       label: 'Competencias interpersonales' },
-  { id: 'adecuacion',    label: 'Adecuación al puesto' },
-  { id: 'otros',         label: 'Otros' },
+  { id: 'experiencia',   label: k('Experiencia laboral') },
+  { id: 'formacion',     label: k('Formación académica') },
+  { id: 'situacion',     label: k('Situación personal') },
+  { id: 'habilidades',   label: k('Habilidades técnicas') },
+  { id: 'idiomas',       label: k('Idiomas') },
+  { id: 'disponibilidad',label: k('Disponibilidad') },
+  { id: 'salario',       label: k('Pretensiones salariales') },
+  { id: 'motivacion',    label: k('Motivación y expectativas') },
+  { id: 'blandas',       label: k('Competencias interpersonales') },
+  { id: 'adecuacion',    label: k('Adecuación al puesto') },
+  { id: 'otros',         label: k('Otros') },
 ]
 type Candidate = { id: string; projectId: string; createdAt: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null }
 type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
@@ -248,8 +252,14 @@ const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${Str
 const formatEta = (sec: number) => sec < 60
   ? `${Math.max(5, Math.round(sec / 5) * 5)} s`
   : `${Math.ceil(sec / 60)} min`
-const fmtDate = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleString(locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-const fmtShort = (iso: string, locale = 'es-ES') => new Date(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
+const fmtDate = (iso: string, loc = locale()) => new Date(iso).toLocaleString(loc, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+const fmtShort = (iso: string, loc = locale()) => new Date(iso).toLocaleDateString(loc, { day: 'numeric', month: 'short', year: 'numeric' })
+// Nombre por defecto de una sesión sin nombre: "Entrevista 15/09 10:30".
+const fechaCorta = () => new Date().toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+// Electron envuelve los errores del proceso principal en "Error invoking remote
+// method 'x': Error: ...". Ese prefijo no le dice nada a nadie y tapa el mensaje
+// de verdad, que ya viene traducido desde main.cjs.
+const limpiarErrorIpc = (msg: string) => msg.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '')
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 
 // ── Audios en la nube ──────────────────────────────────────────────────────
@@ -371,36 +381,36 @@ const EmptyState = ({ icon, title, sub, btnLabel, onBtn }: { icon?: React.ReactN
 // Estado del candidato. Estaba repetido en tres pantallas con los colores y las
 // etiquetas copiados a mano; ahora vive en un sitio.
 const CANDIDATE_STATUS: Record<string, { bg: string; color: string; icon: ReactNode; label: string }> = {
-  apto:       { bg: '#d1fae5', color: '#065f46', icon: <CheckIcon size={11} />, label: 'Apto' },
-  finalista:  { bg: '#dbeafe', color: '#1d4ed8', icon: <StarIcon size={11} />,  label: 'Finalista' },
-  descartado: { bg: '#fee2e2', color: '#991b1b', icon: <CloseIcon size={11} />, label: 'Descartado' },
+  apto:       { bg: '#d1fae5', color: '#065f46', icon: <CheckIcon size={11} />, label: k('Apto') },
+  finalista:  { bg: '#dbeafe', color: '#1d4ed8', icon: <StarIcon size={11} />,  label: k('Finalista') },
+  descartado: { bg: '#fee2e2', color: '#991b1b', icon: <CloseIcon size={11} />, label: k('Descartado') },
 }
 
 const CandidateStatusPill = ({ status }: { status: Candidate['candidateStatus'] }) => {
   const s = CANDIDATE_STATUS[status]
   if (!s) return null
-  return <span className="cand-pill" style={{ background: s.bg, color: s.color }}>{s.icon} {s.label}</span>
+  return <span className="cand-pill" style={{ background: s.bg, color: s.color }}>{s.icon} {t(s.label)}</span>
 }
 
 const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: 'list' | 'grid') => void }) => (
   <div className="view-toggle">
-    <button type="button" className={`view-toggle-btn${mode === 'list' ? ' view-toggle-btn--active' : ''}`} title="Lista de detalles" onClick={() => onChange('list')}>
-      <ListViewIcon /> Lista de detalles
+    <button type="button" className={`view-toggle-btn${mode === 'list' ? ' view-toggle-btn--active' : ''}`} title={t('Lista de detalles')} onClick={() => onChange('list')}>
+      <ListViewIcon /> {t('Lista de detalles')}
     </button>
-    <button type="button" className={`view-toggle-btn${mode === 'grid' ? ' view-toggle-btn--active' : ''}`} title="Cuadrícula" onClick={() => onChange('grid')}>
-      <GridViewIcon /> Cuadrícula
+    <button type="button" className={`view-toggle-btn${mode === 'grid' ? ' view-toggle-btn--active' : ''}`} title={t('Cuadrícula')} onClick={() => onChange('grid')}>
+      <GridViewIcon /> {t('Cuadrícula')}
     </button>
   </div>
 )
 
 const SortSelect = ({ value, onChange }: { value: ProfileSort; onChange: (v: ProfileSort) => void }) => (
   <label className="sort-select">
-    <span className="sort-select-label">Ordenar</span>
+    <span className="sort-select-label">{t('Ordenar')}</span>
     <Select
       className="sort-select-input"
       value={value}
       onChange={v => onChange(v as ProfileSort)}
-      options={(Object.keys(PROFILE_SORT_LABELS) as ProfileSort[]).map(k => ({ value: k, label: PROFILE_SORT_LABELS[k] }))}
+      options={(Object.keys(PROFILE_SORT_LABELS) as ProfileSort[]).map(k => ({ value: k, label: t(PROFILE_SORT_LABELS[k]) }))}
     />
   </label>
 )
@@ -494,7 +504,11 @@ function App() {
   const [settingsAudioFormatDraft, setSettingsAudioFormatDraft] = useState<'mp3' | 'wav'>('mp3')
   const [settingsChunkDurationDraft, setSettingsChunkDurationDraft] = useState(600)
   const [settingsRecordingQualityDraft, setSettingsRecordingQualityDraft] = useState('high')
-  const [settingsLanguageDraft, setSettingsLanguageDraft] = useState('es')
+  // Idioma de la interfaz. La verdad para `t()` vive en src/i18n.ts; esto solo
+  // existe para que React vuelva a pintar todo al cambiarlo.
+  const [idioma, setIdiomaState] = useState<Idioma>(getIdioma)
+  const cambiarIdioma = (i: Idioma) => { setIdioma(i); setIdiomaState(i) }
+  const [settingsLanguageDraft, setSettingsLanguageDraft] = useState<Idioma>(getIdioma)
   const [settingsAutoSaveDraft, setSettingsAutoSaveDraft] = useState(true)
   const [settingsDateFormatDraft, setSettingsDateFormatDraft] = useState('DD/MM/YYYY')
   const [autoSave, setAutoSave] = useState(true)
@@ -775,7 +789,7 @@ function App() {
               if (!cand) continue
               await supabase.from('interviews').upsert({ id: iv.id, user_id: userId, candidate_id: iv.candidateId, project_id: cand.projectId, session_name: iv.sessionName, status: iv.status, duration_sec: iv.durationSec, mic_device_id: iv.micDeviceId, output_device_id: iv.outputDeviceId, transcript_original: iv.transcriptOriginal, transcript_edited: iv.transcriptEdited, transcript_updated_at: iv.transcriptUpdatedAt, recording_file_path: iv.recordingFilePath, capture_source: iv.captureSource, transcription_status: iv.transcriptionStatus, summary_instructions: iv.summaryInstructions, summary_text: iv.summaryText, summary_status: iv.summaryStatus, summary_type: iv.summaryType, summary_context: iv.summaryContext ?? 'entrevista', interviewer_name: iv.interviewerName ?? '', created_at: iv.createdAt, updated_at: iv.createdAt }, { onConflict: 'id' })
             }
-            if (projs.length || cands.length || ivs.length) { await limpiarDatosLocales(); toast('Datos de este equipo sincronizados a la nube') }
+            if (projs.length || cands.length || ivs.length) { await limpiarDatosLocales(); toast(t('Datos de este equipo sincronizados a la nube')) }
           }
         } catch { /* si el merge falla, seguimos y cargamos lo que haya en la nube */ }
 
@@ -792,8 +806,8 @@ function App() {
           listarComparticiones(),
         ])
         setShares(sharesRes)
-        if (pRes.error) { toast(`Error cargando proyectos: ${pRes.error.message}`, 'error'); return }
-        if (cRes.error) { toast(`Error cargando perfiles: ${cRes.error.message}`, 'error'); return }
+        if (pRes.error) { toast(t('Error cargando proyectos: {msg}', { msg: pRes.error.message }), 'error'); return }
+        if (cRes.error) { toast(t('Error cargando perfiles: {msg}', { msg: cRes.error.message }), 'error'); return }
         const hasRemote = (pRes.data?.length ?? 0) > 0 || (cRes.data?.length ?? 0) > 0
         if (hasRemote) {
           const criteriaCache = getCriteriaCache()
@@ -828,7 +842,7 @@ function App() {
           setProjects(loadedProjects)
           setCandidates((cRes.data ?? []).map(candFromDb))
           if (iRes.error) {
-            toast(`Error cargando entrevistas: ${iRes.error.message}`, 'error')
+            toast(t('Error cargando entrevistas: {msg}', { msg: iRes.error.message }), 'error')
           } else {
             const videoPathCache = getVideoPathCache()
             const systemAudioPathCache = getSystemAudioPathCache()
@@ -873,7 +887,7 @@ function App() {
                 }
                 setProjects(normalizeProjects(projs)); setCandidates(cands); setInterviews(ivs)
                 await limpiarDatosLocales()
-                toast('Datos migrados a la nube')
+                toast(t('Datos migrados a la nube'))
               }
             } catch { /* ignore migration errors */ }
           }
@@ -945,12 +959,12 @@ function App() {
   }
 
   const handleChangePassword = async () => {
-    if (!settingsPasswordNewDraft.trim()) { toast('Ingresa la nueva contraseña', 'error'); return }
-    if (settingsPasswordNewDraft !== settingsPasswordConfirmDraft) { toast('Las contraseñas no coinciden', 'error'); return }
-    if (settingsPasswordNewDraft.length < 6) { toast('La contraseña debe tener al menos 6 caracteres', 'error'); return }
+    if (!settingsPasswordNewDraft.trim()) { toast(t('Ingresa la nueva contraseña'), 'error'); return }
+    if (settingsPasswordNewDraft !== settingsPasswordConfirmDraft) { toast(t('Las contraseñas no coinciden'), 'error'); return }
+    if (settingsPasswordNewDraft.length < 6) { toast(t('La contraseña debe tener al menos 6 caracteres'), 'error'); return }
     const { error } = await supabase.auth.updateUser({ password: settingsPasswordNewDraft })
     if (error) { toast(error.message, 'error'); return }
-    toast('Contraseña actualizada correctamente')
+    toast(t('Contraseña actualizada correctamente'))
     setSettingsPasswordDraft(''); setSettingsPasswordNewDraft(''); setSettingsPasswordConfirmDraft('')
   }
 
@@ -975,7 +989,11 @@ function App() {
       if (cfg.audioFormat)        setSettingsAudioFormatDraft(cfg.audioFormat as 'mp3' | 'wav')
       if (cfg.recordingQuality)   setSettingsRecordingQualityDraft(cfg.recordingQuality)
       if (cfg.chunkDuration)      setSettingsChunkDurationDraft(cfg.chunkDuration)
-      if (cfg.language)           setSettingsLanguageDraft(cfg.language)
+      // Sin idioma guardado manda el de Windows, que es lo que ya se está viendo.
+      // Solo se aplica si es distinto, para no repintar la app entera al arrancar.
+      const idiomaGuardado: Idioma = esIdioma(cfg.language) ? cfg.language : idiomaDelSistema()
+      setSettingsLanguageDraft(idiomaGuardado)
+      if (idiomaGuardado !== getIdioma()) { setIdioma(idiomaGuardado); setIdiomaState(idiomaGuardado) }
       if (cfg.dateFormat)         setSettingsDateFormatDraft(cfg.dateFormat)
       if (cfg.autoSave !== undefined) { setSettingsAutoSaveDraft(cfg.autoSave); setAutoSave(cfg.autoSave) }
       if (cfg.autoTranscribe !== undefined) setAutoTranscribe(cfg.autoTranscribe)
@@ -1119,8 +1137,8 @@ function App() {
         const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
         probe.getTracks().forEach(t => t.stop())
         const devs = await navigator.mediaDevices.enumerateDevices()
-        const mics = devs.filter(d => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, name: d.label || `Micrófono ${i + 1}` }))
-        const outs = devs.filter(d => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, name: d.label || `Salida ${i + 1}` }))
+        const mics = devs.filter(d => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, name: d.label || t('Micrófono {n}', { n: i + 1 }) }))
+        const outs = devs.filter(d => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, name: d.label || t('Salida {n}', { n: i + 1 }) }))
         setMicDevices(mics)
         setOutputDevices(outs)
         const savedMic = localStorage.getItem('ct-default-mic') ?? ''
@@ -1140,7 +1158,7 @@ function App() {
         setSettingsDefaultSystemDraft(savedSystem)
         setSettingsRecordVideoDraft(savedRecordVideo)
         setSettingsVideoQualityDraft(savedVideoQuality)
-      } catch { setRecordingMessage('No se pudieron cargar dispositivos de audio.') }
+      } catch { setRecordingMessage(t('No se pudieron cargar dispositivos de audio.')) }
     }
     void load()
   }, [])
@@ -1172,14 +1190,14 @@ function App() {
   // ── Recording ──────────────────────────────────────────────────────────
   const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false) => {
     const iv = interviewOverride ?? selectedInterview
-    if (!iv?.micDeviceId) { setRecordingMessage('Selecciona un micrófono antes de grabar.'); return }
+    if (!iv?.micDeviceId) { setRecordingMessage(t('Selecciona un micrófono antes de grabar.')); return }
     const ivCandidate = candidates.find(c => c.id === iv.candidateId)
     if (ivCandidate && !ivCandidate.consentGiven) {
-      const proceed = window.confirm(`${ivCandidate.name || 'Este candidato'} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?`)
+      const proceed = window.confirm(t('{nombre} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name || t('Este candidato') }))
       if (!proceed) return
     }
     try {
-      setRecordingMessage('Solicitando permisos…')
+      setRecordingMessage(t('Solicitando permisos…'))
       chunkRef.current = []
       videoChunkRef.current = []
       systemChunkRef.current = []
@@ -1209,7 +1227,7 @@ function App() {
       if (captureSystem && !hasSystemAudio && !recordVideo) {
         // Aviso inmediato (no esperar a ver el resultado en la transcripción):
         // se sigue grabando solo con el micrófono, pero David tiene que saberlo YA.
-        toast('No se capturó el audio del interlocutor: solo se grabará tu micrófono', 'error')
+        toast(t('No se capturó el audio del interlocutor: solo se grabará tu micrófono'), 'error')
       }
 
       if (recordVideo && !videoTrack) {
@@ -1218,7 +1236,7 @@ function App() {
         // del todo en vez de caer en una grabación de solo audio no pedida.
         micStream.getTracks().forEach(t => t.stop())
         sysStream?.getTracks().forEach(t => t.stop())
-        setRecordingMessage('Grabación cancelada.')
+        setRecordingMessage(t('Grabación cancelada.'))
         setInterviews(c => c.filter(i => i.id !== iv.id))
         if (session) await supabase.from('interviews').delete().eq('id', iv.id)
         return
@@ -1261,7 +1279,7 @@ function App() {
           videoMediaRecorderRef.current = videoRecorder
           videoRecorder.start(1000)
           setLivePreviewStream(videoWithAudioStream)
-          setCaptureWindowLabel(videoTrack.label || 'pantalla compartida')
+          setCaptureWindowLabel(videoTrack.label || t('pantalla compartida'))
         } catch { videoRecorder = null }
       }
 
@@ -1386,8 +1404,8 @@ function App() {
       }
       recorder.start(1000)
       updateInterview(iv.id, { status: 'recording', captureSource: hasSystemAudio ? 'mic+system' : 'mic' })
-      setRecordingMessage(hasSystemAudio ? 'Grabando micrófono + sistema.' : 'Grabando solo micrófono.')
-    } catch { setRecordingMessage('No se pudo iniciar la grabación.'); cleanupRecording() }
+      setRecordingMessage(hasSystemAudio ? t('Grabando micrófono + sistema.') : t('Grabando solo micrófono.'))
+    } catch { setRecordingMessage(t('No se pudo iniciar la grabación.')); cleanupRecording() }
   }
 
   const handleNewRecording = () => {
@@ -1403,7 +1421,7 @@ function App() {
     const filePath = await window.desktopApp.selectAudioFile()
     if (!filePath) return
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath
-    const defaultName = `Importada ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+    const defaultName = t('Importada {fecha}', { fecha: fechaCorta() })
     const n: Interview = {
       id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(),
       sessionName: defaultName, status: 'stopped', durationSec: 0,
@@ -1418,9 +1436,9 @@ function App() {
     setSelectedInterviewId(n.id)
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: n.sessionName, status: n.status, duration_sec: 0, mic_device_id: '', output_device_id: '', transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: fileName, capture_source: 'none', transcription_status: 'pending', summary_instructions: '', summary_text: '', summary_status: 'idle', summary_type: 'resumen', summary_context: 'entrevista', interviewer_name: '', created_at: n.createdAt, updated_at: n.createdAt })
-        .then(({ error }) => { if (error) toast(`Error al guardar importación en la nube: ${error.message}`, 'error') })
+        .then(({ error }) => { if (error) toast(t('Error al guardar importación en la nube: {msg}', { msg: error.message }), 'error') })
     }
-    toast(`Audio importado: ${fileName}`)
+    toast(t('Audio importado: {archivo}', { archivo: fileName }))
     if (autoTranscribe) void handleTranscribe(n.id)
   }
 
@@ -1431,7 +1449,7 @@ function App() {
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: n.interviewerName, created_at: n.createdAt, updated_at: n.createdAt })
-        .then(({ error }) => { if (error) toast(`Error al crear entrevista en la nube: ${error.message}`, 'error') })
+        .then(({ error }) => { if (error) toast(t('Error al crear entrevista en la nube: {msg}', { msg: error.message }), 'error') })
     }
     setSelectedInterviewId(n.id)
     void handleStartRecording(n, true, pendingRecordVideo)
@@ -1460,7 +1478,7 @@ function App() {
       setInterviews(c => c.filter(i => i.id !== iId))
       if (session) await supabase.from('interviews').delete().eq('id', iId)
     }
-    toast('Grabación descartada', 'info')
+    toast(t('Grabación descartada'), 'info')
   }
 
   const handlePauseRecording = () => {
@@ -1497,13 +1515,13 @@ function App() {
     const iId = activeInterviewIdRef.current
     if (!iId) return
     const blob = pendingBlobRef.current
-    const defaultName = `Entrevista ${new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+    const defaultName = t('Entrevista {fecha}', { fecha: fechaCorta() })
     const finalName = sessionNameDraft.trim() || defaultName
     setShowSessionNameModal(false); setDiscardConfirming(false)
     updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft, ...(blob ? { recordingUrl: URL.createObjectURL(blob) } : {}) })
     setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
-    toast('Grabación guardada')
+    toast(t('Grabación guardada'))
   }
 
   // ── Transcription / Summary ────────────────────────────────────────────
@@ -1511,17 +1529,17 @@ function App() {
     const interview = interviews.find(i => i.id === interviewId)
     // Estas salidas eran mudas: al pulsar "Transcribir" no pasaba nada y no había
     // forma de saber por qué. Cada una dice ahora qué falta.
-    if (!interview) { toast('No se encuentra la entrevista', 'error'); return }
-    if (!interview.recordingFilePath) { toast('Esta entrevista no tiene grabación asociada', 'error'); return }
-    if (!window.desktopApp?.transcribeAudio) { toast('La transcripción solo funciona en la app de escritorio', 'error'); return }
-    if (!sttReady) { toast('Configura un motor de transcripción', 'error', 'Ajustes → Motores de IA'); return }
+    if (!interview) { toast(t('No se encuentra la entrevista'), 'error'); return }
+    if (!interview.recordingFilePath) { toast(t('Esta entrevista no tiene grabación asociada'), 'error'); return }
+    if (!window.desktopApp?.transcribeAudio) { toast(t('La transcripción solo funciona en la app de escritorio'), 'error'); return }
+    if (!sttReady) { toast(t('Configura un motor de transcripción'), 'error', t('Configuración → Motores de IA')); return }
     // Si el audio se grabó en el otro equipo, se baja de la nube antes de seguir.
     // `systemPath` es la pista solo-sistema (voz limpia del interlocutor): su
     // presencia activa la separación determinista de hablantes en el backend.
     const audio = await ensureLocalAudio(interview)
     if (!audio) {
-      toast('No se encuentra el audio de esta entrevista', 'error',
-        interview.audioUploaded ? 'Falló la descarga desde la nube' : 'Se grabó en otro equipo y no se subió a la nube')
+      toast(t('No se encuentra el audio de esta entrevista'), 'error',
+        interview.audioUploaded ? t('Falló la descarga desde la nube') : t('Se grabó en otro equipo y no se subió a la nube'))
       return
     }
     const { filePath: fullPath, systemFilePath: systemPath } = audio
@@ -1532,14 +1550,14 @@ function App() {
       const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemPath ?? undefined, language: language ?? txLang, candidateName, interviewerName })
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
-      if (notifTranscription) toast('Transcripción completada')
+      if (notifTranscription) toast(t('Transcripción completada'))
       // La lectura de la conversación arranca sola aquí. Sin await: transcribir ya
       // ha terminado y esto es un adelanto que corre por detrás.
       void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
     } catch (err) {
       updateInterview(interviewId, { transcriptionStatus: 'error' })
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
-      if (notifErrors) toast('Error al transcribir', 'error', msg)
+      const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
+      if (notifErrors) toast(t('Error al transcribir'), 'error', msg)
     }
   }
 
@@ -1609,11 +1627,11 @@ function App() {
         saveNotesCache(interviewId, { notas: result.notes, huella, recortado: !!result.recortado })
         setNotesReadyTick(t => t + 1)
       }
-      if (notifSummary) toast('Resumen generado')
+      if (notifSummary) toast(t('Resumen generado'))
     } catch (err) {
       updateInterview(interviewId, { summaryStatus: 'error' })
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
-      if (notifErrors) toast('Error al generar resumen', 'error', msg)
+      const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
+      if (notifErrors) toast(t('Error al generar resumen'), 'error', msg)
     } finally {
       setSummaryProgress(null)
     }
@@ -1639,8 +1657,8 @@ function App() {
     if (!src) {
       const audioFiles = await ensureLocalAudio(interview)
       if (!audioFiles) {
-        toast('No se encuentra el audio de esta entrevista', 'error',
-          interview.audioUploaded ? 'Falló la descarga desde la nube' : 'Se grabó en otro equipo y no se subió a la nube')
+        toast(t('No se encuentra el audio de esta entrevista'), 'error',
+          interview.audioUploaded ? t('Falló la descarga desde la nube') : t('Se grabó en otro equipo y no se subió a la nube'))
         return
       }
       src = 'file:///' + audioFiles.filePath.replace(/\\/g, '/')
@@ -1757,7 +1775,7 @@ function App() {
           step={0.1}
           value={total > 0 ? Math.min(playbackCurrentTime, total) : 0}
           onChange={e => handleSeek(parseFloat(e.target.value))}
-          title="Adelantar o atrasar el audio"
+          title={t('Adelantar o atrasar el audio')}
         />
         <span className="seek-time">{total > 0 ? fmt(Math.floor(total)) : '--:--'}</span>
       </div>
@@ -1779,9 +1797,9 @@ function App() {
     setInterviews(c => c.filter(i => i.id !== interviewId))
     if (session) {
       const { error } = await supabase.from('interviews').delete().eq('id', interviewId)
-      if (error) { toast(`Error eliminando entrevista: ${error.message}`, 'error'); return }
+      if (error) { toast(t('Error eliminando entrevista: {msg}', { msg: error.message }), 'error'); return }
     }
-    toast('Entrevista eliminada')
+    toast(t('Entrevista eliminada'))
   }
 
   const handleDeleteCandidate = async (candidateId: string) => {
@@ -1796,10 +1814,10 @@ function App() {
         await supabase.from('interviews').delete().eq('candidate_id', candidateId)
       }
       const { error } = await supabase.from('candidates').delete().eq('id', candidateId)
-      if (error) { toast(`Error eliminando perfil: ${error.message}`, 'error'); return }
+      if (error) { toast(t('Error eliminando perfil: {msg}', { msg: error.message }), 'error'); return }
     }
     if (activeCandidateId === candidateId) { setActiveCandidateId(null); setScreen('project-detail') }
-    toast('Perfil eliminado')
+    toast(t('Perfil eliminado'))
   }
 
   const handleDeleteProject = async (projectId: string) => {
@@ -1807,7 +1825,7 @@ function App() {
     // los demás, pero esto cubre atajos de teclado y estados raros: sin esto, la
     // app borraría la carpeta de la pantalla y Supabase la devolvería al recargar.
     if (!esMiProyecto(projects.find(p => p.id === projectId))) {
-      toast('Esta carpeta no es tuya', 'warning', 'Solo quien la creó puede borrarla')
+      toast(t('Esta carpeta no es tuya'), 'warning', t('Solo quien la creó puede borrarla'))
       setPendingDeleteId(null); return
     }
     if (pendingDeleteId !== projectId) { setPendingDeleteId(projectId); return }
@@ -1822,7 +1840,7 @@ function App() {
     if (session) {
       await supabase.from('projects').delete().eq('id', projectId)
     }
-    toast('Proyecto eliminado')
+    toast(t('Proyecto eliminado'))
   }
 
   const handleCreateCandidate = async () => {
@@ -1834,9 +1852,9 @@ function App() {
     setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false)
     if (session) {
       const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: c.createdAt })
-      if (error) { toast(`Error guardando perfil: ${error.message}`, 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
+      if (error) { toast(t('Error guardando perfil: {msg}', { msg: error.message }), 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
     }
-    toast(`Perfil ${c.name} creado`)
+    toast(t('Perfil {nombre} creado', { nombre: c.name }))
   }
 
   const handleUpdateCandidate = () => {
@@ -1845,8 +1863,8 @@ function App() {
     const consentAt = candidateConsentDraft ? (prev?.consentAt ?? new Date().toISOString()) : null
     setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt } : x))
     if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt }).eq('id', editingCandidateId)
-      .then(({ error }) => { if (error) toast(`Error sincronizando perfil: ${error.message}`, 'error') }, () => {})
-    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast('Perfil actualizado')
+      .then(({ error }) => { if (error) toast(t('Error sincronizando perfil: {msg}', { msg: error.message }), 'error') }, () => {})
+    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast(t('Perfil actualizado'))
   }
 
   // ── Compartir carpetas ─────────────────────────────────────────────────
@@ -1870,7 +1888,7 @@ function App() {
     if (!res.ok) { setShareError(res.message); return }
     // Ya tenía acceso: se avisa aquí en vez de dejar que falle el insert.
     if (editingProjectId && comparticionesDe(editingProjectId).some(sh => sh.sharedWithId === res.user.id)) {
-      setShareError('Esa persona ya tiene acceso a este proyecto'); return
+      setShareError(t('Esa persona ya tiene acceso a este proyecto')); return
     }
     setShareEncontrado(res.user)
   }
@@ -1881,7 +1899,7 @@ function App() {
     if (!res.ok) { setShareError(res.message); return }
     setShares(c => [...c, res.share])
     limpiarBuscadorCompartir()
-    toast(`${shareEncontrado.name} ya puede ver este proyecto`, 'success', 'Tendrá que cerrar y abrir su app para verlo')
+    toast(t('{nombre} ya puede ver este proyecto', { nombre: shareEncontrado.name }), 'success', t('Tendrá que cerrar y abrir su app para verlo'))
   }
 
   // Píldora de la tarjeta de proyecto: "de quién es esta carpeta". Solo aparece
@@ -1889,18 +1907,18 @@ function App() {
   const renderSharedBadge = (p: Project) => {
     if (!esMiProyecto(p)) {
       const mia = comparticionesDe(p.id).find(sh => sh.sharedWithId === session?.user.id)
-      return <span className="shared-badge" title="Otra persona te ha dado acceso a esta carpeta"><UsersIcon /> Compartido por {mia?.ownerName || 'un compañero'}</span>
+      return <span className="shared-badge" title={t('Otra persona te ha dado acceso a esta carpeta')}><UsersIcon /> {t('Compartido por {nombre}', { nombre: mia?.ownerName || t('un compañero') })}</span>
     }
     const con = comparticionesDe(p.id).length
     if (con === 0) return null
-    return <span className="shared-badge shared-badge--owner" title="Has dado acceso a esta carpeta"><UsersIcon /> Compartido con {con}</span>
+    return <span className="shared-badge shared-badge--owner" title={t('Has dado acceso a esta carpeta')}><UsersIcon /> {t('Compartido con {n}', { n: con })}</span>
   }
 
   const handleQuitarAcceso = async (share: ProjectShare) => {
     const res = await dejarDeCompartir(share.id)
-    if (!res.ok) { toast('No se pudo quitar el acceso', 'error', res.message); return }
+    if (!res.ok) { toast(t('No se pudo quitar el acceso'), 'error', res.message); return }
     setShares(c => c.filter(x => x.id !== share.id))
-    toast(`${share.sharedWithName} ya no tiene acceso`)
+    toast(t('{nombre} ya no tiene acceso', { nombre: share.sharedWithName }))
   }
 
   const updateProject = (id: string, changes: Partial<Project>) => {
@@ -1915,7 +1933,7 @@ function App() {
       if (changes.evaluationCriteria !== undefined) db.evaluation_criteria = changes.evaluationCriteria
       if (changes.interviewers       !== undefined) db.interviewers        = changes.interviewers
       supabase.from('projects').update(db).eq('id', id)
-        .then(({ error }) => { if (error) toast(`Error sincronizando proyecto: ${error.message}`, 'error') }, () => {})
+        .then(({ error }) => { if (error) toast(t('Error sincronizando proyecto: {msg}', { msg: error.message }), 'error') }, () => {})
     }
   }
 
@@ -1926,9 +1944,9 @@ function App() {
     setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
     if (session) {
       const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, interviewers: p.interviewers, created_at: p.createdAt })
-      if (error) { toast(`Error guardando proyecto: ${error.message}`, 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
+      if (error) { toast(t('Error guardando proyecto: {msg}', { msg: error.message }), 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
     }
-    toast(`Proyecto ${p.name} creado`)
+    toast(t('Proyecto {nombre} creado', { nombre: p.name }))
   }
 
   const handleSaveEditProject = () => {
@@ -1936,12 +1954,12 @@ function App() {
     // Renombrar, cerrar o cambiar criterios es cosa del dueño. Si no lo eres, la
     // pantalla se quedaría con un cambio que la nube nunca aceptó.
     if (!esMiProyecto(projects.find(p => p.id === editingProjectId))) {
-      toast('Esta carpeta no es tuya', 'warning', 'Solo quien la creó puede cambiar sus datos')
+      toast(t('Esta carpeta no es tuya'), 'warning', t('Solo quien la creó puede cambiar sus datos'))
       setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir(); return
     }
     updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers })
     setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir()
-    toast('Proyecto actualizado')
+    toast(t('Proyecto actualizado'))
   }
 
   const handleSaveSettings = async () => {
@@ -1959,6 +1977,8 @@ function App() {
       autoSave: settingsAutoSaveDraft, autoTranscribe,
     })
     setSttCfg(nextStt); setLlmCfg(nextLlm)
+    // Antes que el aviso de abajo, para que "guardada" salga ya en el idioma nuevo.
+    if (settingsLanguageDraft !== idioma) cambiarIdioma(settingsLanguageDraft)
     setUserName(settingsNameDraft); setUserEmail(settingsEmailDraft); setUserCompany(settingsCompanyDraft)
     setUserRole(settingsRoleDraft); setAutoSave(settingsAutoSaveDraft)
     localStorage.setItem('ct-default-mic', settingsDefaultMicDraft)
@@ -1970,7 +1990,7 @@ function App() {
     setDefaultRecordVideo(settingsRecordVideoDraft); setDefaultVideoQuality(settingsVideoQualityDraft)
     // NOTE: las API keys NO se sincronizan a la nube por seguridad — viven solo en el config.json local.
     if (session) supabase.from('profiles').update({ name: settingsNameDraft, email: settingsEmailDraft, company: settingsCompanyDraft, tx_model: nextStt.model, sum_model: nextLlm.model, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
-    toast('Configuración guardada')
+    toast(t('Configuración guardada'))
   }
 
   const openSettings = (tab: SettingsTab = 'api-keys') => {
@@ -1981,6 +2001,7 @@ function App() {
     setSettingsRoleDraft(userRole)
     setSettingsDefaultMicDraft(defaultMicDeviceId); setSettingsDefaultOutputDraft(defaultOutputDeviceId); setSettingsDefaultSystemDraft(defaultCaptureSystem)
     setSettingsRecordVideoDraft(defaultRecordVideo); setSettingsVideoQualityDraft(defaultVideoQuality)
+    setSettingsLanguageDraft(idioma)
     setSettingsTab(tab); setScreen('settings')
   }
 
@@ -2028,7 +2049,7 @@ function App() {
       setUserPhoto(dataUrl)
       localStorage.setItem('ct-user-photo', dataUrl)
       if (session) supabase.from('profiles').update({ photo: dataUrl, updated_at: new Date().toISOString() }).eq('id', session.user.id).then(() => {}, () => {})
-      toast('Foto de perfil actualizada', 'success')
+      toast(t('Foto de perfil actualizada'), 'success')
     }
     reader.readAsDataURL(file)
     e.target.value = ''
@@ -2044,10 +2065,12 @@ function App() {
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
       stt, llm, groqApiKey: key, transcriptionModel: stt.model, summaryModel: llm.model,
       userName, userEmail, userCompany,
+      // El archivo se reescribe entero: sin esto el idioma se perdería aquí.
+      language: idioma,
     })
     setSttCfg(stt); setLlmCfg(llm); setShowOnboarding(false)
     localStorage.setItem(ONBOARDING_KEY, '1')
-    toast('API Key guardada — ¡todo listo!')
+    toast(t('API Key guardada — ¡todo listo!'))
   }
 
   const skipOnboardingToSettings = () => {
@@ -2058,16 +2081,19 @@ function App() {
 
   // ── Breadcrumb ─────────────────────────────────────────────────────────
   const breadcrumb = useMemo(() => {
-    if (screen === 'dashboard') return [{ label: 'Inicio' }]
-    if (screen === 'projects') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos' }]
-    if (screen === 'project-detail' && activeProject) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Proyectos', action: () => setScreen('projects') }, { label: activeProject.name }]
-    if (screen === 'candidate-detail' && activeProject && activeCandidate) return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: activeProject.name, action: () => goToProject(activeProject.id) }, { label: activeCandidate.name }]
-    if (screen === 'candidates') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Perfiles' }]
-    if (screen === 'settings') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Configuración' }]
-    if (screen === 'profile') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Mi Perfil' }]
-    if (screen === 'search') return [{ label: 'Inicio', action: () => setScreen('dashboard') }, { label: 'Buscar' }]
+    const inicio = t('Inicio')
+    if (screen === 'dashboard') return [{ label: inicio }]
+    if (screen === 'projects') return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Proyectos') }]
+    if (screen === 'project-detail' && activeProject) return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Proyectos'), action: () => setScreen('projects') }, { label: activeProject.name }]
+    if (screen === 'candidate-detail' && activeProject && activeCandidate) return [{ label: inicio, action: () => setScreen('dashboard') }, { label: activeProject.name, action: () => goToProject(activeProject.id) }, { label: activeCandidate.name }]
+    if (screen === 'candidates') return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Perfiles') }]
+    if (screen === 'settings') return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Configuración') }]
+    if (screen === 'profile') return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Mi Perfil') }]
+    if (screen === 'search') return [{ label: inicio, action: () => setScreen('dashboard') }, { label: t('Buscar') }]
     return []
-  }, [screen, activeProject, activeCandidate])
+  // `idioma` no se lee aquí dentro, pero `t()` sí depende de él.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, activeProject, activeCandidate, idioma])
 
   const resolveAudioPath = useCallback((stored: string | null): string | null => {
     if (!stored) return null
@@ -2131,19 +2157,19 @@ function App() {
         if (error) throw new Error(error.message)
         subidos++
       }
-      if (subidos === 0) throw new Error('no se encontró ningún archivo de audio en este equipo')
+      if (subidos === 0) throw new Error(t('no se encontró ningún archivo de audio en este equipo'))
       // Se persiste también el nombre de la pista de sistema: en grabaciones
       // antiguas solo estaba en el localStorage de este equipo, y sin él el otro
       // PC no sabría qué archivo bajar para separar hablantes.
       updateInterview(interview.id, { audioUploaded: true, systemAudioFilePath: interview.systemAudioFilePath })
       setAudioSync(s => { const rest = { ...s }; delete rest[interview.id]; return rest })
-      if (!opts?.silent) toast('Audio subido a la nube', 'success', 'Ya se puede transcribir desde el otro equipo')
+      if (!opts?.silent) toast(t('Audio subido a la nube'), 'success', t('Ya se puede transcribir desde el otro equipo'))
       return true
     } catch (err) {
       setAudioSync(s => ({ ...s, [interview.id]: 'error' }))
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      const msg = err instanceof Error ? err.message : t('Error desconocido')
       // El fallo más habitual es el límite de tamaño por archivo del plan (50 MB).
-      if (!opts?.silent) toast('No se pudo subir el audio', 'error', msg)
+      if (!opts?.silent) toast(t('No se pudo subir el audio'), 'error', msg)
       return false
     }
   }
@@ -2208,23 +2234,23 @@ function App() {
       return (
         <span className="audio-cloud audio-cloud--busy">
           <span className="spinner" style={{ width: 8, height: 8, display: 'inline-block', verticalAlign: 'middle' }} />
-          {estado === 'uploading' ? 'Subiendo audio…' : 'Bajando audio…'}
+          {estado === 'uploading' ? t('Subiendo audio…') : t('Bajando audio…')}
         </span>
       )
     }
     if (iv.audioUploaded) {
-      return <span className="audio-cloud audio-cloud--ok" title="El audio está en la nube: se puede escuchar y transcribir desde cualquiera de tus equipos."><CloudIcon size={12} /> En la nube</span>
+      return <span className="audio-cloud audio-cloud--ok" title={t('El audio está en la nube: se puede escuchar y transcribir desde cualquiera de tus equipos.')}><CloudIcon size={12} /> {t('En la nube')}</span>
     }
     return (
       <button
         type="button"
         className={`audio-cloud audio-cloud--local${estado === 'error' ? ' audio-cloud--error' : ''}`}
         title={estado === 'error'
-          ? 'La última subida falló. Pulsa para reintentar.'
-          : 'El audio vive solo en este equipo. Pulsa para subirlo y poder usarlo desde el otro PC.'}
+          ? t('La última subida falló. Pulsa para reintentar.')
+          : t('El audio vive solo en este equipo. Pulsa para subirlo y poder usarlo desde el otro PC.')}
         onClick={e => { e.stopPropagation(); void uploadInterviewAudio(iv) }}
       >
-        {estado === 'error' ? <><WarnTriangle /> No se pudo subir · Reintentar</> : <><CloudUploadIcon size={12} /> Solo en este PC · Subir</>}
+        {estado === 'error' ? <><WarnTriangle /> {t('No se pudo subir · Reintentar')}</> : <><CloudUploadIcon size={12} /> {t('Solo en este PC · Subir')}</>}
       </button>
     )
   }
@@ -2243,8 +2269,9 @@ function App() {
   const activeDateLocale = useMemo(() => {
     if (settingsDateFormatDraft === 'MM/DD/YYYY') return 'en-US'
     if (settingsDateFormatDraft === 'YYYY-MM-DD') return 'sv-SE'
-    return 'es-ES'
-  }, [settingsDateFormatDraft])
+    // DD/MM/YYYY lo usan los dos idiomas; lo que cambia es el nombre del mes.
+    return idioma === 'en' ? 'en-GB' : 'es-ES'
+  }, [settingsDateFormatDraft, idioma])
 
   const fd = useCallback((iso: string) => fmtDate(iso, activeDateLocale), [activeDateLocale])
   const fs = useCallback((iso: string) => fmtShort(iso, activeDateLocale), [activeDateLocale])
@@ -2284,20 +2311,20 @@ function App() {
               id="global-search-input"
               type="text"
               className="gs-input"
-              placeholder="Buscar en transcripciones y resúmenes… (Ctrl+K)"
+              placeholder={t('Buscar en transcripciones y resúmenes… (Ctrl+K)')}
               value={globalSearchQuery}
               onChange={e => setGlobalSearchQuery(e.target.value)}
               autoFocus
             />
             {globalSearchQuery && <button type="button" className="gs-clear" onClick={() => setGlobalSearchQuery('')}><CloseIcon size={13} /></button>}
           </div>
-          {q.length >= 2 && <p className="gs-count">{results.length} {results.length === 1 ? 'resultado' : 'resultados'}</p>}
+          {q.length >= 2 && <p className="gs-count">{results.length === 1 ? t('1 resultado') : t('{n} resultados', { n: results.length })}</p>}
         </div>
 
         {q.length < 2 ? (
-          <EmptyState icon={<SearchIcon />} title="Busca en tus entrevistas" sub="Escribe al menos 2 caracteres para buscar en todas las transcripciones y resúmenes." />
+          <EmptyState icon={<SearchIcon />} title={t('Busca en tus entrevistas')} sub={t('Escribe al menos 2 caracteres para buscar en todas las transcripciones y resúmenes.')} />
         ) : results.length === 0 ? (
-          <EmptyState title="Sin resultados" sub={`No se encontró «${globalSearchQuery}» en ninguna transcripción.`} />
+          <EmptyState title={t('Sin resultados')} sub={t('No se encontró «{texto}» en ninguna transcripción.', { texto: globalSearchQuery })} />
         ) : (
           <div className="gs-results">
             {results.map(({ interview: iv, cand, proj, excerpt, matchCount, idx }) => (
@@ -2306,7 +2333,7 @@ function App() {
                   <span className="gs-result-name">{cand?.name ?? '—'}</span>
                   {proj && <span className="gs-result-proj">{proj.name}</span>}
                   <span className="gs-result-session">{iv.sessionName || fs(iv.createdAt)}</span>
-                  <span className="gs-result-count">{matchCount} {matchCount === 1 ? 'coincidencia' : 'coincidencias'}</span>
+                  <span className="gs-result-count">{matchCount === 1 ? t('1 coincidencia') : t('{n} coincidencias', { n: matchCount })}</span>
                 </div>
                 <p className="gs-result-excerpt">{highlight(excerpt, idx)}</p>
               </div>
@@ -2335,9 +2362,9 @@ function App() {
         {/* ── Lista de proyectos ── */}
         <div className="dash-main">
           <div className="dash-projects-header">
-            <h2 className="dash-projects-title">Mis Proyectos</h2>
+            <h2 className="dash-projects-title">{t('Mis Proyectos')}</h2>
             <button type="button" className="primary-btn pill-btn" onClick={() => setShowNewProject(true)}>
-              Nuevo proyecto
+              {t('Nuevo proyecto')}
 </button>
           </div>
 
@@ -2346,7 +2373,7 @@ function App() {
               <span className="dash-search-icon"><SearchIcon /></span>
               <input
                 type="text"
-                placeholder="Buscar por proyecto o empresa…"
+                placeholder={t('Buscar por proyecto o empresa…')}
                 value={dashSearch}
                 onChange={e => setDashSearch(e.target.value)}
               />
@@ -2355,20 +2382,20 @@ function App() {
               type="button"
               className={`dash-filter-btn${dashFilter === 'active' ? ' dash-filter-btn--on' : ''}`}
               onClick={() => setDashFilter('active')}
-            >Activos</button>
+            >{t('Activos')}</button>
             <button
               type="button"
               className={`dash-filter-btn${dashFilter === 'closed' ? ' dash-filter-btn--on' : ''}`}
               onClick={() => setDashFilter('closed')}
-            >Cerrados</button>
+            >{t('Cerrados')}</button>
             <ViewToggle mode={projectsViewMode} onChange={setProjectsViewMode} />
           </div>
 
           <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.length === 0 ? (
               projects.length === 0
-                ? <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles." btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
-                : <EmptyState title="Sin resultados" sub="Prueba otro filtro o búsqueda." />
+                ? <EmptyState icon={<FolderIcon />} title={t('No tienes proyectos todavía')} sub={t('Crea tu primer proyecto para empezar a gestionar perfiles.')} btnLabel={t('Nuevo proyecto')} onBtn={() => setShowNewProject(true)} />
+                : <EmptyState title={t('Sin resultados')} sub={t('Prueba otro filtro o búsqueda.')} />
             ) : filteredProjects.map(p => {
               const cCnt = candidates.filter(c => c.projectId === p.id).length
               const iCnt = interviews.filter(i => candidates.find(c => c.id === i.candidateId)?.projectId === p.id).length
@@ -2382,24 +2409,24 @@ function App() {
                     <div className="plc-top">
                       <div className="plc-info">
                         <h3 className="plc-title">{p.name}</h3>
-                        <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
+                        <p className="plc-meta">{p.company} · {t('Creado {fecha}', { fecha: fs(p.createdAt) })}</p>
                         {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> Editar</button>}
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
-                          {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
+                          {isClosed ? <><SquareFilled /> {t('Cerrado')}</> : <><DotFilled /> {t('Activo')}</>}
                         </span>
                       </div>
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
-                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">perfiles</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">entrevistas</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">transcritas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{t('perfiles')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{t('entrevistas')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">{t('transcritas')}</span></div>
                         <div className="plc-stat">
                           <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
-                          <span className="plc-stat-lbl">pendientes</span>
+                          <span className="plc-stat-lbl">{t('pendientes')}</span>
                         </div>
                       </div>
                       <div className="plc-actions" onClick={e => e.stopPropagation()}>
@@ -2408,14 +2435,14 @@ function App() {
                           className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`}
                           onClick={() => goToProject(p.id)}
                         >
-                          {isClosed ? 'Ver proyecto' : 'Abrir proyecto'}
+                          {isClosed ? t('Ver proyecto') : t('Abrir proyecto')}
                         </button>
                         <button
                           type="button"
                           className={`plc-status-btn${isClosed ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`}
                           onClick={() => updateProject(p.id, { status: isClosed ? 'active' : 'closed' })}
                         >
-                          {isClosed ? 'Reabrir' : 'Cerrar'}
+                          {isClosed ? t('Reabrir') : t('Cerrar')}
                         </button>
                       </div>
                     </div>
@@ -2433,37 +2460,37 @@ function App() {
             <div className="ap-avatar" style={{ background: userPhoto ? 'transparent' : undefined, padding: 0, overflow: 'hidden' }}>
               {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
             </div>
-            <h3 className="ap-name">{userName || 'Usuario'}</h3>
+            <h3 className="ap-name">{userName || t('Usuario')}</h3>
             <p className="ap-email">{userEmail}</p>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
-            <h4>Resumen global</h4>
+            <h4>{t('Resumen global')}</h4>
             <div className="ap-stats-grid">
-              {([['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]] as [string, number][]).map(([l, v]) => (
+              {([[k('Proyectos'), stats.projects], [k('Entrevistas'), stats.interviews], [k('Transcritas'), stats.transcribed], [k('Resúmenes IA'), stats.summaries]] as [string, number][]).map(([l, v]) => (
                 <div key={l} className="ap-stat-card">
                   <span className="ap-stat-num">{v}</span>
-                  <span className="ap-stat-lbl">{l}</span>
+                  <span className="ap-stat-lbl">{t(l)}</span>
                 </div>
               ))}
             </div>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
-            <h4>Acciones rápidas</h4>
-            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => setScreen('candidates')}><UsersIcon /> Ver perfiles</button>
-            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /> Exportar informes</button>
+            <h4>{t('Acciones rápidas')}</h4>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => setScreen('candidates')}><UsersIcon /> {t('Ver perfiles')}</button>
+            <button type="button" className="outline-btn pill-btn ap-action-btn" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /> {t('Exportar informes')}</button>
           </div>
           <div className="ap-divider" />
           <div className="ap-section">
-            <h4>Actividad reciente</h4>
+            <h4>{t('Actividad reciente')}</h4>
             {recent.length === 0
-              ? <p className="ap-empty">Sin actividad reciente.</p>
+              ? <p className="ap-empty">{t('Sin actividad reciente.')}</p>
               : recent.map(i => {
                 const cand = candidates.find(c => c.id === i.candidateId)
                 return (
                   <div key={i.id} className="ap-activity-row" onClick={() => cand && goToCandidate(cand.id, cand.projectId)}>
-                    <span>{i.summaryStatus === 'done' ? <DocIcon /> : <MicIcon />} {i.sessionName || 'Entrevista'} — {cand?.name ?? '—'}</span>
+                    <span>{i.summaryStatus === 'done' ? <DocIcon /> : <MicIcon />} {i.sessionName || t('Entrevista')} — {cand?.name ?? '—'}</span>
                   </div>
                 )
               })
@@ -2479,26 +2506,26 @@ function App() {
     return (
       <div className="screen-content">
         <div className="content-header">
-          <div><h2>Mis Proyectos</h2></div>
-          <button type="button" className="primary-btn pill-btn" onClick={() => setShowNewProject(true)}>Nuevo proyecto</button>
+          <div><h2>{t('Mis Proyectos')}</h2></div>
+          <button type="button" className="primary-btn pill-btn" onClick={() => setShowNewProject(true)}>{t('Nuevo proyecto')}</button>
         </div>
         <div className="proj-toolbar">
           <div className={`proj-search-bar${projectSearchQuery ? ' proj-search-bar--active' : ''}`}>
             <span className="proj-search-icon"><SearchIcon /></span>
-            <input type="text" placeholder="Buscar proyectos…" value={projectSearchQuery} onChange={e => setProjectSearchQuery(e.target.value)} />
+            <input type="text" placeholder={t('Buscar proyectos…')} value={projectSearchQuery} onChange={e => setProjectSearchQuery(e.target.value)} />
             {projectSearchQuery && <button type="button" className="proj-search-clear" onClick={() => setProjectSearchQuery('')}><CloseIcon size={13} /></button>}
           </div>
           <div className="proj-filter-group">
-            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'active' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'active' ? 'all' : 'active')}>Activos</button>
-            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'closed' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'closed' ? 'all' : 'closed')}>Cerrados</button>
+            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'active' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'active' ? 'all' : 'active')}>{t('Activos')}</button>
+            <button type="button" className={`proj-filter-btn${projectStatusFilter === 'closed' ? ' is-active' : ''}`} onClick={() => setProjectStatusFilter(f => f === 'closed' ? 'all' : 'closed')}>{t('Cerrados')}</button>
           </div>
           <ViewToggle mode={projectsViewMode} onChange={setProjectsViewMode} />
         </div>
-        {isFiltered && <p className="proj-results-label">{filteredProjects.length} resultado{filteredProjects.length !== 1 ? 's' : ''}{projectSearchQuery.trim() ? ` para «${projectSearchQuery}»` : ''}</p>}
+        {isFiltered && <p className="proj-results-label">{filteredProjects.length === 1 ? t('1 resultado') : t('{n} resultados', { n: filteredProjects.length })}{projectSearchQuery.trim() ? ` ${t('para «{texto}»', { texto: projectSearchQuery })}` : ''}</p>}
         {filteredProjects.length === 0 ? (
           isFiltered
-            ? <EmptyState title="Sin resultados" sub="No hay proyectos que coincidan con los filtros aplicados." />
-            : <EmptyState icon={<FolderIcon />} title="No tienes proyectos todavía" sub="Crea tu primer proyecto para empezar a gestionar perfiles." btnLabel="Nuevo proyecto" onBtn={() => setShowNewProject(true)} />
+            ? <EmptyState title={t('Sin resultados')} sub={t('No hay proyectos que coincidan con los filtros aplicados.')} />
+            : <EmptyState icon={<FolderIcon />} title={t('No tienes proyectos todavía')} sub={t('Crea tu primer proyecto para empezar a gestionar perfiles.')} btnLabel={t('Nuevo proyecto')} onBtn={() => setShowNewProject(true)} />
         ) : (
           <div className={`proj-list${projectsViewMode === 'grid' ? ' proj-list--grid' : ''}`} style={projectsViewMode === 'grid' ? { '--cols': Math.min(3, filteredProjects.length) } as React.CSSProperties : undefined}>
             {filteredProjects.map(p => {
@@ -2514,32 +2541,32 @@ function App() {
                     <div className="plc-top">
                       <div className="plc-info">
                         <h3 className="plc-title">{p.name}</h3>
-                        <p className="plc-meta">{p.company} · Creado {fs(p.createdAt)}</p>
+                        <p className="plc-meta">{p.company} · {t('Creado {fecha}', { fecha: fs(p.createdAt) })}</p>
                         {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> Editar</button>}
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
-                          {isClosed ? <><SquareFilled /> Cerrado</> : <><DotFilled /> Activo</>}
+                          {isClosed ? <><SquareFilled /> {t('Cerrado')}</> : <><DotFilled /> {t('Activo')}</>}
                         </span>
                       </div>
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
-                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">perfiles</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">entrevistas</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">transcritas</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{t('perfiles')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{t('entrevistas')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">{t('transcritas')}</span></div>
                         <div className="plc-stat">
                           <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
-                          <span className="plc-stat-lbl">pendientes</span>
+                          <span className="plc-stat-lbl">{t('pendientes')}</span>
                         </div>
                       </div>
                       <div className="plc-actions" onClick={e => e.stopPropagation()}>
                         <button type="button" className={`plc-open-btn${isClosed ? ' plc-open-btn--closed' : ''}`} onClick={() => goToProject(p.id)}>
-                          {isClosed ? 'Ver proyecto' : 'Abrir proyecto'}
+                          {isClosed ? t('Ver proyecto') : t('Abrir proyecto')}
                         </button>
                         <button type="button" className={`plc-status-btn${isClosed ? ' plc-status-btn--reopen' : ' plc-status-btn--close'}`} onClick={e => { e.stopPropagation(); updateProject(p.id, { status: isClosed ? 'active' : 'closed' }) }}>
-                          {isClosed ? 'Reabrir' : 'Cerrar'}
+                          {isClosed ? t('Reabrir') : t('Cerrar')}
                         </button>
                       </div>
                     </div>
@@ -2550,7 +2577,7 @@ function App() {
           </div>
         )}
         {isFiltered && filteredProjects.length > 0 && projectSearchQuery.trim() && (
-          <p className="proj-no-more">No hay más proyectos con '{projectSearchQuery}'</p>
+          <p className="proj-no-more">{t('No hay más proyectos con «{texto}»', { texto: projectSearchQuery })}</p>
         )}
       </div>
     )
@@ -2568,23 +2595,23 @@ function App() {
           <div className="proj-header-body">
             <div className="proj-header-info">
               <h2 className="proj-header-title">{activeProject.name}</h2>
-              <p className="proj-header-sub">{activeProject.company} · Creado {fs(activeProject.createdAt)}</p>
+              <p className="proj-header-sub">{activeProject.company} · {t('Creado {fecha}', { fecha: fs(activeProject.createdAt) })}</p>
             </div>
             <div className="proj-header-stats">
-              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">perfiles</span></div>
-              <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">entrevistas</span></div>
-              <div className="proj-stat"><span className="proj-stat-n">{tCount}</span><span className="proj-stat-l">transcritas</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">{t('perfiles')}</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">{t('entrevistas')}</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{tCount}</span><span className="proj-stat-l">{t('transcritas')}</span></div>
             </div>
             <div className="proj-header-actions">
-              <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
+              <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(null); setShowExport(true) }}><DownloadIcon /></button>
               {esMiProyecto(activeProject) && <button
                 type="button"
                 className={`btn-trash${pendingDeleteId === activeProject.id ? ' confirming' : ''}`}
-                title={pendingDeleteId === activeProject.id ? '¿Confirmar?' : 'Eliminar proyecto'}
+                title={pendingDeleteId === activeProject.id ? t('¿Confirmar?') : t('Eliminar proyecto')}
                 onClick={() => void handleDeleteProject(activeProject.id)}
               >
                 {pendingDeleteId === activeProject.id
-                  ? <><CheckIcon /><span className="confirming-label">Eliminar ({projectCandidates.length} perfiles)</span></>
+                  ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} perfiles)', { n: projectCandidates.length })}</span></>
                   : <TrashIcon />}
               </button>}
             </div>
@@ -2598,15 +2625,15 @@ function App() {
               ? activeProject.evaluationCriteria.map((id, i) => {
                   if (id.startsWith('otros:')) {
                     const text = id.slice(6).trim()
-                    return text ? <span key={i} className="criteria-chip">Otros: {text}</span> : null
+                    return text ? <span key={i} className="criteria-chip">{t('Otros')}: {text}</span> : null
                   }
                   const c = EVALUATION_CRITERIA.find(x => x.id === id)
-                  return c ? <span key={id} className="criteria-chip">{c.label}</span> : null
+                  return c ? <span key={id} className="criteria-chip">{t(c.label)}</span> : null
                 })
-              : <span className="criteria-chip criteria-chip--empty">Sin criterios. El resumen saldrá con la estructura por defecto.</span>
+              : <span className="criteria-chip criteria-chip--empty">{t('Sin criterios. El resumen saldrá con la estructura por defecto.')}</span>
             }
             <button type="button" className="criteria-edit-btn" onClick={() => setShowCriteriaEdit(v => !v)}>
-              {showCriteriaEdit ? 'Cerrar' : 'Editar criterios'}
+              {showCriteriaEdit ? t('Cerrar') : t('Editar criterios')}
             </button>
           </div>
           {showCriteriaEdit && (
@@ -2621,8 +2648,8 @@ function App() {
 
         {/* Tabs */}
         <div className="proj-tabs">
-          <button type="button" className={`proj-tab${projDetailTab === 'perfiles' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('perfiles')}>Perfiles</button>
-          <button type="button" className={`proj-tab${projDetailTab === 'analisis' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('analisis')}>Análisis</button>
+          <button type="button" className={`proj-tab${projDetailTab === 'perfiles' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('perfiles')}>{t('Perfiles')}</button>
+          <button type="button" className={`proj-tab${projDetailTab === 'analisis' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('analisis')}>{t('Análisis')}</button>
         </div>
 
         {projDetailTab === 'analisis' ? (() => {
@@ -2644,28 +2671,28 @@ function App() {
               <div className="pa-stats-row">
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{projectCandidates.length}</span>
-                  <span className="pa-stat-l">Candidatos</span>
+                  <span className="pa-stat-l">{t('Candidatos')}</span>
                 </div>
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{total}</span>
-                  <span className="pa-stat-l">Entrevistas</span>
+                  <span className="pa-stat-l">{t('Entrevistas')}</span>
                 </div>
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{total > 0 ? `${Math.round((transcribed / total) * 100)}%` : '—'}</span>
-                  <span className="pa-stat-l">Transcritas</span>
+                  <span className="pa-stat-l">{t('Transcritas')}</span>
                 </div>
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{avgDur > 0 ? fmt(avgDur) : '—'}</span>
-                  <span className="pa-stat-l">Duración media</span>
+                  <span className="pa-stat-l">{t('Duración media')}</span>
                 </div>
               </div>
 
               <div className="pa-section">
-                <h4 className="pa-section-title">Embudo del proceso</h4>
+                <h4 className="pa-section-title">{t('Embudo del proceso')}</h4>
                 {[
-                  { label: 'Grabadas', val: total, max: total, color: 'var(--primary)' },
-                  { label: 'Transcritas', val: transcribed, max: total, color: 'var(--green)' },
-                  { label: 'Resumidas', val: summarized, max: total, color: '#8b5cf6' },
+                  { label: t('Grabadas'), val: total, max: total, color: 'var(--primary)' },
+                  { label: t('Transcritas'), val: transcribed, max: total, color: 'var(--green)' },
+                  { label: t('Resumidas'), val: summarized, max: total, color: '#8b5cf6' },
                 ].map(({ label, val, max, color }) => (
                   <div key={label} className="pa-funnel-row">
                     <span className="pa-funnel-label">{label}</span>
@@ -2679,19 +2706,19 @@ function App() {
 
               {(pendingCands.length > 0 || noCands.length > 0) && (
                 <div className="pa-section">
-                  <h4 className="pa-section-title">Requieren atención</h4>
+                  <h4 className="pa-section-title">{t('Requieren atención')}</h4>
                   {noCands.map(c => (
                     <div key={c.id} className="pa-alert-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                       <div className="pa-alert-dot pa-alert-dot--gray" />
                       <span className="pa-alert-name">{c.name}</span>
-                      <span className="pa-alert-tag">Sin entrevista</span>
+                      <span className="pa-alert-tag">{t('Sin entrevista')}</span>
                     </div>
                   ))}
                   {pendingCands.map(c => (
                     <div key={c.id} className="pa-alert-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                       <div className="pa-alert-dot pa-alert-dot--amber" />
                       <span className="pa-alert-name">{c.name}</span>
-                      <span className="pa-alert-tag">Pendiente de transcribir</span>
+                      <span className="pa-alert-tag">{t('Pendiente de transcribir')}</span>
                     </div>
                   ))}
                 </div>
@@ -2699,7 +2726,7 @@ function App() {
 
               {recentActivity.length > 0 && (
                 <div className="pa-section">
-                  <h4 className="pa-section-title">Actividad reciente</h4>
+                  <h4 className="pa-section-title">{t('Actividad reciente')}</h4>
                   {recentActivity.map(iv => {
                     const cand = candidates.find(c => c.id === iv.candidateId)
                     return (
@@ -2709,7 +2736,7 @@ function App() {
                           <span className="pa-activity-name">{cand?.name ?? '—'} — {iv.sessionName || fs(iv.createdAt)}</span>
                           <span className="pa-activity-date">{fd(iv.createdAt)}</span>
                         </div>
-                        <span className="pa-activity-status">{iv.summaryStatus === 'done' ? 'Resumida' : iv.transcriptionStatus === 'done' ? 'Transcrita' : 'Grabada'}</span>
+                        <span className="pa-activity-status">{iv.summaryStatus === 'done' ? t('Resumida') : iv.transcriptionStatus === 'done' ? t('Transcrita') : t('Grabada')}</span>
                       </div>
                     )
                   })}
@@ -2721,25 +2748,25 @@ function App() {
           <>
         {/* Section header */}
         <div className="proj-section-header">
-          <h3 className="proj-section-title">Perfiles del proceso</h3>
+          <h3 className="proj-section-title">{t('Perfiles del proceso')}</h3>
           <div className="proj-section-header-actions">
             <SortSelect value={profilesSort} onChange={changeProfilesSort} />
             <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
-            <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>Nuevo perfil</button>
+            <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>{t('Nuevo perfil')}</button>
           </div>
         </div>
 
         {/* Search */}
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
-          <input type="text" placeholder="Buscar por nombre, email o puesto..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          <input type="text" placeholder={t('Buscar por nombre, email o puesto…')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}><CloseIcon size={13} /></button>}
         </div>
 
         {filteredCandidates.length === 0 ? (
           searchQuery
-            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con «${searchQuery}».`} />
-            : <EmptyState icon={<UsersIcon />} title="No hay perfiles en este proyecto" sub="Añade tu primer perfil para empezar a grabar y transcribir entrevistas." btnLabel="Nuevo perfil" onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
+            ? <EmptyState title={t('Sin resultados')} sub={t('No hay perfiles que coincidan con «{texto}».', { texto: searchQuery })} />
+            : <EmptyState icon={<UsersIcon />} title={t('No hay perfiles en este proyecto')} sub={t('Añade tu primer perfil para empezar a grabar y transcribir entrevistas.')} btnLabel={t('Nuevo perfil')} onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
         ) : (
           <div className={`pdc-list${profilesViewMode === 'grid' ? ' pdc-list--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, filteredCandidates.length) } as React.CSSProperties : undefined}>
             {filteredCandidates.map(c => {
@@ -2748,8 +2775,8 @@ function App() {
               const hasDone = ci.some(i => i.transcriptionStatus === 'done')
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
               const statusInfo: [React.ReactNode, string] = last
-                ? hasDone ? [<><DotFilled /> Transcrita</>, 'pdc-badge--done'] : hasPending ? [<><DotRing /> Pendiente</>, 'pdc-badge--pending'] : [<><DotRing /> Sin transcripción</>, 'pdc-badge--pending']
-                : [<><DotRing /> Sin entrevista</>, 'pdc-badge--none']
+                ? hasDone ? [<><DotFilled /> {t('Transcrita')}</>, 'pdc-badge--done'] : hasPending ? [<><DotRing /> {t('Pendiente')}</>, 'pdc-badge--pending'] : [<><DotRing /> {t('Sin transcripción')}</>, 'pdc-badge--pending']
+                : [<><DotRing /> {t('Sin entrevista')}</>, 'pdc-badge--none']
               return (
                 <div key={c.id} className="pdc-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                   <div className="pdc-row-accent" />
@@ -2757,14 +2784,14 @@ function App() {
                     <div className="pdc-row-avatar">{initials(c.name)}</div>
                     <div className="pdc-row-info">
                       <span className="pdc-row-name">{c.name}</span>
-                      <span className="pdc-row-meta">{c.email}{last ? ` · Última entrevista: ${fs(last.createdAt)}` : c.role ? ` · ${c.role}` : ''}</span>
+                      <span className="pdc-row-meta">{c.email}{last ? ` · ${t('Última entrevista: {fecha}', { fecha: fs(last.createdAt) })}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
                     {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
-                      <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
-                      <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>Ver entrevistas</button>
+                      <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} entrevistas)', { n: interviews.filter(i => i.candidateId === c.id).length })}</span></> : <TrashIcon />}</button>
+                      <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>{t('Ver entrevistas')}</button>
                     </div>
                   </div>
                 </div>
@@ -2787,7 +2814,7 @@ function App() {
     return (
       <div className="screen-content">
         <div className="content-header">
-          <div><h2>Perfiles</h2><p className="screen-sub">{candidates.length} perfil{candidates.length !== 1 ? 'es' : ''}</p></div>
+          <div><h2>{t('Perfiles')}</h2><p className="screen-sub">{candidates.length === 1 ? t('1 perfil') : t('{n} perfiles', { n: candidates.length })}</p></div>
           <div className="content-header-actions">
             <SortSelect value={profilesSort} onChange={changeProfilesSort} />
             <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
@@ -2795,13 +2822,13 @@ function App() {
         </div>
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
-          <input type="text" placeholder="Buscar por nombre, email o puesto…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          <input type="text" placeholder={t('Buscar por nombre, email o puesto…')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}><CloseIcon size={13} /></button>}
         </div>
         {allCandidates.length === 0 ? (
           searchQuery
-            ? <EmptyState title="Sin resultados" sub={`No hay perfiles que coincidan con «${searchQuery}».`} />
-            : <EmptyState icon={<UsersIcon />} title="Sin perfiles" sub="Los perfiles aparecerán aquí cuando los añadas a un proyecto." />
+            ? <EmptyState title={t('Sin resultados')} sub={t('No hay perfiles que coincidan con «{texto}».', { texto: searchQuery })} />
+            : <EmptyState icon={<UsersIcon />} title={t('Sin perfiles')} sub={t('Los perfiles aparecerán aquí cuando los añadas a un proyecto.')} />
         ) : (
           <div className={`candidates-table${profilesViewMode === 'grid' ? ' candidates-table--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, allCandidates.length) } as React.CSSProperties : undefined}>
             {allCandidates.map(c => {
@@ -2811,23 +2838,23 @@ function App() {
               const hasDone = ci.some(i => i.transcriptionStatus === 'done')
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
               const [statusLabel, statusCls] = last
-                ? hasDone ? [<><DotFilled /> Transcrita</>, 'status-done'] : hasPending ? [<><DotRing /> Pendiente</>, 'status-pending'] : [<><DotRing /> Sin transcripción</>, 'status-pending']
-                : [<><DotRing /> Sin entrevista</>, 'status-none']
+                ? hasDone ? [<><DotFilled /> {t('Transcrita')}</>, 'status-done'] : hasPending ? [<><DotRing /> {t('Pendiente')}</>, 'status-pending'] : [<><DotRing /> {t('Sin transcripción')}</>, 'status-pending']
+                : [<><DotRing /> {t('Sin entrevista')}</>, 'status-none']
               return (
                 <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId, 'all')}>
                   <div className="ctr-avatar">{initials(c.name)}</div>
                   <div className="ctr-info">
                     <span className="ctr-name">{c.name}</span>
-                    <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · Última: ${fs(last.createdAt)}` : ''}</span>
+                    <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · ${t('Última: {fecha}', { fecha: fs(last.createdAt) })}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
                   {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
-                    <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
-                    <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? '¿Confirmar eliminación?' : 'Eliminar perfil'} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">Eliminar ({interviews.filter(i => i.candidateId === c.id).length} entrevistas)</span></> : <TrashIcon />}</button>
+                    <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
+                    <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? t('¿Confirmar eliminación?') : t('Eliminar perfil')} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} entrevistas)', { n: interviews.filter(i => i.candidateId === c.id).length })}</span></> : <TrashIcon />}</button>
                   </div>
-                  <button type="button" className="ctr-open">Ver entrevistas <ArrowRightIcon size={12} /></button>
+                  <button type="button" className="ctr-open">{t('Ver entrevistas')} <ArrowRightIcon size={12} /></button>
                 </div>
               )
             })}
@@ -2856,34 +2883,34 @@ function App() {
             <div className="cand-header-stats">
               <div className="cand-hstat">
                 <span className="cand-hstat-n">{candidateInterviews.length}</span>
-                <span className="cand-hstat-l">grabaciones</span>
+                <span className="cand-hstat-l">{t('grabaciones')}</span>
               </div>
               <div className="cand-hstat">
                 <span className="cand-hstat-n">{transcribedCount}</span>
-                <span className="cand-hstat-l">transcritas</span>
+                <span className="cand-hstat-l">{t('transcritas')}</span>
               </div>
               <div className="cand-hstat">
                 <span className="cand-hstat-n cand-hstat-n--sm">{fmt(totalDuration)}</span>
-                <span className="cand-hstat-l">duración total</span>
+                <span className="cand-hstat-l">{t('duración total')}</span>
               </div>
             </div>
             <div className="cand-header-right">
               <span className={`cand-status-badge${hasError ? ' cand-status-badge--error' : transcribedCount > 0 ? ' cand-status-badge--done' : ''}`}>
-                {hasError ? <><WarnTriangle /> Error</> : transcribedCount > 0 ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}
+                {hasError ? <><WarnTriangle /> {t('Error')}</> : transcribedCount > 0 ? <><DotFilled /> {t('Transcrita')}</> : <><DotRing /> {t('Pendiente')}</>}
               </span>
-              <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? `Consentimiento registrado el ${new Date(activeCandidate.consentAt).toLocaleString('es-ES')}` : 'Sin consentimiento registrado'}>
-                {activeCandidate.consentGiven ? <><LockIcon size={12} /> Consentimiento</> : <><WarnTriangle /> Sin consentimiento</>}
+              <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? t('Consentimiento registrado el {fecha}', { fecha: new Date(activeCandidate.consentAt).toLocaleString(locale()) }) : t('Sin consentimiento registrado')}>
+                {activeCandidate.consentGiven ? <><LockIcon size={12} /> {t('Consentimiento')}</> : <><WarnTriangle /> {t('Sin consentimiento')}</>}
               </span>
               {activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
               <div className="cand-header-actions">
-                <button type="button" className="btn-icon" title="Exportar" onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
-                <button type="button" className="btn-icon" title="Editar" onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
+                <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
               </div>
             </div>
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', <><MicIcon /> Entrevistas</>], ['transcripcion', <><DocIcon /> Transcripción</>], ['resumen', <><StarIcon /> Resumen IA</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
+          {([['entrevistas', <><MicIcon /> {t('Entrevistas')}</>], ['transcripcion', <><DocIcon /> {t('Transcripción')}</>], ['resumen', <><StarIcon /> {t('Resumen IA')}</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
             <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => {
               setActiveTab(tab)
               const iv = tab === 'resumen' ? interviews.find(i => i.id === selectedInterviewId) : null
@@ -2908,35 +2935,35 @@ function App() {
     <div className="interviews-tab">
       {!sttReady && (
         <div className="warning-note" style={{ marginBottom: 12 }}>
-          <WarnTriangle /> Todavía no has configurado un motor de transcripción, así que no se puede transcribir. <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>Configurar ahora <ArrowRightIcon size={12} /></button>
+          <WarnTriangle /> {t('Todavía no has configurado un motor de transcripción, así que no se puede transcribir.')} <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>{t('Configurar ahora')} <ArrowRightIcon size={12} /></button>
         </div>
       )}
       <div className="rec-section-header">
-        <h3 className="rec-section-title">Grabaciones</h3>
+        <h3 className="rec-section-title">{t('Grabaciones')}</h3>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {playingInterviewId && (
             <Select
               className="cfg-select cfg-select--mini"
               value={String(playbackRate)}
               onChange={v => setPlaybackRate(parseFloat(v))}
-              title="Velocidad de reproducción"
+              title={t('Velocidad de reproducción')}
               options={[{ value: '0.5', label: '0.5x' }, { value: '0.75', label: '0.75x' }, { value: '1', label: '1x' }, { value: '1.25', label: '1.25x' }, { value: '1.5', label: '1.5x' }, { value: '2', label: '2x' }]}
             />
           )}
           {window.desktopApp?.selectAudioFile && (
-            <button type="button" className="secondary-btn pill-btn" onClick={() => void handleImportAudio()}><UploadIcon /> Importar audio</button>
+            <button type="button" className="secondary-btn pill-btn" onClick={() => void handleImportAudio()}><UploadIcon /> {t('Importar audio')}</button>
           )}
-          <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> Nueva grabación</button>
+          <button type="button" className="primary-btn pill-btn" onClick={handleNewRecording}><MicIcon /> {t('Nueva grabación')}</button>
         </div>
       </div>
       {candidateInterviews.length === 0 ? (
-        <EmptyState icon={<MicIcon />} title="No hay grabaciones todavía" sub={`Graba la primera entrevista con ${activeCandidate?.name ?? 'el perfil'} para empezar`} btnLabel="Nueva grabación" onBtn={handleNewRecording} />
+        <EmptyState icon={<MicIcon />} title={t('No hay grabaciones todavía')} sub={t('Graba la primera entrevista con {nombre} para empezar', { nombre: activeCandidate?.name ?? t('el perfil') })} btnLabel={t('Nueva grabación')} onBtn={handleNewRecording} />
       ) : (
         <>
           {candidateInterviews.length > 2 && (
             <div className="search-bar" style={{ marginBottom: 8 }}>
               <span className="search-icon"><SearchIcon /></span>
-              <input type="text" placeholder="Buscar grabación…" value={ivSearchQuery} onChange={e => setIvSearchQuery(e.target.value)} />
+              <input type="text" placeholder={t('Buscar grabación…')} value={ivSearchQuery} onChange={e => setIvSearchQuery(e.target.value)} />
               {ivSearchQuery && <button type="button" className="search-clear" onClick={() => setIvSearchQuery('')}><CloseIcon size={13} /></button>}
             </div>
           )}
@@ -2963,7 +2990,7 @@ function App() {
                   </div>
                   <span className="rec-row-meta">
                     {fs(iv.createdAt)}{iv.durationSec > 0 ? ` · ${fmt(iv.durationSec)}` : ''}
-                    {iv.videoFilePath ? <> · <VideoIcon size={13} /> vídeo</> : ''}
+                    {iv.videoFilePath ? <> · <VideoIcon size={13} /> {t('vídeo')}</> : ''}
                   </span>
                   {/* Aquí SOLO se elige entre los entrevistadores del proyecto. Darlos
                       de alta es cosa del proyecto (Nuevo/Editar proyecto), para que la
@@ -2972,46 +2999,46 @@ function App() {
                     {(ivProject?.interviewers.length ?? 0) > 0 ? (
                       <Select
                         className={`rec-row-interviewer-select${iv.interviewerName ? '' : ' rec-row-interviewer-select--empty'}`}
-                        title="Entrevistador de esta llamada"
+                        title={t('Entrevistador de esta llamada')}
                         value={iv.interviewerName || ''}
                         onChange={v => updateInterview(iv.id, { interviewerName: v })}
-                        options={[{ value: '', label: 'Sin entrevistador' }, ...(ivProject?.interviewers ?? []).map(name => ({ value: name, label: name }))]}
+                        options={[{ value: '', label: t('Sin entrevistador') }, ...(ivProject?.interviewers ?? []).map(name => ({ value: name, label: name }))]}
                       />
                     ) : (
                       <button
                         type="button"
                         className="rec-row-interviewer-select rec-row-interviewer-select--empty rec-row-interviewer-link"
-                        title="Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto."
+                        title={t('Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto.')}
                         onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers }); setEditingProjectId(ivProject.id); setShowEditProject(true); limpiarBuscadorCompartir() } }}
                       >
-                        Añádelos en el proyecto
+                        {t('Añádelos en el proyecto')}
                       </button>
                     )}
                   </span>
                   {iv.captureSource === 'mic' && (
-                    <span className="rec-row-warning" title="No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.">
-                      <WarnTriangle /> Sin audio del interlocutor
+                    <span className="rec-row-warning" title={t('No se capturó el audio del sistema: la transcripción solo incluirá tu micrófono, no la otra voz de la llamada.')}>
+                      <WarnTriangle /> {t('Sin audio del interlocutor')}
                     </span>
                   )}
                   {renderAudioCloudBadge(iv)}
                 </div>
                 <span className={`rec-row-badge${isDone ? ' rec-row-badge--done' : isError ? ' rec-row-badge--error' : isTranscribing ? ' rec-row-badge--transcribing' : ' rec-row-badge--pending'}`}>
-                  {isDone ? <><DotFilled /> Transcrita</> : isError ? <><WarnTriangle /> Error</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> Transcribiendo</> : <><DotRing /> Pendiente</>}
+                  {isDone ? <><DotFilled /> {t('Transcrita')}</> : isError ? <><WarnTriangle /> {t('Error')}</> : isTranscribing ? <><span className="spinner" style={{width:8,height:8,display:'inline-block',verticalAlign:'middle',marginRight:2}}/> {t('Transcribiendo')}</> : <><DotRing /> {t('Pendiente')}</>}
                 </span>
                 <div className="rec-row-actions" onClick={e => e.stopPropagation()}>
                   {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                    <button type="button" className="btn-icon" title="Reproducir" onClick={() => void handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                    <button type="button" className="btn-icon" title={t('Reproducir')} onClick={() => void handleTogglePlayback(iv)}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                   )}
                   {renderSeekBar(iv)}
-                  <button type="button" className="btn-icon" title="Renombrar" onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fd(iv.createdAt)) }}><PencilIcon /></button>
-                  <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? '¿Confirmar?' : 'Eliminar'} onClick={() => handleDeleteInterview(iv.id)}>
-                    {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">Confirmar</span></> : <TrashIcon />}
+                  <button type="button" className="btn-icon" title={t('Renombrar')} onClick={() => { setEditingInterviewId(iv.id); setEditingNameDraft(iv.sessionName || fd(iv.createdAt)) }}><PencilIcon /></button>
+                  <button type="button" className={`btn-trash${pendingDeleteId === iv.id ? ' confirming' : ''}`} title={pendingDeleteId === iv.id ? t('¿Confirmar?') : t('Eliminar')} onClick={() => handleDeleteInterview(iv.id)}>
+                    {pendingDeleteId === iv.id ? <><CheckIcon /><span className="confirming-label">{t('Confirmar')}</span></> : <TrashIcon />}
                   </button>
                 </div>
                 {isDone ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={e => { e.stopPropagation(); setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>Ver transcripción</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--outline" onClick={e => { e.stopPropagation(); setSelectedInterviewId(iv.id); setActiveTab('transcripcion') }}>{t('Ver transcripción')}</button>
                 ) : iv.recordingFilePath && !isTranscribing ? (
-                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{isError ? <><RefreshIcon size={12} /> Reintentar</> : <><PlayIcon size={11} /> Transcribir</>}</button>
+                  <button type="button" className="rec-row-btn rec-row-btn--primary" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{isError ? <><RefreshIcon size={12} /> {t('Reintentar')}</> : <><PlayIcon size={11} /> {t('Transcribir')}</>}</button>
                 ) : isTranscribing ? (
                   <div className="rec-row-spinner"><span className="spinner" /></div>
                 ) : null}
@@ -3035,7 +3062,7 @@ function App() {
     return (
       <div className={`transcript-layout-v2${hasVideo ? ' transcript-layout-v2--with-video' : ''}`}>
         <aside className="trx-list-panel">
-          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
+          {candidateInterviews.length === 0 ? <p className="tab-note">{t('No hay entrevistas todavía.')}</p> : candidateInterviews.map(iv => {
             const hasDone = iv.transcriptionStatus === 'done'
             const isSelected = iv.id === selectedInterviewId
             return (
@@ -3045,13 +3072,13 @@ function App() {
                   <span className="trx-list-item-date">{fs(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? <><DotFilled /> Transcrita</> : <><DotRing /> Pendiente</>}</span>
+                  <span className={`trx-status-badge${hasDone ? ' trx-status-badge--done' : ''}`}>{hasDone ? <><DotFilled /> {t('Transcrita')}</> : <><DotRing /> {t('Pendiente')}</>}</span>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                      <button type="button" className="trx-transcribe-btn" title={t('Reproducir')} onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                     )}
                     {iv.recordingFilePath && iv.transcriptionStatus !== 'transcribing' && (
-                      <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? <RefreshIcon size={11} /> : 'Transcribir'}</button>
+                      <button type="button" className="trx-transcribe-btn" onClick={e => { e.stopPropagation(); void handleTranscribe(iv.id) }}>{hasDone ? <RefreshIcon size={11} /> : t('Transcribir')}</button>
                     )}
                     {iv.transcriptionStatus === 'transcribing' && <span className="spinner" style={{ width: 12, height: 12 }} />}
                   </div>
@@ -3085,10 +3112,10 @@ function App() {
                 <span className="video-player-time-now">{fmt(Math.floor(videoTime.current))}</span>
                 <span className="video-player-time-sep">/</span>
                 <span>{videoTime.total > 0 ? fmt(Math.floor(videoTime.total)) : fmt(selectedInterview.durationSec)}</span>
-                {repairingVideoId === selectedInterview.id && <span className="video-player-time-note">calibrando la barra…</span>}
+                {repairingVideoId === selectedInterview.id && <span className="video-player-time-note">{t('calibrando la barra…')}</span>}
               </div>
               <div className="video-player-controls">
-                <label className="video-player-ctrl">Velocidad
+                <label className="video-player-ctrl">{t('Velocidad')}
                   <Select
                     className="cfg-select cfg-select--mini"
                     value={String(videoPlaybackRate)}
@@ -3096,7 +3123,7 @@ function App() {
                     options={[{ value: '0.5', label: '0.5x' }, { value: '0.75', label: '0.75x' }, { value: '1', label: '1x' }, { value: '1.25', label: '1.25x' }, { value: '1.5', label: '1.5x' }, { value: '2', label: '2x' }]}
                   />
                 </label>
-                <label className="video-player-ctrl">Volumen
+                <label className="video-player-ctrl">{t('Volumen')}
                   <input type="range" min="0" max="1" step="0.05" value={videoVolume} onChange={e => setVideoVolume(parseFloat(e.target.value))} />
                 </label>
               </div>
@@ -3110,19 +3137,19 @@ function App() {
               <div className="trx-toolbar">
                 <div className="trx-search">
                   <SearchIcon />
-                  <input type="text" placeholder="Buscar en transcripción…" value={txSearchQuery} onChange={e => setTxSearchQuery(e.target.value)} />
+                  <input type="text" placeholder={t('Buscar en transcripción…')} value={txSearchQuery} onChange={e => setTxSearchQuery(e.target.value)} />
                   {txSearchQuery.trim() && (() => {
                     const count = transcriptDraft ? (transcriptDraft.toLowerCase().split(txSearchQuery.toLowerCase()).length - 1) : 0
-                    return <span style={{ fontSize: 11, color: count > 0 ? 'var(--primary)' : 'var(--text-muted)', whiteSpace: 'nowrap', marginLeft: 4 }}>{count} {count === 1 ? 'resultado' : 'resultados'}</span>
+                    return <span style={{ fontSize: 11, color: count > 0 ? 'var(--primary)' : 'var(--text-muted)', whiteSpace: 'nowrap', marginLeft: 4 }}>{count === 1 ? t('1 resultado') : t('{n} resultados', { n: count })}</span>
                   })()}
                 </div>
                 <Select
                   className="trx-lang-select"
                   value={txLang}
                   onChange={setTxLang}
-                  title="Idioma para transcripción"
+                  title={t('Idioma para transcripción')}
                   options={[
-                    { value: 'auto', label: 'Auto-detectar' },
+                    { value: 'auto', label: t('Auto-detectar') },
                     { value: 'es', label: 'Español' },
                     { value: 'en', label: 'English' },
                     { value: 'fr', label: 'Français' },
@@ -3145,29 +3172,29 @@ function App() {
                         void handleTranscribe(selectedInterview.id)
                       }
                     }}
-                    title={selectedInterview.transcriptEdited ? 'Volver a transcribir (sobreescribe la actual)' : 'Transcribir grabación'}
+                    title={selectedInterview.transcriptEdited ? t('Volver a transcribir (sobreescribe la actual)') : t('Transcribir grabación')}
                   >
                     {selectedInterview.transcriptionStatus === 'transcribing'
-                      ? <><span className="spinner" /> Transcribiendo…</>
+                      ? <><span className="spinner" /> {t('Transcribiendo…')}</>
                       : retranscribeConfirmId === selectedInterview.id
-                        ? <><WarnTriangle /> ¿Confirmar?</>
-                        : selectedInterview.transcriptEdited ? <><RefreshIcon size={12} /> Re-transcribir</> : <><PlayIcon size={11} /> Transcribir</>}
+                        ? <><WarnTriangle /> {t('¿Confirmar?')}</>
+                        : selectedInterview.transcriptEdited ? <><RefreshIcon size={12} /> {t('Re-transcribir')}</> : <><PlayIcon size={11} /> {t('Transcribir')}</>}
                   </button>
                 )}
-                <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast('Copiada') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar todo</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedInterview.sessionName || 'transcripcion'}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> Descargar .txt</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--outline" onClick={async () => { try { await navigator.clipboard.writeText(transcriptDraft); toast(t('Copiada')) } catch { toast(t('No se pudo copiar'), 'error') } }}><ClipboardIcon /> {t('Copiar todo')}</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => { const blob = new Blob([transcriptDraft], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedInterview.sessionName || t('transcripcion')}.txt`; a.click(); URL.revokeObjectURL(url) }}><DownloadIcon /> {t('Descargar .txt')}</button>
               </div>
-              {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>Transcripción en curso…</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button></div>}
+              {selectedInterview.transcriptionStatus === 'transcribing' && <div className="spinner-row"><span className="spinner" /><span>{t('Transcripción en curso…')}</span><button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => updateInterview(selectedInterview.id, { transcriptionStatus: 'pending' })}>{t('Cancelar')}</button></div>}
               {selectedInterview.transcriptionStatus === 'error' && (
                 <div className="trx-error-card">
                   <div className="trx-error-accent" />
                   <div className="trx-error-body">
                     <div className="trx-error-icon-wrap"><span className="trx-error-icon"><WarnTriangle size={36} /></span></div>
-                    <h3 className="trx-error-title">Error al transcribir</h3>
-                    <p className="trx-error-sub1">No se pudo completar la transcripción.</p>
-                    <p className="trx-error-sub2">Verifica tu clave de {sttPreset?.label ?? 'transcripción'} o inténtalo de nuevo.</p>
-                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}><RefreshIcon /> Reintentar</button>
-                    <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}><ArrowLeftIcon /> Volver a grabaciones</button>
+                    <h3 className="trx-error-title">{t('Error al transcribir')}</h3>
+                    <p className="trx-error-sub1">{t('No se pudo completar la transcripción.')}</p>
+                    <p className="trx-error-sub2">{t('Verifica tu clave de {servicio} o inténtalo de nuevo.', { servicio: sttPreset?.label ?? t('transcripción') })}</p>
+                    <button type="button" className="primary-btn pill-btn trx-error-btn" onClick={() => void handleTranscribe(selectedInterview.id)}><RefreshIcon /> {t('Reintentar')}</button>
+                    <button type="button" className="link-btn trx-error-back" onClick={() => setActiveTab('entrevistas')}><ArrowLeftIcon /> {t('Volver a grabaciones')}</button>
                   </div>
                 </div>
               )}
@@ -3175,8 +3202,8 @@ function App() {
                 !selectedInterview.transcriptEdited ? (
                   <div className="trx-pending-state">
                     <div className="trx-pending-icon">⊙</div>
-                    <p className="trx-pending-title">Esta grabación aún no ha sido transcrita</p>
-                    <p className="trx-pending-sub">Pulsa «Transcribir» en el panel izquierdo para procesarla con {sttPreset?.label ?? 'el motor configurado'}.</p>
+                    <p className="trx-pending-title">{t('Esta grabación aún no ha sido transcrita')}</p>
+                    <p className="trx-pending-sub">{t('Pulsa «Transcribir» en el panel izquierdo para procesarla con {servicio}.', { servicio: sttPreset?.label ?? t('el motor configurado') })}</p>
                   </div>
                 ) : (
                   <textarea
@@ -3184,26 +3211,28 @@ function App() {
                     value={transcriptDraft}
                     onChange={e => setTranscriptDraft(e.target.value)}
                     onDoubleClick={e => handleTranscriptSeek(e.currentTarget, selectedInterview)}
-                    placeholder="La transcripción aparecerá aquí…"
+                    placeholder={t('La transcripción aparecerá aquí…')}
                   />
                 )
               )}
               <div className="trx-footer">
-                <span className="trx-footer-info"><PencilIcon size={12} /> Haz clic para editar · Doble clic en un turno para escucharlo · {wordCount} palabras · {readingMin} min</span>
+                <span className="trx-footer-info"><PencilIcon size={12} /> {t('Haz clic para editar · Doble clic en un turno para escucharlo · {palabras} palabras · {min} min', { palabras: wordCount, min: readingMin })}</span>
                 <div className="trx-footer-actions">
-                  <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción guardada') }}>Guardar</button>
-                  <button type="button" className="trx-footer-btn" onClick={() => { const orig = selectedInterview.transcriptOriginal; setTranscriptDraft(orig); updateInterview(selectedInterview.id, { transcriptEdited: orig, transcriptUpdatedAt: new Date().toISOString() }); toast('Transcripción restaurada') }}>Restaurar original</button>
+                  <button type="button" className="trx-footer-btn" onClick={() => { updateInterview(selectedInterview.id, { transcriptEdited: transcriptDraft, transcriptUpdatedAt: new Date().toISOString() }); toast(t('Transcripción guardada')) }}>{t('Guardar')}</button>
+                  <button type="button" className="trx-footer-btn" onClick={() => { const orig = selectedInterview.transcriptOriginal; setTranscriptDraft(orig); updateInterview(selectedInterview.id, { transcriptEdited: orig, transcriptUpdatedAt: new Date().toISOString() }); toast(t('Transcripción restaurada')) }}>{t('Restaurar original')}</button>
                 </div>
               </div>
             </>
-          ) : <p className="tab-note">Selecciona una entrevista para editar su transcripción.</p>}
+          ) : <p className="tab-note">{t('Selecciona una entrevista para editar su transcripción.')}</p>}
         </div>
       </div>
     )
   }
 
   const renderSummaryTab = () => {
-    const SECTION_COLORS: [string, string][] = [['perfil', '#2563eb'], ['general', '#2563eb'], ['fuertes', '#1ab273'], ['mejora', '#f2991a'], ['áreas', '#f2991a'], ['areas', '#f2991a'], ['recomend', '#2563eb']]
+    // Los títulos los escribe el modelo, en el idioma de la entrevista: por eso
+    // hay palabras de los dos idiomas.
+    const SECTION_COLORS: [string, string][] = [['perfil', '#2563eb'], ['profile', '#2563eb'], ['general', '#2563eb'], ['overview', '#2563eb'], ['fuertes', '#1ab273'], ['strength', '#1ab273'], ['mejora', '#f2991a'], ['improve', '#f2991a'], ['weakness', '#f2991a'], ['áreas', '#f2991a'], ['areas', '#f2991a'], ['recomend', '#2563eb']]
     const getSectionColor = (title: string) => { const l = title.toLowerCase(); for (const [k, c] of SECTION_COLORS) { if (l.includes(k)) return c }; return '#2563eb' }
     const parseSections = (text: string) => {
       const lines = text.split('\n')
@@ -3224,7 +3253,7 @@ function App() {
     return (
       <div className="transcript-layout-v2">
         <aside className="trx-list-panel">
-          {candidateInterviews.length === 0 ? <p className="tab-note">No hay entrevistas todavía.</p> : candidateInterviews.map(iv => {
+          {candidateInterviews.length === 0 ? <p className="tab-note">{t('No hay entrevistas todavía.')}</p> : candidateInterviews.map(iv => {
             const hasSummary = iv.summaryStatus === 'done' || !!iv.summaryText
             const isSelected = iv.id === selectedInterviewId
             return (
@@ -3234,10 +3263,10 @@ function App() {
                   <span className="trx-list-item-date">{fs(iv.createdAt)}</span>
                 </div>
                 <div className="trx-list-item-bottom">
-                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? <><DotFilled /> Con resumen</> : <><DotRing /> Sin resumen</>}</span>
+                  <span className={`trx-status-badge${hasSummary ? ' trx-status-badge--done' : ''}`}>{hasSummary ? <><DotFilled /> {t('Con resumen')}</> : <><DotRing /> {t('Sin resumen')}</>}</span>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     {(iv.recordingUrl ?? iv.recordingFilePath) && (
-                      <button type="button" className="trx-transcribe-btn" title="Reproducir" onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
+                      <button type="button" className="trx-transcribe-btn" title={t('Reproducir')} onClick={e => { e.stopPropagation(); void handleTogglePlayback(iv) }}>{playingInterviewId === iv.id ? <PauseIconSm /> : <PlayIcon />}</button>
                     )}
                   </div>
                 </div>
@@ -3263,8 +3292,8 @@ function App() {
                     }
                   }}
                   options={[
-                    { value: 'entrevista', label: 'Entrevista de selección' },
-                    { value: 'reunion', label: 'Reunión de negocio' },
+                    { value: 'entrevista', label: t('Entrevista de selección') },
+                    { value: 'reunion', label: t('Reunión de negocio') },
                   ]}
                 />
                 <Select
@@ -3272,22 +3301,22 @@ function App() {
                   value={selectedInterview.summaryType}
                   onChange={v => updateInterview(selectedInterview.id, { summaryType: v as 'resumen' | 'listado' })}
                   options={[
-                    { value: 'resumen', label: 'Resumen descriptivo' },
-                    { value: 'listado', label: 'Listado por puntos' },
+                    { value: 'resumen', label: t('Resumen descriptivo') },
+                    { value: 'listado', label: t('Listado por puntos') },
                   ]}
                 />
-                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast('Resumen copiado') } catch { toast('No se pudo copiar', 'error') } }}><ClipboardIcon /> Copiar</button>
-                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating' || preparingIds.includes(selectedInterview.id)}>{preparingIds.includes(selectedInterview.id) ? <><span className="spinner" /> Leyendo…</> : selectedInterview.summaryText ? <><RefreshIcon size={12} /> Regenerar</> : <><StarIcon size={12} /> Generar</>}</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--copy" disabled={!selectedInterview.summaryText} onClick={async () => { try { await navigator.clipboard.writeText(selectedInterview.summaryText); toast(t('Resumen copiado')) } catch { toast(t('No se pudo copiar'), 'error') } }}><ClipboardIcon /> {t('Copiar')}</button>
+                <button type="button" className="trx-tool-btn trx-tool-btn--primary" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady || selectedInterview.transcriptionStatus !== 'done' || selectedInterview.summaryStatus === 'generating' || preparingIds.includes(selectedInterview.id)}>{preparingIds.includes(selectedInterview.id) ? <><span className="spinner" /> {t('Leyendo…')}</> : selectedInterview.summaryText ? <><RefreshIcon size={12} /> {t('Regenerar')}</> : <><StarIcon size={12} /> {t('Generar')}</>}</button>
               </div>
-              {!llmReady && <p className="warning-note">Configura un motor de resumen en <button type="button" className="link-btn" onClick={() => openSettings()}>Configuración</button></p>}
-              {selectedInterview.transcriptionStatus !== 'done' && <p className="warning-note">Primero transcribe la entrevista</p>}
+              {!llmReady && <p className="warning-note">{t('Configura un motor de resumen en')} <button type="button" className="link-btn" onClick={() => openSettings()}>{t('Configuración')}</button></p>}
+              {selectedInterview.transcriptionStatus !== 'done' && <p className="warning-note">{t('Primero transcribe la entrevista')}</p>}
               {(preparingIds.includes(selectedInterview.id) || selectedInterview.summaryStatus === 'generating') && (() => {
                 const preparando = preparingIds.includes(selectedInterview.id)
                 // El progreso llega del proceso principal. Hasta el primer aviso
                 // (o si la entrevista que se está resumiendo no es la que se mira)
                 // se cae al spinner de siempre.
                 const p = summaryProgress?.interviewId === selectedInterview.id ? summaryProgress : null
-                if (!p) return <div className="spinner-row"><span className="spinner" /><span>{preparando ? 'Leyendo la conversación…' : 'Generando resumen…'}</span></div>
+                if (!p) return <div className="spinner-row"><span className="spinner" /><span>{preparando ? t('Leyendo la conversación…') : t('Generando resumen…')}</span></div>
                 const pct = p.total > 0 ? Math.min(99, Math.round((p.hechas / p.total) * 100)) : 0
                 const espera = p.esperaHasta ? Math.max(0, Math.ceil((p.esperaHasta - Date.now()) / 1000)) : 0
                 return (
@@ -3302,18 +3331,16 @@ function App() {
                     </div>
                     <p className="sum-progress-eta">
                       {espera > 0
-                        ? <>Esperando cuota del proveedor · se reanuda en {espera}s</>
+                        ? t('Esperando cuota del proveedor · se reanuda en {s}s', { s: espera })
                         : p.total > 1
-                          ? <>Paso {Math.min(p.hechas + 1, p.total)} de {p.total}{p.etaSec > 0 && <> · quedan {formatEta(p.etaSec)} aprox.</>}</>
-                          : <>La transcripción cabe en una sola petición: esto es cuestión de segundos</>}
+                          ? <>{t('Paso {n} de {total}', { n: Math.min(p.hechas + 1, p.total), total: p.total })}{p.etaSec > 0 && <> · {t('quedan {tiempo} aprox.', { tiempo: formatEta(p.etaSec) })}</>}</>
+                          : t('La transcripción cabe en una sola petición: esto es cuestión de segundos')}
                     </p>
                     {p.total > 4 && (
                       <p className="sum-progress-note">
                         {preparando
-                          ? <>Puedes cerrar esta pestaña o seguir a lo tuyo: esto corre por detrás. Cuando termine,
-                              el resumen se generará en segundos — y regenerarlo también.</>
-                          : <>Tarda porque el plan gratuito del motor de resumen limita cuánto texto admite por minuto,
-                              y una llamada larga no cabe de una vez. Se puede quitar cambiando de motor en Ajustes.</>}
+                          ? t('Puedes cerrar esta pestaña o seguir a lo tuyo: esto corre por detrás. Cuando termine, el resumen se generará en segundos — y regenerarlo también.')
+                          : t('Tarda porque el plan gratuito del motor de resumen limita cuánto texto admite por minuto, y una llamada larga no cabe de una vez. Se puede quitar cambiando de motor en Configuración.')}
                       </p>
                     )}
                   </div>
@@ -3327,23 +3354,23 @@ function App() {
                 const guardadas = getNotesCache()[selectedInterview.id]
                 const huella = huellaTranscripcion(selectedInterview.transcriptEdited, selectedInterview.summaryContext ?? 'entrevista')
                 if (guardadas?.huella !== huella) return null
-                return <p className="sum-ready-hint"><CheckIcon size={12} /> La conversación ya está leída, así que el resumen tarda unos segundos{guardadas.recortado ? <>. Fue tan larga que falta el tramo final.</> : <>.</>}</p>
+                return <p className="sum-ready-hint"><CheckIcon size={12} /> {guardadas.recortado ? t('La conversación ya está leída, así que el resumen tarda unos segundos. Fue tan larga que falta el tramo final.') : t('La conversación ya está leída, así que el resumen tarda unos segundos.')}</p>
               })()}
-              {selectedInterview.summaryStatus === 'error' && <p className="error-note">Error. Inténtalo de nuevo.</p>}
+              {selectedInterview.summaryStatus === 'error' && <p className="error-note">{t('Error. Inténtalo de nuevo.')}</p>}
               {(() => {
                 // En modo reunión los apartados son fijos (acuerdos, necesidades, objeciones,
                 // presupuesto) y los criterios del proyecto se ignoran a propósito: son de
                 // selección de personal. Pedirlos aquí solo confunde.
                 if ((selectedInterview.summaryContext ?? 'entrevista') === 'reunion') {
-                  return <p className="sum-criteria-hint">En una reunión de negocio los apartados son siempre estos: <strong>acuerdos y próximos pasos, necesidades del cliente, objeciones y riesgos, presupuesto y plazos</strong>. No hacen falta criterios.</p>
+                  return <p className="sum-criteria-hint">{t('En una reunión de negocio los apartados son siempre estos:')} <strong>{t('acuerdos y próximos pasos, necesidades del cliente, objeciones y riesgos, presupuesto y plazos')}</strong>. {t('No hacen falta criterios.')}</p>
                 }
                 const cand = candidates.find(c => c.id === selectedInterview.candidateId)
                 const proj = cand ? projects.find(p => p.id === cand.projectId) : null
                 const crit = proj?.evaluationCriteria ?? []
-                const labels = crit.map(id => EVALUATION_CRITERIA.find(c => c.id === id)?.label).filter(Boolean)
+                const labels = crit.map(id => EVALUATION_CRITERIA.find(c => c.id === id)?.label).filter((l): l is string => !!l).map(l => t(l))
                 return labels.length > 0
-                  ? <p className="sum-criteria-hint">Criterios del proyecto: <strong>{labels.join(', ')}</strong></p>
-                  : <p className="sum-criteria-hint sum-criteria-hint--empty">Este proyecto no tiene criterios. Si los defines, el resumen se centra en ellos.</p>
+                  ? <p className="sum-criteria-hint">{t('Criterios del proyecto:')} <strong>{labels.join(', ')}</strong></p>
+                  : <p className="sum-criteria-hint sum-criteria-hint--empty">{t('Este proyecto no tiene criterios. Si los defines, el resumen se centra en ellos.')}</p>
               })()}
               {selectedInterview.summaryText ? (
                 selectedInterview.summaryType === 'resumen' ? (
@@ -3365,12 +3392,12 @@ function App() {
               ) : (
                 selectedInterview.transcriptionStatus === 'done' && selectedInterview.summaryStatus !== 'generating' && (
                   <button type="button" className="gen-summary-btn" onClick={() => void handleGenerateSummary(selectedInterview.id)} disabled={!llmReady}>
-                    <StarIcon /> Generar resumen con IA
+                    <StarIcon /> {t('Generar resumen con IA')}
                   </button>
                 )
               )}
             </>
-          ) : <p className="tab-note">Selecciona una entrevista para generar su resumen.</p>}
+          ) : <p className="tab-note">{t('Selecciona una entrevista para generar su resumen.')}</p>}
         </div>
       </div>
     )
@@ -3393,47 +3420,47 @@ function App() {
 
     return (
       <div className="settings-section">
-        <div className="settings-section-title">{isStt ? 'Transcripción' : 'Resumen IA'}</div>
+        <div className="settings-section-title">{isStt ? t('Transcripción') : t('Resumen IA')}</div>
         <div className="settings-section-divider" />
-        <p className="cfg-field-desc">{isStt ? 'Convierte el audio de la llamada en texto' : 'Redacta el informe a partir de la transcripción'}</p>
+        <p className="cfg-field-desc">{isStt ? t('Convierte el audio de la llamada en texto') : t('Redacta el informe a partir de la transcripción')}</p>
 
-        <label className="modal-label">Servicio
+        <label className="modal-label">{t('Servicio')}
           <Select
             className="modal-input modal-select"
             value={draft.provider}
             onChange={v => changeProvider(kind, v)}
-            options={presets.map(p => ({ value: p.id, label: `${p.label}${p.note ? ` · ${p.note}` : ''}${p.unverified ? ' · sin probar' : ''}` }))}
+            options={presets.map(p => ({ value: p.id, label: `${t(p.label)}${p.note ? ` · ${t(p.note)}` : ''}${p.unverified ? ` · ${t('sin probar')}` : ''}` }))}
           />
         </label>
 
         {preset?.unverified && (
           <p className="warning-note cfg-unverified">
-            <strong><WarnTriangle /> Sin probar.</strong> Este servicio está integrado pero todavía no se ha
-            usado con {isStt ? 'audio' : 'una transcripción'} de verdad, así que puede fallar.
-            Dale a <strong>Probar conexión</strong> aquí abajo y haz una prueba corta antes de
-            usarlo en una entrevista importante.
+            <strong><WarnTriangle /> {t('Sin probar.')}</strong> {isStt
+              ? t('Este servicio está integrado pero todavía no se ha usado con audio de verdad, así que puede fallar.')
+              : t('Este servicio está integrado pero todavía no se ha usado con una transcripción de verdad, así que puede fallar.')}{' '}
+            {t('Dale a «Probar conexión» aquí abajo y haz una prueba corta antes de usarlo en una entrevista importante.')}
           </p>
         )}
 
         {preset?.consoleUrl && (
           <p className="modal-link-note">
-            ¿De dónde saco la clave? — <a href={preset.consoleUrl} target="_blank" rel="noreferrer">{preset.consoleUrl.replace(/^https?:\/\//, '')}</a>
+            {t('¿De dónde saco la clave?')} — <a href={preset.consoleUrl} target="_blank" rel="noreferrer">{preset.consoleUrl.replace(/^https?:\/\//, '')}</a>
           </p>
         )}
 
         {draft.provider === 'custom' && (
           <>
-            <label className="modal-label">URL base
-              <input type="text" className="modal-input" value={draft.baseUrl ?? ''} placeholder="https://mi-servicio.com/v1"
+            <label className="modal-label">{t('URL base')}
+              <input type="text" className="modal-input" value={draft.baseUrl ?? ''} placeholder={t('https://mi-servicio.com/v1')}
                 onChange={e => setDraft({ ...draft, baseUrl: e.target.value })} />
             </label>
-            <label className="modal-label">Formato que habla
+            <label className="modal-label">{t('Formato que habla')}
               <Select
                 className="modal-input modal-select"
                 value={draft.dialect ?? 'openai'}
                 onChange={v => setDraft({ ...draft, dialect: v })}
                 options={[
-                  { value: 'openai', label: 'Compatible con OpenAI (lo más habitual)' },
+                  { value: 'openai', label: t('Compatible con OpenAI (lo más habitual)') },
                   ...(isStt
                     ? [{ value: 'deepgram', label: 'Deepgram' }, { value: 'elevenlabs', label: 'ElevenLabs' }]
                     : [{ value: 'anthropic', label: 'Anthropic' }]),
@@ -3446,7 +3473,7 @@ function App() {
         {!isStt && (
           <label className="modal-checkbox">
             <input type="checkbox" checked={sameKeyForLlm} onChange={e => { setSameKeyForLlm(e.target.checked); setLlmTest(null) }} />
-            <span>Usar la misma clave que en transcripción</span>
+            <span>{t('Usar la misma clave que en transcripción')}</span>
           </label>
         )}
 
@@ -3459,8 +3486,8 @@ function App() {
 
         {/* Editable a propósito: si mañana sale un modelo nuevo, se escribe y ya.
             Las sugerencias del catálogo son un atajo, no una lista cerrada. */}
-        <label className="modal-label">Modelo
-          <input type="text" className="modal-input" list={listId} value={draft.model} placeholder="nombre del modelo"
+        <label className="modal-label">{t('Modelo')}
+          <input type="text" className="modal-input" list={listId} value={draft.model} placeholder={t('nombre del modelo')}
             onChange={e => { setDraft({ ...draft, model: e.target.value }); clearTest() }} />
           <datalist id={listId}>
             {(preset?.models ?? []).map(m => <option key={m} value={m} />)}
@@ -3469,7 +3496,7 @@ function App() {
 
         <div className="cfg-test-row">
           <button type="button" className="pill-btn" onClick={() => void testProvider(kind)} disabled={test === 'testing'}>
-            {test === 'testing' ? 'Probando…' : 'Probar conexión'}
+            {test === 'testing' ? t('Probando…') : t('Probar conexión')}
           </button>
           {test && test !== 'testing' && (
             <span className={test.ok ? 'cfg-test-ok' : 'cfg-test-fail'}>{test.ok ? <CheckIcon size={12} /> : <CloseIcon size={12} />} {test.detail}</span>
@@ -3481,13 +3508,13 @@ function App() {
 
   const renderSettings = () => (
     <div className="screen-content">
-      <div className="content-header"><h2>Configuración</h2></div>
+      <div className="content-header"><h2>{t('Configuración')}</h2></div>
       <div className="settings-layout">
         <aside className="settings-nav">
           {([
-            ['api-keys', <KeyIcon />, 'Motores de IA'],
-            ['grabacion', <MicIcon />, 'Grabación'],
-            ['general', <SettingsIcon />, 'General'],
+            ['api-keys', <KeyIcon />, t('Motores de IA')],
+            ['grabacion', <MicIcon />, t('Grabación')],
+            ['general', <SettingsIcon />, t('General')],
           ] as [SettingsTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
             <button key={tab} type="button" className={`settings-nav-item${settingsTab === tab ? ' is-active' : ''}`} onClick={() => setSettingsTab(tab)}>
               <span className="settings-nav-icon">{icon}</span>
@@ -3500,52 +3527,52 @@ function App() {
             <div className="settings-sections">
               {renderEngineSection('stt')}
               {renderEngineSection('llm')}
-              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
             </div>
           )}
           {settingsTab === 'grabacion' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">Grabación</h2>
+                <h2 className="panel-title">{t('Grabación')}</h2>
               </div>
               <div className="panel-header-divider" />
               <div className="settings-sections">
                 <div className="settings-section">
-                  <div className="settings-section-label">FORMATO DE AUDIO</div>
+                  <div className="settings-section-label">{t('FORMATO DE AUDIO')}</div>
                   <div className="settings-section-divider" />
-                  <p className="cfg-field-desc">Elige el formato en que se guardan las grabaciones</p>
+                  <p className="cfg-field-desc">{t('Elige el formato en que se guardan las grabaciones')}</p>
                   <div className="cfg-format-toggle">
                     <button type="button" className={`cfg-fmt-btn${settingsAudioFormatDraft === 'mp3' ? ' is-active' : ''}`} onClick={() => setSettingsAudioFormatDraft('mp3')}>MP3</button>
                     <button type="button" className={`cfg-fmt-btn${settingsAudioFormatDraft === 'wav' ? ' is-active' : ''}`} onClick={() => setSettingsAudioFormatDraft('wav')}>WAV</button>
                   </div>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">DURACIÓN DE FRAGMENTO (SEG)</div>
+                  <div className="settings-section-label">{t('DURACIÓN DE FRAGMENTO (SEG)')}</div>
                   <div className="settings-section-divider" />
                   <input type="number" className="cfg-input" value={settingsChunkDurationDraft} onChange={e => setSettingsChunkDurationDraft(Number(e.target.value))} min={5} max={300} />
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">CALIDAD DE GRABACIÓN</div>
+                  <div className="settings-section-label">{t('CALIDAD DE GRABACIÓN')}</div>
                   <div className="settings-section-divider" />
                   <Select
                     className="cfg-select"
                     value={settingsRecordingQualityDraft}
                     onChange={setSettingsRecordingQualityDraft}
                     options={[
-                      { value: 'high', label: 'Alta (128 kbps)' },
-                      { value: 'medium', label: 'Media (64 kbps)' },
-                      { value: 'low', label: 'Baja (32 kbps)' },
+                      { value: 'high', label: t('Alta (128 kbps)') },
+                      { value: 'medium', label: t('Media (64 kbps)') },
+                      { value: 'low', label: t('Baja (32 kbps)') },
                     ]}
                   />
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">VÍDEO</div>
+                  <div className="settings-section-label">{t('VÍDEO')}</div>
                   <div className="settings-section-divider" />
                   <div className="toggle-row">
-                    <div><span className="toggle-label">Grabar vídeo de la reunión</span><span className="notif-sub">El vídeo se guarda en tu equipo, no en la nube (ocupa más espacio).</span></div>
-                    <button type="button" className={`toggle-btn${settingsRecordVideoDraft ? ' on' : ''}`} onClick={() => setSettingsRecordVideoDraft(t => !t)}><span className="toggle-circle" /></button>
+                    <div><span className="toggle-label">{t('Grabar vídeo de la reunión')}</span><span className="notif-sub">{t('El vídeo se guarda en tu equipo, no en la nube (ocupa más espacio).')}</span></div>
+                    <button type="button" className={`toggle-btn${settingsRecordVideoDraft ? ' on' : ''}`} onClick={() => setSettingsRecordVideoDraft(v => !v)}><span className="toggle-circle" /></button>
                   </div>
-                  <label className="modal-label" style={{ marginTop: 12 }}>Calidad de vídeo
+                  <label className="modal-label" style={{ marginTop: 12 }}>{t('Calidad de vídeo')}
                     <Select
                       className="modal-input modal-select"
                       value={settingsVideoQualityDraft}
@@ -3558,87 +3585,89 @@ function App() {
                   </label>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">DISPOSITIVOS PREDETERMINADOS</div>
+                  <div className="settings-section-label">{t('DISPOSITIVOS PREDETERMINADOS')}</div>
                   <div className="settings-section-divider" />
-                  <p className="cfg-field-desc">Se usarán automáticamente al iniciar una grabación</p>
-                  <label className="modal-label">Micrófono predeterminado (entrada)
+                  <p className="cfg-field-desc">{t('Se usarán automáticamente al iniciar una grabación')}</p>
+                  <label className="modal-label">{t('Micrófono predeterminado (entrada)')}
                     <Select
                       className="modal-input modal-select"
                       value={settingsDefaultMicDraft}
                       onChange={setSettingsDefaultMicDraft}
                       options={micDevices.length === 0
-                        ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                        ? [{ value: '', label: t('Sin dispositivos detectados'), disabled: true }]
                         : micDevices.map(d => ({ value: d.id, label: d.name }))}
                     />
                   </label>
-                  <label className="modal-label" style={{ marginTop: 12 }}>Dispositivo de salida predeterminado
+                  <label className="modal-label" style={{ marginTop: 12 }}>{t('Dispositivo de salida predeterminado')}
                     <Select
                       className="modal-input modal-select"
                       value={settingsDefaultOutputDraft}
                       onChange={setSettingsDefaultOutputDraft}
                       options={outputDevices.length === 0
-                        ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                        ? [{ value: '', label: t('Sin dispositivos detectados'), disabled: true }]
                         : outputDevices.map(d => ({ value: d.id, label: d.name }))}
                     />
                   </label>
                   <div className="toggle-row" style={{ marginTop: 12 }}>
-                    <div><span className="toggle-label">Capturar audio del sistema</span><span className="notif-sub">Capturar también el audio que sale por los altavoces</span></div>
-                    <button type="button" className={`toggle-btn${settingsDefaultSystemDraft ? ' on' : ''}`} onClick={() => setSettingsDefaultSystemDraft(t => !t)}><span className="toggle-circle" /></button>
+                    <div><span className="toggle-label">{t('Capturar audio del sistema')}</span><span className="notif-sub">{t('Capturar también el audio que sale por los altavoces')}</span></div>
+                    <button type="button" className={`toggle-btn${settingsDefaultSystemDraft ? ' on' : ''}`} onClick={() => setSettingsDefaultSystemDraft(v => !v)}><span className="toggle-circle" /></button>
                   </div>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">COMPORTAMIENTO</div>
+                  <div className="settings-section-label">{t('COMPORTAMIENTO')}</div>
                   <div className="settings-section-divider" />
                   <div className="toggle-row">
-                    <div><span className="toggle-label">Transcripción automática</span><span className="notif-sub">Transcribir automáticamente al terminar cada grabación</span></div>
-                    <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(t => !t)}><span className="toggle-circle" /></button>
+                    <div><span className="toggle-label">{t('Transcripción automática')}</span><span className="notif-sub">{t('Transcribir automáticamente al terminar cada grabación')}</span></div>
+                    <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(v => !v)}><span className="toggle-circle" /></button>
                   </div>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">ARCHIVOS</div>
+                  <div className="settings-section-label">{t('ARCHIVOS')}</div>
                   <div className="settings-section-divider" />
-                  <p className="cfg-field-desc">Las grabaciones se guardan en <code style={{ fontSize: 11, background: 'var(--surface-2)', padding: '1px 6px', borderRadius: 4 }}>Documentos/CallTranscriber</code></p>
+                  <p className="cfg-field-desc">{t('Las grabaciones se guardan en')} <code style={{ fontSize: 11, background: 'var(--surface-2)', padding: '1px 6px', borderRadius: 4 }}>{t('Documentos')}/CallTranscriber</code></p>
                   {window.desktopApp?.openRecordingsFolder && (
                     <button type="button" className="outline-btn pill-btn" style={{ marginTop: 10 }} onClick={() => void window.desktopApp!.openRecordingsFolder!()}>
-                      <FolderIcon /> Abrir carpeta de grabaciones
+                      <FolderIcon /> {t('Abrir carpeta de grabaciones')}
                     </button>
                   )}
                 </div>
-                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
               </div>
             </>
           )}
           {settingsTab === 'general' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">General</h2>
+                <h2 className="panel-title">{t('General')}</h2>
               </div>
               <div className="panel-header-divider" />
               <div className="settings-sections">
                 <div className="settings-section">
-                  <div className="settings-section-label">IDIOMA DE LA INTERFAZ</div>
+                  <div className="settings-section-label">{t('IDIOMA DE LA INTERFAZ')}</div>
                   <div className="settings-section-divider" />
+                  {/* Los nombres van en su propio idioma a propósito: quien no entiende
+                      el idioma actual tiene que poder encontrar el suyo. */}
                   <Select
                     className="cfg-select"
                     value={settingsLanguageDraft}
-                    onChange={setSettingsLanguageDraft}
+                    onChange={v => { if (esIdioma(v)) setSettingsLanguageDraft(v) }}
                     options={[
                       { value: 'es', label: 'Español' },
                       { value: 'en', label: 'English' },
-                      { value: 'fr', label: 'Français' },
                     ]}
                   />
+                  <p className="cfg-field-desc" style={{ marginTop: 8 }}>{t('Los resúmenes salen en el idioma en que se hizo la entrevista, sea cual sea el de la interfaz.')}</p>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">GUARDADO AUTOMÁTICO</div>
+                  <div className="settings-section-label">{t('GUARDADO AUTOMÁTICO')}</div>
                   <div className="settings-section-divider" />
                   <div className="toggle-row">
-                    <div><span className="toggle-label">Guardado automático</span><span className="notif-sub">Guarda los cambios automáticamente al cerrar</span></div>
-                    <button type="button" className={`toggle-btn${settingsAutoSaveDraft ? ' on' : ''}`} onClick={() => setSettingsAutoSaveDraft(t => !t)}><span className="toggle-circle" /></button>
+                    <div><span className="toggle-label">{t('Guardado automático')}</span><span className="notif-sub">{t('Guarda los cambios automáticamente al cerrar')}</span></div>
+                    <button type="button" className={`toggle-btn${settingsAutoSaveDraft ? ' on' : ''}`} onClick={() => setSettingsAutoSaveDraft(v => !v)}><span className="toggle-circle" /></button>
                   </div>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">FORMATO DE FECHA</div>
+                  <div className="settings-section-label">{t('FORMATO DE FECHA')}</div>
                   <div className="settings-section-divider" />
                   <Select
                     className="cfg-select"
@@ -3651,7 +3680,7 @@ function App() {
                     ]}
                   />
                 </div>
-                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
               </div>
             </>
           )}
@@ -3662,14 +3691,14 @@ function App() {
 
   const renderProfile = () => (
     <div className="screen-content">
-      <div className="content-header"><h2>Mi Perfil</h2></div>
+      <div className="content-header"><h2>{t('Mi Perfil')}</h2></div>
       <div className="settings-layout">
         <aside className="settings-nav">
           {([
-            ['perfil', <UserIcon />, 'Perfil'],
-            ['plan', <StarIcon />, 'Plan & Uso'],
-            ['seguridad', <LockIcon />, 'Seguridad'],
-            ['notif', <BellIcon />, 'Notificaciones'],
+            ['perfil', <UserIcon />, t('Perfil')],
+            ['plan', <StarIcon />, t('Plan y uso')],
+            ['seguridad', <LockIcon />, t('Seguridad')],
+            ['notif', <BellIcon />, t('Notificaciones')],
           ] as [ProfileScreenTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
             <button key={tab} type="button" className={`settings-nav-item${profileScreenTab === tab ? ' is-active' : ''}`} onClick={() => setProfileScreenTab(tab)}>
               <span className="settings-nav-icon">{icon}</span>
@@ -3687,51 +3716,51 @@ function App() {
                     <div className="prof-avatar-overlay"><CameraIcon /></div>
                   </div>
                   <div className="prof-avatar-info">
-                    <p className="prof-avatar-name">{userName || 'Sin nombre'}</p>
-                    <p className="prof-avatar-email">{userEmail || 'Sin email'}</p>
+                    <p className="prof-avatar-name">{userName || t('Sin nombre')}</p>
+                    <p className="prof-avatar-email">{userEmail || t('Sin email')}</p>
                     <div className="prof-avatar-actions">
-                      <button type="button" className="secondary-btn pill-btn prof-photo-btn" onClick={() => photoInputRef.current?.click()}><CameraIcon /> Cambiar foto</button>
-                      {userPhoto && <button type="button" className="secondary-btn pill-btn prof-photo-btn prof-photo-btn--danger" onClick={() => { setUserPhoto(''); localStorage.removeItem('ct-user-photo') }}><TrashIcon /> Eliminar</button>}
+                      <button type="button" className="secondary-btn pill-btn prof-photo-btn" onClick={() => photoInputRef.current?.click()}><CameraIcon /> {t('Cambiar foto')}</button>
+                      {userPhoto && <button type="button" className="secondary-btn pill-btn prof-photo-btn prof-photo-btn--danger" onClick={() => { setUserPhoto(''); localStorage.removeItem('ct-user-photo') }}><TrashIcon /> {t('Eliminar')}</button>}
                     </div>
                   </div>
                 </div>
               </div>
               <div className="settings-section">
-                <div className="settings-section-label">DATOS PERSONALES</div>
+                <div className="settings-section-label">{t('DATOS PERSONALES')}</div>
                 <div className="settings-section-divider" />
                 <div className="prof-fields-grid">
-                  <label className="modal-label">Nombre<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder="Tu nombre" /></label>
-                  <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder="tu@email.com" /></label>
-                  <label className="modal-label">Empresa<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder="Nombre de la empresa" /></label>
-                  <label className="modal-label">Cargo<input type="text" className="modal-input" value={settingsRoleDraft} onChange={e => setSettingsRoleDraft(e.target.value)} placeholder="Tu cargo" /></label>
+                  <label className="modal-label">{t('Nombre')}<input type="text" className="modal-input" value={settingsNameDraft} onChange={e => setSettingsNameDraft(e.target.value)} placeholder={t('Tu nombre')} /></label>
+                  <label className="modal-label">Email<input type="email" className="modal-input" value={settingsEmailDraft} onChange={e => setSettingsEmailDraft(e.target.value)} placeholder={t('tu@email.com')} /></label>
+                  <label className="modal-label">{t('Empresa')}<input type="text" className="modal-input" value={settingsCompanyDraft} onChange={e => setSettingsCompanyDraft(e.target.value)} placeholder={t('Nombre de la empresa')} /></label>
+                  <label className="modal-label">{t('Cargo')}<input type="text" className="modal-input" value={settingsRoleDraft} onChange={e => setSettingsRoleDraft(e.target.value)} placeholder={t('Tu cargo')} /></label>
                 </div>
               </div>
-              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar cambios</button></div>
+              <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
             </div>
           )}
           {profileScreenTab === 'plan' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">Plan y uso</h2>
-                <p className="panel-subtitle">Tu plan actual y estadísticas de uso</p>
+                <h2 className="panel-title">{t('Plan y uso')}</h2>
+                <p className="panel-subtitle">{t('Tu plan actual y estadísticas de uso')}</p>
               </div>
               <div className="panel-header-divider" />
               <div className="settings-sections">
                 <div className="settings-section">
                   <div className="prof-plan-card">
-                    <p className="prof-plan-label">Cuenta</p>
-                    <div className="prof-plan-badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>Plan gratuito</div>
+                    <p className="prof-plan-label">{t('Cuenta')}</p>
+                    <div className="prof-plan-badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>{t('Plan gratuito')}</div>
                     <div className="prof-plan-card-divider" />
-                    <p className="prof-plan-email">{userEmail || 'usuario'}</p>
-                    <p className="prof-plan-since">Miembro desde {session?.user.created_at ? new Date(session.user.created_at).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : '—'}</p>
+                    <p className="prof-plan-email">{userEmail || t('usuario')}</p>
+                    <p className="prof-plan-since">{t('Miembro desde {fecha}', { fecha: session?.user.created_at ? new Date(session.user.created_at).toLocaleDateString(locale(), { month: 'long', year: 'numeric' }) : '—' })}</p>
                   </div>
                 </div>
                 <div className="settings-section">
-                  <div className="settings-section-label">ESTADÍSTICAS DE USO</div>
+                  <div className="settings-section-label">{t('ESTADÍSTICAS DE USO')}</div>
                   <div className="settings-section-divider" />
                   <div className="prof-stats-grid">
-                    {([['Proyectos', stats.projects], ['Entrevistas', stats.interviews], ['Transcritas', stats.transcribed], ['Resúmenes IA', stats.summaries]] as [string, number][]).map(([label, val]) => (
-                      <div key={label} className="prof-stat-card"><span className="prof-stat-n">{val}</span><span className="prof-stat-l">{label}</span></div>
+                    {([[k('Proyectos'), stats.projects], [k('Entrevistas'), stats.interviews], [k('Transcritas'), stats.transcribed], [k('Resúmenes IA'), stats.summaries]] as [string, number][]).map(([label, val]) => (
+                      <div key={label} className="prof-stat-card"><span className="prof-stat-n">{val}</span><span className="prof-stat-l">{t(label)}</span></div>
                     ))}
                   </div>
                 </div>
@@ -3741,56 +3770,56 @@ function App() {
           {profileScreenTab === 'seguridad' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">Seguridad</h2>
-                <p className="panel-subtitle">Gestiona tu contraseña y acceso</p>
+                <h2 className="panel-title">{t('Seguridad')}</h2>
+                <p className="panel-subtitle">{t('Gestiona tu contraseña y acceso')}</p>
               </div>
               <div className="panel-header-divider" />
               <div className="settings-sections">
                 <div className="settings-section">
-                  <div className="settings-section-label">CAMBIAR CONTRASEÑA</div>
+                  <div className="settings-section-label">{t('CAMBIAR CONTRASEÑA')}</div>
                   <div className="settings-section-divider" />
-                  <label className="sec-field-label">Contraseña actual</label>
+                  <label className="sec-field-label">{t('Contraseña actual')}</label>
                   <input type="password" className="sec-input" value={settingsPasswordDraft} onChange={e => setSettingsPasswordDraft(e.target.value)} placeholder="••••••••" />
-                  <label className="sec-field-label">Nueva contraseña</label>
+                  <label className="sec-field-label">{t('Nueva contraseña')}</label>
                   <input type="password" className="sec-input" value={settingsPasswordNewDraft} onChange={e => setSettingsPasswordNewDraft(e.target.value)} placeholder="••••••••" />
-                  <label className="sec-field-label">Confirmar nueva contraseña</label>
+                  <label className="sec-field-label">{t('Confirmar nueva contraseña')}</label>
                   <input type="password" className="sec-input" value={settingsPasswordConfirmDraft} onChange={e => setSettingsPasswordConfirmDraft(e.target.value)} placeholder="••••••••" />
                 </div>
                 <div className="sec-bottom-divider" />
-                <div className="settings-save"><button type="button" className="primary-btn pill-btn sec-update-btn" onClick={() => void handleChangePassword()}>Actualizar contraseña</button></div>
+                <div className="settings-save"><button type="button" className="primary-btn pill-btn sec-update-btn" onClick={() => void handleChangePassword()}>{t('Actualizar contraseña')}</button></div>
               </div>
             </>
           )}
           {profileScreenTab === 'notif' && (
             <>
               <div className="panel-header">
-                <h2 className="panel-title">Notificaciones</h2>
-                <p className="panel-subtitle">Elige cuándo y cómo te avisamos</p>
+                <h2 className="panel-title">{t('Notificaciones')}</h2>
+                <p className="panel-subtitle">{t('Elige cuándo y cómo te avisamos')}</p>
               </div>
               <div className="panel-header-divider" />
               <div className="notif-list">
                 <div className="notif-row">
-                  <div><span className="toggle-label">Transcripción completada</span><span className="notif-sub">Recibe un email cuando una transcripción finaliza</span></div>
-                  <button type="button" className={`toggle-btn${notifTranscription ? ' on' : ''}`} onClick={() => setNotifTranscription(t => !t)}><span className="toggle-circle" /></button>
+                  <div><span className="toggle-label">{t('Transcripción completada')}</span><span className="notif-sub">{t('Recibe un email cuando una transcripción finaliza')}</span></div>
+                  <button type="button" className={`toggle-btn${notifTranscription ? ' on' : ''}`} onClick={() => setNotifTranscription(v => !v)}><span className="toggle-circle" /></button>
                 </div>
                 <div className="notif-divider" />
                 <div className="notif-row">
-                  <div><span className="toggle-label">Resumen semanal</span><span className="notif-sub">Resumen de actividad cada lunes por la mañana</span></div>
-                  <button type="button" className={`toggle-btn${notifSummary ? ' on' : ''}`} onClick={() => setNotifSummary(t => !t)}><span className="toggle-circle" /></button>
+                  <div><span className="toggle-label">{t('Resumen semanal')}</span><span className="notif-sub">{t('Resumen de actividad cada lunes por la mañana')}</span></div>
+                  <button type="button" className={`toggle-btn${notifSummary ? ' on' : ''}`} onClick={() => setNotifSummary(v => !v)}><span className="toggle-circle" /></button>
                 </div>
                 <div className="notif-divider" />
                 <div className="notif-row">
-                  <div><span className="toggle-label">Alertas de error</span><span className="notif-sub">Notificación si falla el procesamiento de audio</span></div>
-                  <button type="button" className={`toggle-btn${notifErrors ? ' on' : ''}`} onClick={() => setNotifErrors(t => !t)}><span className="toggle-circle" /></button>
+                  <div><span className="toggle-label">{t('Alertas de error')}</span><span className="notif-sub">{t('Notificación si falla el procesamiento de audio')}</span></div>
+                  <button type="button" className={`toggle-btn${notifErrors ? ' on' : ''}`} onClick={() => setNotifErrors(v => !v)}><span className="toggle-circle" /></button>
                 </div>
                 <div className="notif-divider" />
                 <div className="notif-row">
-                  <div><span className="toggle-label">Novedades del producto</span><span className="notif-sub">Actualizaciones y nuevas funcionalidades</span></div>
-                  <button type="button" className={`toggle-btn${notifProductUpdates ? ' on' : ''}`} onClick={() => setNotifProductUpdates(t => !t)}><span className="toggle-circle" /></button>
+                  <div><span className="toggle-label">{t('Novedades del producto')}</span><span className="notif-sub">{t('Actualizaciones y nuevas funcionalidades')}</span></div>
+                  <button type="button" className={`toggle-btn${notifProductUpdates ? ' on' : ''}`} onClick={() => setNotifProductUpdates(v => !v)}><span className="toggle-circle" /></button>
                 </div>
                 <div className="notif-divider" />
               </div>
-              <div className="settings-save" style={{ marginTop: 20 }}><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>Guardar preferencias</button></div>
+              <div className="settings-save" style={{ marginTop: 20 }}><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar preferencias')}</button></div>
             </>
           )}
         </div>
@@ -3829,7 +3858,7 @@ function App() {
                     }
                   }}
                 />
-                <span>{c.label}</span>
+                <span>{t(c.label)}</span>
               </label>
             )
           })}
@@ -3838,7 +3867,7 @@ function App() {
           <input
             type="text"
             className="modal-input modal-input--figma criteria-otros-input"
-            placeholder="Describe el criterio personalizado…"
+            placeholder={t('Describe el criterio personalizado…')}
             value={otrosText}
             onChange={e => onChange([
               ...criteria.filter(x => !x.startsWith('otros:')),
@@ -3864,9 +3893,7 @@ function App() {
       return (
         <div className="modal-field">
           <div className="readonly-note">
-            Esta carpeta te la ha compartido {mia?.ownerName || 'un compañero'}. Puedes ver y trabajar
-            dentro (transcribir, resumir, editar textos), pero el nombre, los criterios y los accesos
-            solo los cambia quien la creó.
+            {t('Esta carpeta te la ha compartido {nombre}. Puedes ver y trabajar dentro (transcribir, resumir, editar textos), pero el nombre, los criterios y los accesos solo los cambia quien la creó.', { nombre: mia?.ownerName || t('un compañero') })}
           </div>
         </div>
       )
@@ -3876,10 +3903,9 @@ function App() {
     if (!session || !isSupabaseConfigured) {
       return (
         <div className="modal-field">
-          <span className="modal-field-label">Compartir con</span>
+          <span className="modal-field-label">{t('Compartir con')}</span>
           <div className="readonly-note">
-            Para compartir una carpeta hay que entrar con una cuenta: es lo que permite que los datos
-            viajen a la nube y tu compañero pueda verlos desde su equipo.
+            {t('Para compartir una carpeta hay que entrar con una cuenta: es lo que permite que los datos viajen a la nube y tu compañero pueda verlos desde su equipo.')}
           </div>
         </div>
       )
@@ -3888,17 +3914,16 @@ function App() {
     const lista = comparticionesDe(proyecto.id)
     return (
       <div className="modal-field">
-        <span className="modal-field-label">Compartir con</span>
+        <span className="modal-field-label">{t('Compartir con')}</span>
         <p className="modal-field-hint">
-          Escribe el correo de tu compañero. Tiene que tener ya una cuenta de Call Transcriber
-          creada con ese mismo correo.
+          {t('Escribe el correo de tu compañero. Tiene que tener ya una cuenta de Call Transcriber creada con ese mismo correo.')}
         </p>
         <div className="share-box">
           <div className="share-search">
             <input
               type="email"
               className="modal-input modal-input--figma share-search-input"
-              placeholder="correo@empresa.com"
+              placeholder={t('correo@empresa.com')}
               value={shareEmailDraft}
               onChange={e => { setShareEmailDraft(e.target.value); setShareError(''); setShareEncontrado(null) }}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleBuscarCompanero() } }}
@@ -3909,7 +3934,7 @@ function App() {
               onClick={() => void handleBuscarCompanero()}
               disabled={shareBuscando || !shareEmailDraft.trim()}
             >
-              {shareBuscando ? 'Buscando…' : 'Buscar'}
+              {shareBuscando ? t('Buscando…') : t('Buscar')}
             </button>
           </div>
 
@@ -3921,13 +3946,13 @@ function App() {
                 <span className="share-found-name">{shareEncontrado.name}</span>
                 <span className="share-found-email">{shareEncontrado.email}</span>
               </div>
-              <button type="button" className="share-found-add" onClick={() => void handleDarAcceso()}>Dar acceso</button>
+              <button type="button" className="share-found-add" onClick={() => void handleDarAcceso()}>{t('Dar acceso')}</button>
             </div>
           )}
 
           <div className="share-list">
             {lista.length === 0
-              ? <span className="share-empty">Todavía no lo has compartido con nadie</span>
+              ? <span className="share-empty">{t('Todavía no lo has compartido con nadie')}</span>
               : lista.map(sh => (
                   <div key={sh.id} className="share-chip">
                     <span className="share-chip-avatar" style={{ background: avatarColor(sh.sharedWithId) }}>
@@ -3940,7 +3965,7 @@ function App() {
                     <button
                       type="button"
                       className="share-chip-remove"
-                      title={`Quitar el acceso a ${sh.sharedWithName}`}
+                      title={t('Quitar el acceso a {nombre}', { nombre: sh.sharedWithName })}
                       onClick={() => void handleQuitarAcceso(sh)}
                     ><CloseIcon size={13} /></button>
                   </div>
@@ -3948,8 +3973,7 @@ function App() {
             }
           </div>
           <p className="share-hint">
-            Verán las transcripciones y los resúmenes al instante. El audio solo si está subido a la
-            nube (el distintivo <CloudIcon size={12} /> de cada grabación); el vídeo nunca sale de este equipo.
+            {t('Verán las transcripciones y los resúmenes al instante. El audio solo si está subido a la nube (el distintivo de la nube de cada grabación); el vídeo nunca sale de este equipo.')}
           </p>
         </div>
       </div>
@@ -3973,22 +3997,22 @@ function App() {
             ? interviewersList.map(name => (
                 <span key={name} className="interviewer-chip">
                   {name}
-                  <button type="button" className="chip-remove-btn" title="Quitar" onClick={() => onChange(interviewersList.filter(n => n !== name))}><CloseIcon size={13} /></button>
+                  <button type="button" className="chip-remove-btn" title={t('Quitar')} onClick={() => onChange(interviewersList.filter(n => n !== name))}><CloseIcon size={13} /></button>
                 </span>
               ))
-            : <span className="interviewer-chip interviewer-chip--empty">Sin entrevistadores todavía</span>
+            : <span className="interviewer-chip interviewer-chip--empty">{t('Sin entrevistadores todavía')}</span>
           }
         </div>
         <div className="interviewer-add-row">
           <input
             type="text"
             className="modal-input modal-input--figma"
-            placeholder="Nombre del entrevistador…"
+            placeholder={t('Nombre del entrevistador…')}
             value={newInterviewerDraft}
             onChange={e => setNewInterviewerDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addInterviewer() } }}
           />
-          <button type="button" className="secondary-btn" onClick={addInterviewer} disabled={!newInterviewerDraft.trim()}>Añadir</button>
+          <button type="button" className="secondary-btn" onClick={addInterviewer} disabled={!newInterviewerDraft.trim()}>{t('Añadir')}</button>
         </div>
       </>
     )
@@ -3997,21 +4021,21 @@ function App() {
   const renderRecordingScreen = () => {
     if (!activeRecordingInterview) return null
     const isRecording = activeRecordingInterview.status === 'recording'
-    const contextLabel = [activeRecordingCandidate?.name, activeRecordingProject ? `Proyecto: ${activeRecordingProject.name}` : null].filter(Boolean).join('  ·  ')
+    const contextLabel = [activeRecordingCandidate?.name, activeRecordingProject ? t('Proyecto: {nombre}', { nombre: activeRecordingProject.name }) : null].filter(Boolean).join('  ·  ')
     return (
       <div className="rec-screen">
         {livePreviewStream && (
           <div className="rec-pip">
             <div className="rec-pip-video-wrap">
               <video ref={pipVideoRef} className="rec-pip-video" autoPlay muted playsInline />
-              <span className="rec-pip-live-badge"><DotFilled /> EN VIVO</span>
+              <span className="rec-pip-live-badge"><DotFilled /> {t('EN VIVO')}</span>
             </div>
-            <span className="rec-pip-caption"><VideoIcon size={13} /> Grabando ventana: {captureWindowLabel}</span>
+            <span className="rec-pip-caption"><VideoIcon size={13} /> {t('Grabando ventana: {nombre}', { nombre: captureWindowLabel })}</span>
           </div>
         )}
         <div className="rec-screen-content">
           <div className={`rec-badge${isRecording ? '' : ' rec-badge--paused'}`}>
-            {isRecording ? <><DotFilled /> EN GRABACIÓN</> : <><PauseIconSm size={11} /> EN PAUSA</>}
+            {isRecording ? <><DotFilled /> {t('EN GRABACIÓN')}</> : <><PauseIconSm size={11} /> {t('EN PAUSA')}</>}
           </div>
           <div className="rec-screen-timer">{fmt(activeRecordingInterview.durationSec)}</div>
           {contextLabel && <p className="rec-screen-context">{contextLabel}</p>}
@@ -4026,7 +4050,7 @@ function App() {
               <button type="button" className="rec-stop-btn" onClick={handleStopRecording}>
                 <div className="rec-stop-icon" />
               </button>
-              <span className="rec-btn-label rec-stop-label">Detener</span>
+              <span className="rec-btn-label rec-stop-label">{t('Detener')}</span>
             </div>
             <div className="rec-screen-btn-wrap">
               {isRecording ? (
@@ -4034,7 +4058,7 @@ function App() {
               ) : (
                 <button type="button" className="rec-pause-btn" onClick={handleResumeRecording}><PlayIcon size={13} /></button>
               )}
-              <span className="rec-btn-label">{isRecording ? 'Pausar' : 'Reanudar'}</span>
+              <span className="rec-btn-label">{isRecording ? t('Pausar') : t('Reanudar')}</span>
             </div>
           </div>
         </div>
@@ -4054,15 +4078,15 @@ function App() {
     return (
       <div className="modal-overlay">
         <div className="modal-box proc-modal">
-          <h2>Procesando grabación…</h2>
-          <p>Esto puede tardar unos segundos</p>
+          <h2>{t('Procesando grabación…')}</h2>
+          <p>{t('Esto puede tardar unos segundos')}</p>
           {cand && <p className="proc-candidate">{cand.name} — {transcribingInterview.sessionName || fd(transcribingInterview.createdAt)}</p>}
           <div className="proc-steps">
-            {step('Subiendo audio', false, true)}
-            {step('Transcribiendo', true, false)}
-            {step('Generando resumen', false, false)}
+            {step(t('Subiendo audio'), false, true)}
+            {step(t('Transcribiendo'), true, false)}
+            {step(t('Generando resumen'), false, false)}
           </div>
-          <button type="button" className="secondary-btn" onClick={() => updateInterview(transcribingInterview.id, { transcriptionStatus: 'pending' })}>Cancelar</button>
+          <button type="button" className="secondary-btn" onClick={() => updateInterview(transcribingInterview.id, { transcriptionStatus: 'pending' })}>{t('Cancelar')}</button>
         </div>
       </div>
     )
@@ -4076,39 +4100,39 @@ function App() {
 
     const exportText = allCandidatesToExport.map(cand => {
       const ci = interviews.filter(i => i.candidateId === cand.id && (i.transcriptionStatus === 'done' || i.summaryStatus === 'done'))
-      if (ci.length === 0) return `# ${cand.name}\nSin entrevistas transcritas.`
-      return `# ${cand.name}\n${cand.role ? `Puesto: ${cand.role}\n` : ''}${cand.email ? `Email: ${cand.email}\n` : ''}\n` +
+      if (ci.length === 0) return `# ${cand.name}\n${t('Sin entrevistas transcritas.')}`
+      return `# ${cand.name}\n${cand.role ? `${t('Puesto')}: ${cand.role}\n` : ''}${cand.email ? `Email: ${cand.email}\n` : ''}\n` +
         ci.map(i => {
           let out = `## ${i.sessionName || fd(i.createdAt)}\n`
-          if (i.summaryText) out += `### Resumen IA\n${i.summaryText}\n`
-          if (i.transcriptEdited) out += `### Transcripción\n${i.transcriptEdited}\n`
+          if (i.summaryText) out += `### ${t('Resumen IA')}\n${i.summaryText}\n`
+          if (i.transcriptEdited) out += `### ${t('Transcripción')}\n${i.transcriptEdited}\n`
           return out
         }).join('\n---\n\n')
     }).join('\n\n====\n\n')
 
     const handleExport = async () => {
       if (exportFormat === 'clipboard') {
-        try { await navigator.clipboard.writeText(exportText); toast('Copiado al portapapeles', 'info', 'El texto ha sido copiado exitosamente.'); setShowExport(false) }
-        catch { toast('No se pudo copiar', 'error') }
+        try { await navigator.clipboard.writeText(exportText); toast(t('Copiado al portapapeles'), 'info', t('El texto ha sido copiado exitosamente.')); setShowExport(false) }
+        catch { toast(t('No se pudo copiar'), 'error') }
       } else if (exportFormat === 'txt') {
         const blob = new Blob([exportText], { type: 'text/plain' })
         const url = URL.createObjectURL(blob)
-        const a = document.createElement('a'); a.href = url; a.download = 'exportacion.txt'; a.click(); URL.revokeObjectURL(url)
-        toast('Archivo descargado', 'success'); setShowExport(false)
+        const a = document.createElement('a'); a.href = url; a.download = `${t('exportacion')}.txt`; a.click(); URL.revokeObjectURL(url)
+        toast(t('Archivo descargado'), 'success'); setShowExport(false)
       } else {
-        if (!window.desktopApp?.exportPdf) { toast('PDF no disponible fuera de la app de escritorio', 'warning'); return }
-        const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Exportación Call Transcriber</title><style>body{font-family:Arial,sans-serif;max-width:820px;margin:0 auto;padding:24px;color:#1a1a1a}h1{color:#2563eb;border-bottom:2px solid #2563eb;padding-bottom:8px;margin-top:32px}h2{color:#333;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:6px}h3{color:#555;margin-top:20px}p{line-height:1.7;margin:6px 0}hr{border:none;border-top:2px solid #eee;margin:32px 0}pre{white-space:pre-wrap;font-family:inherit}</style></head><body>${exportText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>').replace(/^# (.+)$/gm,'<h1>$1</h1>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^====<br>$/gm,'<hr>')}</body></html>`
-        const candidateName = allCandidatesToExport[0]?.name ?? 'exportacion'
+        if (!window.desktopApp?.exportPdf) { toast(t('PDF no disponible fuera de la app de escritorio'), 'warning'); return }
+        const html = `<!DOCTYPE html><html lang="${idioma}"><head><meta charset="utf-8"><title>${t('Exportación Call Transcriber')}</title><style>body{font-family:Arial,sans-serif;max-width:820px;margin:0 auto;padding:24px;color:#1a1a1a}h1{color:#2563eb;border-bottom:2px solid #2563eb;padding-bottom:8px;margin-top:32px}h2{color:#333;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:6px}h3{color:#555;margin-top:20px}p{line-height:1.7;margin:6px 0}hr{border:none;border-top:2px solid #eee;margin:32px 0}pre{white-space:pre-wrap;font-family:inherit}</style></head><body>${exportText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>').replace(/^# (.+)$/gm,'<h1>$1</h1>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^====<br>$/gm,'<hr>')}</body></html>`
+        const candidateName = allCandidatesToExport[0]?.name ?? t('exportacion')
         const result = await window.desktopApp.exportPdf({ html, fileName: `${candidateName}.pdf` })
-        if (result.ok) { toast('PDF guardado correctamente', 'success'); setShowExport(false) }
-        else if (!result.cancelled) toast('Error al generar el PDF', 'error')
+        if (result.ok) { toast(t('PDF guardado correctamente'), 'success'); setShowExport(false) }
+        else if (!result.cancelled) toast(t('Error al generar el PDF'), 'error')
       }
     }
 
     const options: { key: 'pdf' | 'txt' | 'clipboard'; icon: ReactNode; title: string; desc: string }[] = [
-      { key: 'pdf', icon: <DocIcon />, title: 'PDF', desc: 'Documento con diseño y formato' },
-      { key: 'txt', icon: <PencilIcon />, title: 'Texto plano (.txt)', desc: 'Sin formato, solo texto' },
-      { key: 'clipboard', icon: <ClipboardIcon />, title: 'Copiar al portapapeles', desc: 'Copia el texto al clipboard' },
+      { key: 'pdf', icon: <DocIcon />, title: 'PDF', desc: t('Documento con diseño y formato') },
+      { key: 'txt', icon: <PencilIcon />, title: t('Texto plano (.txt)'), desc: t('Sin formato, solo texto') },
+      { key: 'clipboard', icon: <ClipboardIcon />, title: t('Copiar al portapapeles'), desc: t('Copia el texto al portapapeles') },
     ]
 
     return (
@@ -4116,8 +4140,8 @@ function App() {
         <div className="modal-box modal-box--figma exp-modal" onClick={e => e.stopPropagation()}>
           <div className="modal-header">
             <div>
-              <h2 className="modal-title">Exportar transcripción</h2>
-              <p className="modal-subtitle">Selecciona el formato de exportación</p>
+              <h2 className="modal-title">{t('Exportar transcripción')}</h2>
+              <p className="modal-subtitle">{t('Selecciona el formato de exportación')}</p>
             </div>
             <button type="button" className="modal-close" onClick={() => setShowExport(false)}><CloseIcon size={13} /></button>
           </div>
@@ -4135,8 +4159,8 @@ function App() {
           </div>
           <div className="modal-footer-divider" />
           <div className="modal-actions modal-actions--figma">
-            <button type="button" className="modal-cancel-btn" onClick={() => setShowExport(false)}>Cancelar</button>
-            <button type="button" className="modal-action-btn" onClick={() => void handleExport()}>Exportar <ArrowRightIcon /></button>
+            <button type="button" className="modal-cancel-btn" onClick={() => setShowExport(false)}>{t('Cancelar')}</button>
+            <button type="button" className="modal-action-btn" onClick={() => void handleExport()}>{t('Exportar')} <ArrowRightIcon /></button>
           </div>
         </div>
       </div>
@@ -4149,7 +4173,7 @@ function App() {
     <div className="auth-root">
       <div className="auth-card" style={{ alignItems: 'center', gap: 16 }}>
         <span className="spinner" style={{ width: 28, height: 28 }} />
-        <p style={{ color: 'var(--text-muted)', margin: 0 }}>Iniciando…</p>
+        <p style={{ color: 'var(--text-muted)', margin: 0 }}>{t('Iniciando…')}</p>
       </div>
     </div>
   )
@@ -4160,27 +4184,27 @@ function App() {
     <div className="auth-root">
       <div className="auth-right" style={{ width: '100%' }}>
         <div className="auth-card">
-          <h2 className="auth-title">Nueva contraseña</h2>
-          <p className="auth-sub">Elige una contraseña nueva para tu cuenta.</p>
+          <h2 className="auth-title">{t('Nueva contraseña')}</h2>
+          <p className="auth-sub">{t('Elige una contraseña nueva para tu cuenta.')}</p>
           <div className="auth-form">
-            <label className="auth-label">Nueva contraseña
-              <input type="password" className="auth-input" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Mínimo 6 caracteres" autoFocus />
+            <label className="auth-label">{t('Nueva contraseña')}
+              <input type="password" className="auth-input" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder={t('Mínimo 6 caracteres')} autoFocus />
             </label>
-            <label className="auth-label">Confirmar contraseña
-              <input type="password" className="auth-input" value={newPasswordConfirm} onChange={e => setNewPasswordConfirm(e.target.value)} placeholder="Repetir contraseña" />
+            <label className="auth-label">{t('Confirmar contraseña')}
+              <input type="password" className="auth-input" value={newPasswordConfirm} onChange={e => setNewPasswordConfirm(e.target.value)} placeholder={t('Repetir contraseña')} />
             </label>
             {recoveryError && <p className="auth-error">{recoveryError}</p>}
             <button className="auth-submit-btn" disabled={recoveryLoading} onClick={async () => {
               setRecoveryError('')
-              if (newPassword.length < 6) { setRecoveryError('La contraseña debe tener al menos 6 caracteres.'); return }
-              if (newPassword !== newPasswordConfirm) { setRecoveryError('Las contraseñas no coinciden.'); return }
+              if (newPassword.length < 6) { setRecoveryError(t('La contraseña debe tener al menos 6 caracteres.')); return }
+              if (newPassword !== newPasswordConfirm) { setRecoveryError(t('Las contraseñas no coinciden.')); return }
               setRecoveryLoading(true)
               const { error } = await supabase.auth.updateUser({ password: newPassword })
               setRecoveryLoading(false)
               if (error) { setRecoveryError(error.message); return }
               setRecoveryMode(false)
             }}>
-              {recoveryLoading ? <span className="spinner" /> : 'Guardar contraseña'}
+              {recoveryLoading ? <span className="spinner" /> : t('Guardar contraseña')}
             </button>
           </div>
         </div>
@@ -4193,11 +4217,11 @@ function App() {
       {/* Banner de actualización */}
       {updateStatus && updateStatus.status === 'available' && (
         <div className="update-banner">
-          <span>Hay una nueva versión{updateStatus.version ? ` (${updateStatus.version})` : ''}. La app no se actualiza sola: hay que descargar e instalar el archivo.</span>
+          <span>{updateStatus.version ? t('Hay una nueva versión ({version}).', { version: updateStatus.version }) : t('Hay una nueva versión.')} {t('La app no se actualiza sola: hay que descargar e instalar el archivo.')}</span>
           <button type="button" className="update-banner__btn" onClick={() => void window.desktopApp?.openReleasesPage?.()}>
-            Descargar
+            {t('Descargar')}
           </button>
-          <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label="Cerrar"><CloseIcon size={13} /></button>
+          <button type="button" className="update-banner__dismiss" onClick={() => setUpdateStatus(null)} aria-label={t('Cerrar')}><CloseIcon size={13} /></button>
         </div>
       )}
       {/* Global top bar */}
@@ -4223,7 +4247,7 @@ function App() {
           <aside className="sidebar sidebar--cands">
             <div className="csb-header">
               <button type="button" className="csb-back" onClick={() => setScreen(candidateFrom === 'all' ? 'candidates' : 'project-detail')}><ChevronLeft /></button>
-              <span className="csb-project-name">{candidateFrom === 'all' ? 'Perfiles' : activeProject.name}</span>
+              <span className="csb-project-name">{candidateFrom === 'all' ? t('Perfiles') : activeProject.name}</span>
             </div>
             <div className="csb-list">
               {(candidateFrom === 'all' ? sidebarAllCandidates : projectCandidates).map(c => (
@@ -4240,10 +4264,10 @@ function App() {
         ) : (
           <aside className="sidebar">
             <nav className="sidebar-nav">
-              <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>Inicio</span></button>
-              <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>Proyectos</span></button>
-              <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>Perfiles</span></button>
-              <button type="button" className={`nav-item${screen === 'search' ? ' is-active' : ''}`} onClick={() => { setScreen('search'); setTimeout(() => document.getElementById('global-search-input')?.focus(), 50) }}><SearchIcon /><span>Buscar</span></button>
+              <button type="button" className={`nav-item${screen === 'dashboard' ? ' is-active' : ''}`} onClick={() => setScreen('dashboard')}><HomeIcon /><span>{t('Inicio')}</span></button>
+              <button type="button" className={`nav-item${(screen === 'projects' || screen === 'project-detail') ? ' is-active' : ''}`} onClick={() => setScreen('projects')}><FolderIcon /><span>{t('Proyectos')}</span></button>
+              <button type="button" className={`nav-item${(screen === 'candidates' || screen === 'candidate-detail') ? ' is-active' : ''}`} onClick={() => setScreen('candidates')}><UsersIcon /><span>{t('Perfiles')}</span></button>
+              <button type="button" className={`nav-item${screen === 'search' ? ' is-active' : ''}`} onClick={() => { setScreen('search'); setTimeout(() => document.getElementById('global-search-input')?.focus(), 50) }}><SearchIcon /><span>{t('Buscar')}</span></button>
             </nav>
             <div className="sidebar-bottom">
               <button type="button" className="sidebar-user" onClick={() => setShowProfilePopup(p => !p)}>
@@ -4251,7 +4275,7 @@ function App() {
                     {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
                   </div>
                 <div className="sidebar-user-info">
-                  <span className="sidebar-user-name">{userName || session?.user.email?.split('@')[0] || 'Usuario'}</span>
+                  <span className="sidebar-user-name">{userName || session?.user.email?.split('@')[0] || t('Usuario')}</span>
                   <span className="sidebar-user-email">{userEmail || session?.user.email || ''}</span>
                 </div>
               </button>
@@ -4298,13 +4322,13 @@ function App() {
               {userPhoto ? <img src={userPhoto} alt="U" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /> : userInitials}
             </div>
             <div>
-              <p className="pp-name">{userName || 'Usuario'}</p>
-              <p className="pp-email">{session ? userEmail : 'Solo en este equipo'}</p>
+              <p className="pp-name">{userName || t('Usuario')}</p>
+              <p className="pp-email">{session ? userEmail : t('Solo en este equipo')}</p>
             </div>
           </div>
           <div className="pp-divider" />
-          <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> Mi Perfil</button>
-          <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> Configuración</button>
+          <button type="button" className="pp-item" onClick={() => { setSettingsNameDraft(userName); setSettingsEmailDraft(userEmail); setSettingsCompanyDraft(userCompany); setScreen('profile'); setProfileScreenTab('perfil'); setShowProfilePopup(false) }}><UserIcon /> {t('Mi Perfil')}</button>
+          <button type="button" className="pp-item" onClick={() => { openSettings('general'); setShowProfilePopup(false) }}><SettingsIcon /> {t('Configuración')}</button>
           <div className="pp-divider" />
           {/* Sin cuenta no hay sesion que cerrar: lo que ofrece el boton es entrar,
               que ademas sube a la nube lo que se haya creado en este equipo. */}
@@ -4313,7 +4337,7 @@ function App() {
             className={session ? 'pp-item pp-item--danger' : 'pp-item'}
             onClick={() => { setShowProfilePopup(false); void handleSignOut() }}
           >
-            <LogoutIcon /> {session ? 'Cerrar sesión' : 'Entrar con una cuenta'}
+            <LogoutIcon /> {session ? t('Cerrar sesión') : t('Entrar con una cuenta')}
           </button>
         </div>
       )}
@@ -4323,16 +4347,16 @@ function App() {
         <div className="modal-overlay">
           <div className="modal-box onboarding-box" onClick={e => e.stopPropagation()}>
             <div className="onboarding-logo"><div className="sidebar-logo-badge" style={{ width: 48, height: 48, fontSize: 18 }}>CT</div></div>
-            <h2 style={{ textAlign: 'center', margin: 0 }}>Bienvenido a Call Transcriber</h2>
-            <p style={{ textAlign: 'center', margin: 0 }}>Para transcribir hace falta conectar un servicio de IA. Groq es gratis y no pide tarjeta, pero puedes usar el que quieras.</p>
-            <label className="modal-label">Tu API Key de Groq
+            <h2 style={{ textAlign: 'center', margin: 0 }}>{t('Bienvenido a Call Transcriber')}</h2>
+            <p style={{ textAlign: 'center', margin: 0 }}>{t('Para transcribir hace falta conectar un servicio de IA. Groq es gratis y no pide tarjeta, pero puedes usar el que quieras.')}</p>
+            <label className="modal-label">{t('Tu API Key de Groq')}
               <input type="password" className="modal-input" value={onboardingKeyDraft} onChange={e => setOnboardingKeyDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && onboardingKeyDraft.trim()) void handleOnboardingSave() }} placeholder="gsk_..." autoFocus />
             </label>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>¿Cómo obtengo mi clave? → <a href="https://console.groq.com" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>console.groq.com</a></p>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>{t('¿Cómo obtengo mi clave?')} → <a href="https://console.groq.com" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>console.groq.com</a></p>
             <div className="modal-actions" style={{ justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
-              <button type="button" className="primary-btn" style={{ width: '100%', padding: '12px' }} onClick={() => void handleOnboardingSave()} disabled={!onboardingKeyDraft.trim()}>Empezar a grabar <ArrowRightIcon /></button>
-              <button type="button" style={{ border: 'none', background: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }} onClick={skipOnboardingToSettings}>Ya uso otro servicio → configurarlo</button>
-              <button type="button" style={{ border: 'none', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }} onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_KEY, '1') }}>Configurar más tarde</button>
+              <button type="button" className="primary-btn" style={{ width: '100%', padding: '12px' }} onClick={() => void handleOnboardingSave()} disabled={!onboardingKeyDraft.trim()}>{t('Empezar a grabar')} <ArrowRightIcon /></button>
+              <button type="button" style={{ border: 'none', background: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }} onClick={skipOnboardingToSettings}>{t('Ya uso otro servicio → configurarlo')}</button>
+              <button type="button" style={{ border: 'none', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }} onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_KEY, '1') }}>{t('Configurar más tarde')}</button>
             </div>
           </div>
         </div>
@@ -4342,32 +4366,32 @@ function App() {
       {showSessionNameModal && (
         <div className="modal-overlay">
           <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h2>Nombrar sesión</h2>
-            <p>¿Cómo quieres llamar a esta sesión?</p>
-            <label className="modal-label">Nombre<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder="Ej: Primera entrevista técnica (opcional)" autoFocus /></label>
+            <h2>{t('Nombrar sesión')}</h2>
+            <p>{t('¿Cómo quieres llamar a esta sesión?')}</p>
+            <label className="modal-label">{t('Nombre')}<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder={t('Ej: Primera entrevista técnica (opcional)')} autoFocus /></label>
             {/* Quién ha llevado la llamada, en caliente y recién terminada. Se puede
                 cambiar luego desde la lista de grabaciones. */}
             {sessionModalProject && sessionModalProject.interviewers.length > 0 && (
-              <label className="modal-label">Entrevistador
+              <label className="modal-label">{t('Entrevistador')}
                 <Select
                   className="modal-input"
                   value={sessionInterviewerDraft}
                   onChange={setSessionInterviewerDraft}
-                  options={[{ value: '', label: 'Sin asignar' }, ...sessionModalProject.interviewers.map(name => ({ value: name, label: name }))]}
+                  options={[{ value: '', label: t('Sin asignar') }, ...sessionModalProject.interviewers.map(name => ({ value: name, label: name }))]}
                 />
               </label>
             )}
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>Si lo dejas en blanco se usará la fecha y hora como nombre.</p>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>{t('Si lo dejas en blanco se usará la fecha y hora como nombre.')}</p>
             <div className="modal-actions">
-              <button type="button" className="primary-btn" onClick={() => void handleConfirmSessionName()}>Guardar</button>
+              <button type="button" className="primary-btn" onClick={() => void handleConfirmSessionName()}>{t('Guardar')}</button>
               {discardConfirming ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, color: 'var(--error)' }}>¿Seguro? El audio se perderá.</span>
-                  <button type="button" style={{ color: 'var(--error)', fontWeight: 600 }} onClick={() => void handleDiscardRecording()}>Sí, descartar</button>
-                  <button type="button" onClick={() => setDiscardConfirming(false)}>Cancelar</button>
+                  <span style={{ fontSize: 13, color: 'var(--error)' }}>{t('¿Seguro? El audio se perderá.')}</span>
+                  <button type="button" style={{ color: 'var(--error)', fontWeight: 600 }} onClick={() => void handleDiscardRecording()}>{t('Sí, descartar')}</button>
+                  <button type="button" onClick={() => setDiscardConfirming(false)}>{t('Cancelar')}</button>
                 </div>
               ) : (
-                <button type="button" onClick={() => setDiscardConfirming(true)}>Descartar grabación</button>
+                <button type="button" onClick={() => setDiscardConfirming(true)}>{t('Descartar grabación')}</button>
               )}
             </div>
           </div>
@@ -4380,58 +4404,58 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">{editingCandidateId ? 'Editar perfil' : 'Nuevo perfil'}</h2>
-                <p className="modal-subtitle">Añade los datos de la persona a entrevistar</p>
+                <h2 className="modal-title">{editingCandidateId ? t('Editar perfil') : t('Nuevo perfil')}</h2>
+                <p className="modal-subtitle">{t('Añade los datos de la persona a entrevistar')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
-              <span className="modal-field-label">Nombre completo *</span>
-              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.name} onChange={e => setCandidateDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Ana García" autoFocus />
+              <span className="modal-field-label">{t('Nombre completo *')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.name} onChange={e => setCandidateDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Ana García')} autoFocus />
             </div>
             <div className="modal-row-2">
               <div className="modal-field">
                 <span className="modal-field-label">Email</span>
-                <input type="email" className="modal-input modal-input--figma" value={candidateDraft.email} onChange={e => setCandidateDraft(d => ({ ...d, email: e.target.value }))} placeholder="ana@email.com" />
+                <input type="email" className="modal-input modal-input--figma" value={candidateDraft.email} onChange={e => setCandidateDraft(d => ({ ...d, email: e.target.value }))} placeholder={t('ana@email.com')} />
               </div>
               <div className="modal-field">
-                <span className="modal-field-label">Teléfono</span>
-                <input type="text" className="modal-input modal-input--figma" value={candidateDraft.phone} onChange={e => setCandidateDraft(d => ({ ...d, phone: e.target.value }))} placeholder="+34 600 000 000" />
+                <span className="modal-field-label">{t('Teléfono')}</span>
+                <input type="text" className="modal-input modal-input--figma" value={candidateDraft.phone} onChange={e => setCandidateDraft(d => ({ ...d, phone: e.target.value }))} placeholder={t('+34 600 000 000')} />
               </div>
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Cargo</span>
-              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder="Ej: Desarrollador Frontend" />
+              <span className="modal-field-label">{t('Cargo')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={t('Ej: Desarrollador Frontend')} />
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Notas previas (opcional)</span>
-              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder="Puntos a tratar, perfil del CV, observaciones…" rows={3} />
+              <span className="modal-field-label">{t('Notas previas (opcional)')}</span>
+              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Estado</span>
+              <span className="modal-field-label">{t('Estado')}</span>
               <Select
                 className="modal-input modal-input--figma modal-select"
                 value={candidateStatusDraft}
                 onChange={v => setCandidateStatusDraft(v as Candidate['candidateStatus'])}
                 options={[
-                  { value: 'pendiente', label: 'Pendiente' },
-                  { value: 'apto', label: 'Apto' },
-                  { value: 'finalista', label: 'Finalista' },
-                  { value: 'descartado', label: 'Descartado' },
+                  { value: 'pendiente', label: t('Pendiente') },
+                  { value: 'apto', label: t('Apto') },
+                  { value: 'finalista', label: t('Finalista') },
+                  { value: 'descartado', label: t('Descartado') },
                 ]}
               />
             </div>
             <div className="modal-field">
               <label className="consent-check">
                 <input type="checkbox" checked={candidateConsentDraft} onChange={e => setCandidateConsentDraft(e.target.checked)} />
-                <span>El candidato ha sido informado y <strong>consiente</strong> la grabación, transcripción y tratamiento de la entrevista (incluido su envío a servicios de IA en EE.&nbsp;UU.) conforme a la política de privacidad.</span>
+                <span>{t('El candidato ha sido informado y consiente la grabación, transcripción y tratamiento de la entrevista (incluido su envío a servicios de IA en EE. UU.) conforme a la política de privacidad.')}</span>
               </label>
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> Guardar cambios</> : <><UserIcon /> Añadir perfil</>}</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>{t('Cancelar')}</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> {t('Guardar cambios')}</> : <><UserIcon /> {t('Añadir perfil')}</>}</button>
             </div>
           </div>
         </div>
@@ -4443,8 +4467,8 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">Nueva grabación</h2>
-                <p className="modal-subtitle">Elige qué quieres grabar</p>
+                <h2 className="modal-title">{t('Nueva grabación')}</h2>
+                <p className="modal-subtitle">{t('Elige qué quieres grabar')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => setShowAudioSetupModal(false)}><CloseIcon size={13} /></button>
             </div>
@@ -4456,8 +4480,8 @@ function App() {
                 onClick={() => setPendingRecordVideo(false)}
               >
                 <span className="rec-option-icon"><MicIcon size={22} /></span>
-                <span className="rec-option-title">Solo audio</span>
-                <span className="rec-option-desc">Graba solo el sonido: tu micro + el audio de la llamada.</span>
+                <span className="rec-option-title">{t('Solo audio')}</span>
+                <span className="rec-option-desc">{t('Graba solo el sonido: tu micro + el audio de la llamada.')}</span>
               </button>
               <button
                 type="button"
@@ -4465,39 +4489,39 @@ function App() {
                 onClick={() => setPendingRecordVideo(true)}
               >
                 <span className="rec-option-icon"><VideoIcon size={22} /></span>
-                <span className="rec-option-title">Llamada entera (vídeo + audio)</span>
-                <span className="rec-option-desc">Graba también la pantalla. Al empezar eliges qué ventana.</span>
+                <span className="rec-option-title">{t('Llamada entera (vídeo + audio)')}</span>
+                <span className="rec-option-desc">{t('Graba también la pantalla. Al empezar eliges qué ventana.')}</span>
               </button>
             </div>
             {pendingRecordVideo && (
-              <div className="rec-video-banner"><VideoIcon size={14} /> Al empezar se te pedirá elegir qué pantalla o ventana grabar.</div>
+              <div className="rec-video-banner"><VideoIcon size={14} /> {t('Al empezar se te pedirá elegir qué pantalla o ventana grabar.')}</div>
             )}
             <div className="modal-field" style={{ marginTop: 16 }}>
-              <span className="modal-field-label">Micrófono</span>
+              <span className="modal-field-label">{t('Micrófono')}</span>
               <Select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingMicId}
                 onChange={setPendingMicId}
                 options={micDevices.length === 0
-                  ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                  ? [{ value: '', label: t('Sin dispositivos detectados'), disabled: true }]
                   : micDevices.map(d => ({ value: d.id, label: d.name }))}
               />
             </div>
             <div className="modal-field" style={{ marginTop: 12 }}>
-              <span className="modal-field-label">Altavoces / audio de la llamada</span>
+              <span className="modal-field-label">{t('Altavoces / audio de la llamada')}</span>
               <Select
                 className="modal-input modal-input--figma modal-select"
                 value={pendingOutputId}
                 onChange={setPendingOutputId}
                 options={outputDevices.length === 0
-                  ? [{ value: '', label: 'Sin dispositivos detectados', disabled: true }]
+                  ? [{ value: '', label: t('Sin dispositivos detectados'), disabled: true }]
                   : outputDevices.map(d => ({ value: d.id, label: d.name }))}
               />
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => setShowAudioSetupModal(false)}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={handleConfirmRecordingSetup} disabled={!pendingMicId}><MicIcon /> Iniciar grabación</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => setShowAudioSetupModal(false)}>{t('Cancelar')}</button>
+              <button type="button" className="modal-action-btn" onClick={handleConfirmRecordingSetup} disabled={!pendingMicId}><MicIcon /> {t('Iniciar grabación')}</button>
             </div>
           </div>
         </div>
@@ -4509,20 +4533,20 @@ function App() {
           <div className="modal-box modal-box--figma source-picker-box" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">Elige qué compartir</h2>
-                <p className="modal-subtitle">Selecciona la ventana o pantalla que quieres grabar</p>
+                <h2 className="modal-title">{t('Elige qué compartir')}</h2>
+                <p className="modal-subtitle">{t('Selecciona la ventana o pantalla que quieres grabar')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => pickCaptureSource(null)}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="source-picker-tabs">
-              <button type="button" className={`source-picker-tab${sourcePickerTab === 'screen' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('screen')}>Pantalla</button>
-              <button type="button" className={`source-picker-tab${sourcePickerTab === 'window' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('window')}>Ventana</button>
+              <button type="button" className={`source-picker-tab${sourcePickerTab === 'screen' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('screen')}>{t('Pantalla')}</button>
+              <button type="button" className={`source-picker-tab${sourcePickerTab === 'window' ? ' source-picker-tab--active' : ''}`} onClick={() => setSourcePickerTab('window')}>{t('Ventana')}</button>
             </div>
             {(() => {
               const filtered = captureSources.filter(s => s.type === sourcePickerTab)
               return filtered.length === 0 ? (
-                <p className="tab-note">{sourcePickerTab === 'screen' ? 'No se encontraron pantallas disponibles.' : 'No se encontraron ventanas disponibles.'}</p>
+                <p className="tab-note">{sourcePickerTab === 'screen' ? t('No se encontraron pantallas disponibles.') : t('No se encontraron ventanas disponibles.')}</p>
               ) : (
                 <div className="source-picker-grid">
                   {filtered.map(s => (
@@ -4530,7 +4554,7 @@ function App() {
                       <span className="source-picker-thumb">
                         {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <span className="source-picker-thumb-fallback"><MonitorIcon size={28} /></span>}
                       </span>
-                      <span className="source-picker-name">{s.name || 'Sin nombre'}</span>
+                      <span className="source-picker-name">{s.name || t('Sin nombre')}</span>
                     </button>
                   ))}
                 </div>
@@ -4538,7 +4562,7 @@ function App() {
             })()}
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => pickCaptureSource(null)}>Cancelar</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => pickCaptureSource(null)}>{t('Cancelar')}</button>
             </div>
           </div>
         </div>
@@ -4550,47 +4574,47 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">Nuevo proyecto</h2>
-                <p className="modal-subtitle">Define el proceso de selección que vas a gestionar</p>
+                <h2 className="modal-title">{t('Nuevo proyecto')}</h2>
+                <p className="modal-subtitle">{t('Define el proceso de selección que vas a gestionar')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
-              <span className="modal-field-label">Nombre del proyecto *</span>
-              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Administrativo/a Seguros" autoFocus />
+              <span className="modal-field-label">{t('Nombre del proyecto *')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Administrativo/a de oficina')} autoFocus />
             </div>
             <div className="modal-row-2">
               <div className="modal-field">
-                <span className="modal-field-label">Empresa / Cliente *</span>
-                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder="Ej: Cosmobrok" />
+                <span className="modal-field-label">{t('Empresa / Cliente *')}</span>
+                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder={t('Ej: Empresa Ejemplo S.L.')} />
               </div>
               <div className="modal-field">
-                <span className="modal-field-label">Tipo de proceso</span>
+                <span className="modal-field-label">{t('Tipo de proceso')}</span>
                 <Select
                   className="modal-input modal-input--figma modal-select"
                   value={projectTypeDraft}
                   onChange={setProjectTypeDraft}
-                  placeholder="Seleccionar tipo…"
+                  placeholder={t('Seleccionar tipo…')}
                   options={[
-                    { value: 'directa', label: 'Selección directa' },
-                    { value: 'ett', label: 'ETT' },
+                    { value: 'directa', label: t('Selección directa') },
+                    { value: 'ett', label: t('ETT') },
                     { value: 'headhunting', label: 'Headhunting' },
                   ]}
                 />
               </div>
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Criterios de evaluación del resumen</span>
-              <p className="modal-field-hint">Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato</p>
+              <span className="modal-field-label">{t('Criterios de evaluación del resumen')}</span>
+              <p className="modal-field-hint">{t('Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato')}</p>
               {renderCriteriaGrid(
                 projectDraft.evaluationCriteria,
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
               )}
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Entrevistadores</span>
-              <p className="modal-field-hint">Personas de tu equipo que pueden llevar una llamada de este proyecto</p>
+              <span className="modal-field-label">{t('Entrevistadores')}</span>
+              <p className="modal-field-hint">{t('Personas de tu equipo que pueden llevar una llamada de este proyecto')}</p>
               {renderInterviewerEditor(
                 projectDraft.interviewers,
                 updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
@@ -4598,8 +4622,8 @@ function App() {
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>Crear proyecto</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>{t('Cancelar')}</button>
+              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>{t('Crear proyecto')}</button>
             </div>
           </div>
         </div>
@@ -4611,45 +4635,45 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">Editar proyecto</h2>
-                <p className="modal-subtitle">Modifica los datos y criterios del proyecto</p>
+                <h2 className="modal-title">{t('Editar proyecto')}</h2>
+                <p className="modal-subtitle">{t('Modifica los datos y criterios del proyecto')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
             <div className="modal-field">
-              <span className="modal-field-label">Nombre del proyecto *</span>
-              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder="Ej: Administrativo/a Seguros" autoFocus />
+              <span className="modal-field-label">{t('Nombre del proyecto *')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Administrativo/a de oficina')} autoFocus />
             </div>
             <div className="modal-row-2">
               <div className="modal-field">
-                <span className="modal-field-label">Empresa / Cliente</span>
-                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder="Ej: Cosmobrok" />
+                <span className="modal-field-label">{t('Empresa / Cliente')}</span>
+                <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder={t('Ej: Empresa Ejemplo S.L.')} />
               </div>
               <div className="modal-field">
-                <span className="modal-field-label">Estado</span>
+                <span className="modal-field-label">{t('Estado')}</span>
                 <Select
                   className="modal-input modal-input--figma modal-select"
                   value={projectDraft.status}
                   onChange={v => setProjectDraft(d => ({ ...d, status: v as 'active' | 'closed' }))}
                   options={[
-                    { value: 'active', label: 'Activo' },
-                    { value: 'closed', label: 'Cerrado' },
+                    { value: 'active', label: t('Activo') },
+                    { value: 'closed', label: t('Cerrado') },
                   ]}
                 />
               </div>
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Criterios de evaluación del resumen</span>
-              <p className="modal-field-hint">Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato</p>
+              <span className="modal-field-label">{t('Criterios de evaluación del resumen')}</span>
+              <p className="modal-field-hint">{t('Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato')}</p>
               {renderCriteriaGrid(
                 projectDraft.evaluationCriteria,
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
               )}
             </div>
             <div className="modal-field">
-              <span className="modal-field-label">Entrevistadores</span>
-              <p className="modal-field-hint">Personas de tu equipo que pueden llevar una llamada de este proyecto</p>
+              <span className="modal-field-label">{t('Entrevistadores')}</span>
+              <p className="modal-field-hint">{t('Personas de tu equipo que pueden llevar una llamada de este proyecto')}</p>
               {renderInterviewerEditor(
                 projectDraft.interviewers,
                 updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
@@ -4658,8 +4682,8 @@ function App() {
             {renderShareEditor()}
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
-              <button type="button" className="modal-cancel-btn" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}>Cancelar</button>
-              <button type="button" className="modal-action-btn" onClick={handleSaveEditProject} disabled={!projectDraft.name.trim()}>Guardar cambios</button>
+              <button type="button" className="modal-cancel-btn" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}>{t('Cancelar')}</button>
+              <button type="button" className="modal-action-btn" onClick={handleSaveEditProject} disabled={!projectDraft.name.trim()}>{t('Guardar cambios')}</button>
             </div>
           </div>
         </div>

@@ -39,3 +39,8 @@ jobs:
       # conocida y estan documentados en eslint.config.js. Si falla, es un error
       # de verdad.
       - run: npm run lint
+
+      # La app sale en español o en inglés. Una frase sin traducir no rompe la
+      # compilación: saldría en español en la interfaz inglesa sin que nadie lo
+      # viera. Esto la caza antes.
+      - run: npm run i18n:check

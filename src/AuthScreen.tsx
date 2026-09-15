@@ -2,29 +2,24 @@ import { useState } from 'react'
 import { SparkIcon } from './icons'
 import { Select } from './Select'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
+import { locale, t } from './i18n'
 
 type Mode = 'login' | 'register' | 'forgot'
 
-const COUNTRIES = [
-  'Afganistán', 'Albania', 'Alemania', 'Andorra', 'Angola', 'Arabia Saudita',
-  'Argelia', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaiyán',
-  'Bahréin', 'Bangladesh', 'Bélgica', 'Bielorrusia', 'Bolivia', 'Bosnia y Herzegovina',
-  'Brasil', 'Bulgaria', 'Camerún', 'Canadá', 'Chile', 'China', 'Chipre',
-  'Colombia', 'Congo', 'Corea del Sur', 'Costa Rica', 'Croacia', 'Cuba',
-  'Dinamarca', 'Ecuador', 'Egipto', 'El Salvador', 'Emiratos Árabes Unidos',
-  'Eslovaquia', 'Eslovenia', 'España', 'Estados Unidos', 'Estonia', 'Etiopía',
-  'Filipinas', 'Finlandia', 'Francia', 'Georgia', 'Ghana', 'Grecia', 'Guatemala',
-  'Honduras', 'Hungría', 'India', 'Indonesia', 'Irak', 'Irán', 'Irlanda',
-  'Israel', 'Italia', 'Jamaica', 'Japón', 'Jordania', 'Kazajistán', 'Kenia',
-  'Kuwait', 'Letonia', 'Líbano', 'Libia', 'Lituania', 'Luxemburgo',
-  'Malasia', 'Malta', 'Marruecos', 'México', 'Moldavia', 'Mongolia',
-  'Myanmar', 'Nepal', 'Nicaragua', 'Nigeria', 'Noruega', 'Nueva Zelanda',
-  'Países Bajos', 'Pakistán', 'Panamá', 'Paraguay', 'Perú', 'Polonia',
-  'Portugal', 'Puerto Rico', 'Qatar', 'Reino Unido', 'República Checa',
-  'República Dominicana', 'Rumania', 'Rusia', 'Senegal', 'Serbia',
-  'Singapur', 'Siria', 'Sri Lanka', 'Sudáfrica', 'Suecia', 'Suiza',
-  'Tailandia', 'Tanzania', 'Túnez', 'Turquía', 'Ucrania', 'Uganda',
-  'Uruguay', 'Uzbekistán', 'Venezuela', 'Vietnam', 'Yemen', 'Zimbabue',
+// Códigos ISO y no nombres: el nombre lo pone el navegador en el idioma de la
+// interfaz. Lo que se guarda en la cuenta sigue siendo el nombre en español, como
+// hasta ahora, para no mezclar "Spain" y "España" en la misma tabla.
+const COUNTRY_CODES = [
+  'AF', 'AL', 'DE', 'AD', 'AO', 'SA', 'DZ', 'AR', 'AM', 'AU', 'AT', 'AZ',
+  'BH', 'BD', 'BE', 'BY', 'BO', 'BA', 'BR', 'BG', 'CM', 'CA', 'CL', 'CN', 'CY',
+  'CO', 'CG', 'KR', 'CR', 'HR', 'CU', 'DK', 'EC', 'EG', 'SV', 'AE',
+  'SK', 'SI', 'ES', 'US', 'EE', 'ET', 'PH', 'FI', 'FR', 'GE', 'GH', 'GR', 'GT',
+  'HN', 'HU', 'IN', 'ID', 'IQ', 'IR', 'IE', 'IL', 'IT', 'JM', 'JP', 'JO', 'KZ', 'KE',
+  'KW', 'LV', 'LB', 'LY', 'LT', 'LU', 'MY', 'MT', 'MA', 'MX', 'MD', 'MN',
+  'MM', 'NP', 'NI', 'NG', 'NO', 'NZ', 'NL', 'PK', 'PA', 'PY', 'PE', 'PL',
+  'PT', 'PR', 'QA', 'GB', 'CZ', 'DO', 'RO', 'RU', 'SN', 'RS',
+  'SG', 'SY', 'LK', 'ZA', 'SE', 'CH', 'TH', 'TZ', 'TN', 'TR', 'UA', 'UG',
+  'UY', 'UZ', 'VE', 'VN', 'YE', 'ZW',
 ]
 
 // `onUsarSinCuenta` es la puerta al modo local: la app funciona entera contra el
@@ -42,28 +37,37 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
 
   const reset = () => { setError(''); setInfo('') }
 
+  // Se ve el nombre en el idioma de la interfaz y se guarda en español.
+  const paises = (() => {
+    const verlo = new Intl.DisplayNames([locale()], { type: 'region' })
+    const guardarlo = new Intl.DisplayNames(['es-ES'], { type: 'region' })
+    return COUNTRY_CODES
+      .map(code => ({ value: guardarlo.of(code) ?? code, label: verlo.of(code) ?? code }))
+      .sort((a, b) => a.label.localeCompare(b.label, locale()))
+  })()
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     reset()
     if (mode === 'forgot') {
-      if (!email.trim()) { setError('Introduce tu email.'); return }
+      if (!email.trim()) { setError(t('Introduce tu email.')); return }
       setLoading(true)
       try {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: 'http://localhost:3000' })
         if (error) throw error
-        setInfo('Te hemos enviado un email. Haz clic en el enlace con la app abierta y podrás poner una nueva contraseña.')
+        setInfo(t('Te hemos enviado un email. Haz clic en el enlace con la app abierta y podrás poner una nueva contraseña.'))
       } catch (err: unknown) {
-        setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
+        setError(translateError(err instanceof Error ? err.message : t('Error desconocido')))
       } finally {
         setLoading(false)
       }
       return
     }
-    if (!email.trim() || !password.trim()) { setError('Introduce email y contraseña.'); return }
+    if (!email.trim() || !password.trim()) { setError(t('Introduce email y contraseña.')); return }
     if (mode === 'register') {
-      if (!name.trim())                    { setError('Introduce tu nombre completo.'); return }
-      if (password !== confirmPassword)    { setError('Las contraseñas no coinciden.'); return }
-      if (!country)                        { setError('Selecciona tu país.'); return }
+      if (!name.trim())                    { setError(t('Introduce tu nombre completo.')); return }
+      if (password !== confirmPassword)    { setError(t('Las contraseñas no coinciden.')); return }
+      if (!country)                        { setError(t('Selecciona tu país.')); return }
     }
     setLoading(true)
     try {
@@ -74,13 +78,13 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
           options: { data: { full_name: name.trim(), country } },
         })
         if (error) throw error
-        setInfo('Revisa tu email para confirmar la cuenta.')
+        setInfo(t('Revisa tu email para confirmar la cuenta.'))
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
       }
     } catch (err: unknown) {
-      setError(translateError(err instanceof Error ? err.message : 'Error desconocido'))
+      setError(translateError(err instanceof Error ? err.message : t('Error desconocido')))
     } finally {
       setLoading(false)
     }
@@ -107,18 +111,18 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
           {/* Wordmark */}
           <text x="96" y="40" fontFamily="Inter, system-ui, Arial, sans-serif" fontSize="22" fontWeight="700" fill="#ffffff">Call Transcriber</text>
           {/* Tagline */}
-          <text x="97" y="60" fontFamily="Inter, system-ui, Arial, sans-serif" fontSize="11" fill="rgba(255,255,255,0.5)">Transcribe · Analiza · Decide</text>
+          <text x="97" y="60" fontFamily="Inter, system-ui, Arial, sans-serif" fontSize="11" fill="rgba(255,255,255,0.5)">{t('Transcribe · Analiza · Decide')}</text>
         </svg>
 
         <div className="auth-left-body">
-          <h1 className="auth-headline">Entrevistas más<br />inteligentes.</h1>
+          <h1 className="auth-headline">{t('Entrevistas más')}<br />{t('inteligentes.')}</h1>
           <p className="auth-tagline">
-            Graba, transcribe y resume tus entrevistas con IA. Todo en un lugar.
+            {t('Graba, transcribe y resume tus entrevistas con IA. Todo en un lugar.')}
           </p>
           <ul className="auth-features">
-            <li><SparkIcon /> Grabación de micrófono + sistema</li>
-            <li><SparkIcon /> Transcripción automática con IA</li>
-            <li><SparkIcon /> Resúmenes IA y sincronización en la nube</li>
+            <li><SparkIcon /> {t('Grabación de micrófono + sistema')}</li>
+            <li><SparkIcon /> {t('Transcripción automática con IA')}</li>
+            <li><SparkIcon /> {t('Resúmenes IA y sincronización en la nube')}</li>
           </ul>
         </div>
 
@@ -130,35 +134,33 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
         <div className="auth-card">
           {!isSupabaseConfigured && (
             <div className="auth-setup-banner">
-              <strong>La sincronización no está configurada</strong>
+              <strong>{t('La sincronización no está configurada')}</strong>
               <p>
-                No pasa nada: puedes usar la app entera en este equipo. Para sincronizar entre
-                ordenadores y compartir carpetas hace falta un proyecto de Supabase — está
-                explicado en el README.
+                {t('No pasa nada: puedes usar la app entera en este equipo. Para sincronizar entre ordenadores y compartir carpetas hace falta un proyecto de Supabase — está explicado en el README.')}
               </p>
             </div>
           )}
 
           <h2 className="auth-title">
-            {mode === 'login' ? 'Bienvenido de vuelta' : mode === 'register' ? 'Crear cuenta' : 'Recuperar contraseña'}
+            {mode === 'login' ? t('Bienvenido de vuelta') : mode === 'register' ? t('Crear cuenta') : t('Recuperar contraseña')}
           </h2>
           <p className="auth-sub">
             {mode === 'login'
-              ? 'Inicia sesión para acceder a tus entrevistas desde cualquier dispositivo.'
+              ? t('Inicia sesión para acceder a tus entrevistas desde cualquier dispositivo.')
               : mode === 'register'
-              ? 'Crea una cuenta para sincronizar tus entrevistas entre dispositivos.'
-              : 'Introduce tu email y te enviaremos un enlace para restablecer tu contraseña.'}
+              ? t('Crea una cuenta para sincronizar tus entrevistas entre dispositivos.')
+              : t('Introduce tu email y te enviaremos un enlace para restablecer tu contraseña.')}
           </p>
 
           <form onSubmit={handleSubmit} className="auth-form">
             {mode === 'register' && (
-              <label className="auth-label">Nombre completo
+              <label className="auth-label">{t('Nombre completo')}
                 <input
                   type="text"
                   className="auth-input"
                   value={name}
                   onChange={e => setName(e.target.value)}
-                  placeholder="Tu nombre"
+                  placeholder={t('Tu nombre')}
                   autoComplete="name"
                   disabled={loading}
                 />
@@ -171,20 +173,20 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
                 className="auth-input"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="tu@email.com"
+                placeholder={t('tu@email.com')}
                 autoComplete="email"
                 disabled={loading}
               />
             </label>
 
             {mode !== 'forgot' && (
-              <label className="auth-label">Contraseña
+              <label className="auth-label">{t('Contraseña')}
                 <input
                   type="password"
                   className="auth-input"
                   value={password}
                   onChange={e => setPass(e.target.value)}
-                  placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
+                  placeholder={mode === 'register' ? t('Mínimo 6 caracteres') : '••••••••'}
                   autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
                   disabled={loading}
                 />
@@ -193,26 +195,26 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
 
             {mode === 'register' && (
               <>
-                <label className="auth-label">Confirmar contraseña
+                <label className="auth-label">{t('Confirmar contraseña')}
                   <input
                     type="password"
                     className="auth-input"
                     value={confirmPassword}
                     onChange={e => setConfirm(e.target.value)}
-                    placeholder="Repetir contraseña"
+                    placeholder={t('Repetir contraseña')}
                     autoComplete="new-password"
                     disabled={loading}
                   />
                 </label>
 
-                <label className="auth-label">País
+                <label className="auth-label">{t('País')}
                   <Select
                     className="auth-input auth-select"
                     value={country}
                     onChange={setCountry}
                     disabled={loading}
-                    placeholder="Selecciona tu país"
-                    options={COUNTRIES.map(c => ({ value: c, label: c }))}
+                    placeholder={t('Selecciona tu país')}
+                    options={paises}
                   />
                 </label>
               </>
@@ -228,37 +230,36 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
             >
               {loading
                 ? <span className="spinner" />
-                : mode === 'login' ? 'Iniciar sesión' : mode === 'register' ? 'Crear cuenta' : 'Enviar enlace'}
+                : mode === 'login' ? t('Iniciar sesión') : mode === 'register' ? t('Crear cuenta') : t('Enviar enlace')}
             </button>
           </form>
 
           <p className="auth-switch">
-            {mode === 'forgot' ? '¿Recuerdas tu contraseña?' : mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}
+            {mode === 'forgot' ? t('¿Recuerdas tu contraseña?') : mode === 'login' ? t('¿No tienes cuenta?') : t('¿Ya tienes cuenta?')}
             {' '}
             <button
               type="button"
               className="link-btn"
               onClick={() => switchMode(mode === 'forgot' ? 'login' : mode === 'login' ? 'register' : 'login')}
             >
-              {mode === 'forgot' ? 'Inicia sesión' : mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
+              {mode === 'forgot' ? t('Inicia sesión') : mode === 'login' ? t('Regístrate') : t('Inicia sesión')}
             </button>
           </p>
           {mode === 'login' && isSupabaseConfigured && (
             <p className="auth-switch" style={{ marginTop: 4 }}>
               <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
-                ¿Olvidaste tu contraseña?
+                {t('¿Olvidaste tu contraseña?')}
               </button>
             </p>
           )}
 
           <div className="auth-local">
-            <span className="auth-local-sep">o</span>
+            <span className="auth-local-sep">{t('o')}</span>
             <button type="button" className="auth-local-btn" onClick={onUsarSinCuenta}>
-              Empezar sin cuenta
+              {t('Empezar sin cuenta')}
             </button>
             <p className="auth-local-note">
-              Graba, transcribe y resume igual. Los datos se quedan en este ordenador y no
-              viajan a ninguna parte. Puedes crear la cuenta más adelante.
+              {t('Graba, transcribe y resume igual. Los datos se quedan en este ordenador y no viajan a ninguna parte. Puedes crear la cuenta más adelante.')}
             </p>
           </div>
         </div>
@@ -268,10 +269,10 @@ export function AuthScreen({ onUsarSinCuenta }: { onUsarSinCuenta: () => void })
 }
 
 function translateError(msg: string): string {
-  if (msg.includes('Invalid login credentials')) return 'Email o contraseña incorrectos.'
-  if (msg.includes('Email not confirmed'))       return 'Confirma tu email antes de iniciar sesión.'
-  if (msg.includes('User already registered'))   return 'Este email ya está registrado. Inicia sesión.'
-  if (msg.includes('Password should be'))        return 'La contraseña debe tener al menos 6 caracteres.'
-  if (msg.includes('rate limit'))                return 'Demasiados intentos. Espera un momento.'
+  if (msg.includes('Invalid login credentials')) return t('Email o contraseña incorrectos.')
+  if (msg.includes('Email not confirmed'))       return t('Confirma tu email antes de iniciar sesión.')
+  if (msg.includes('User already registered'))   return t('Este email ya está registrado. Inicia sesión.')
+  if (msg.includes('Password should be'))        return t('La contraseña debe tener al menos 6 caracteres.')
+  if (msg.includes('rate limit'))                return t('Demasiados intentos. Espera un momento.')
   return msg
 }

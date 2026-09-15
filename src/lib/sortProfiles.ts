@@ -4,12 +4,15 @@
 // son mínimos a propósito (solo los campos que se miran), así que no hace falta
 // importar Candidate ni Interview y no hay dependencia cruzada.
 
+import { k } from '../i18n'
+
 export type ProfileSort = 'recent' | 'oldest' | 'name'
 
+// Se traducen al pintarlas, con t().
 export const PROFILE_SORT_LABELS: Record<ProfileSort, string> = {
-  recent: 'Recientes primero',
-  oldest: 'Antiguos primero',
-  name: 'Nombre (A-Z)',
+  recent: k('Recientes primero'),
+  oldest: k('Antiguos primero'),
+  name: k('Nombre (A-Z)'),
 }
 
 export const isProfileSort = (v: unknown): v is ProfileSort =>

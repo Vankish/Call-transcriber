@@ -50,6 +50,25 @@ instalación, nunca en la nube. Esto es deliberado, no lo cambies.
 Los proveedores marcados con `unverified: true` tienen el adaptador escrito pero nadie
 lo ha ejecutado contra la API real. La interfaz los marca como "sin probar".
 
+## Idiomas: la interfaz y la entrevista van por separado
+
+La app sale **en español o en inglés** (el de Windows al principio, luego lo que se elija
+en Configuración → General). El README principal está en inglés y `README.es.md` es la
+copia en español: si cambias uno, cambia el otro.
+
+- **Todo texto que vea el usuario pasa por el traductor.** En `src/` se escribe en español
+  dentro de `t('...')` y la versión inglesa va en `EN` de `src/i18n.ts`. En `electron/` es
+  `tr('...')` contra `EN` de `electron/i18n.cjs`. Una frase sin traducir no rompe nada: sale
+  en español en la interfaz inglesa. `npm run i18n:check` (también en el CI) lo caza.
+- Las tablas que se definen fuera de un render (criterios, estados) marcan sus frases con
+  `k('...')` y se traducen al pintarlas con `t(variable)`.
+- Un `t()` con la frase partida en trozos sumados (`'a' + 'b'`) no lo ve el comprobador:
+  va siempre en un solo literal.
+- **Los resúmenes salen en el idioma de la entrevista, no en el de la interfaz.**
+  `detectarIdioma` en `electron/i18n.cjs` lo deduce del texto. Los prompts siguen escritos
+  en español y se les dice en qué idioma responder. Las etiquetas por defecto ([Entrevistador]
+  / [Interviewer]) también siguen el idioma de la llamada.
+
 ## Comandos
 
 ```bash

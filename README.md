@@ -1,96 +1,102 @@
 # Call Transcriber
 
-Graba, transcribe y resume entrevistas de trabajo con IA. Aplicación de escritorio para
-Windows: captura tu micrófono **y** el audio de la videollamada, separa quién dice qué,
-transcribe y genera un resumen de evaluación.
+**English** · [Español](README.es.md)
 
-**Los datos se quedan en tu ordenador.** No hay servidor nuestro, no hay cuenta obligatoria
-y no hay suscripción. Pones tu propia clave de un servicio de IA (Groq es gratis y no pide
-tarjeta) y listo.
+Record, transcribe and summarise job interviews with AI. A Windows desktop app that
+captures your microphone **and** the video call audio, works out who said what,
+transcribes it and writes an evaluation summary.
 
-> **Solo Windows 10/11.** La captura del audio del sistema usa `loopback`, que en la
-> práctica es de Windows. En macOS y Linux compila, pero no graba.
+**Your data stays on your computer.** There's no server of ours, no required account and
+no subscription. You bring your own key for an AI service (Groq is free and doesn't ask
+for a card) and that's it.
 
-![Resumen de una entrevista generado con IA, ordenado por los criterios del proyecto](docs/capturas/resumen.png)
+> **Windows 10/11 only.** System audio capture uses `loopback`, which in practice is a
+> Windows feature. It builds on macOS and Linux, but it won't record.
+
+![AI-generated interview summary, organised by the project's criteria](docs/capturas/en/summary.png)
 
 <details>
-<summary>Más capturas</summary>
+<summary>More screenshots</summary>
 
-**Inicio:** proyectos activos y actividad reciente.
-![Pantalla de inicio](docs/capturas/inicio.png)
+**Home:** active projects and recent activity.
+![Home screen](docs/capturas/en/home.png)
 
-**Un proyecto:** criterios de evaluación y el estado de cada perfil.
-![Detalle de un proyecto](docs/capturas/proyecto.png)
+**A project:** evaluation criteria and the status of each profile.
+![Project detail](docs/capturas/en/project.png)
 
-**Transcripción:** separada por hablante, con marcas de tiempo y editable.
-![Transcripción de una entrevista](docs/capturas/transcripcion.png)
+**Transcript:** split by speaker, timestamped and editable.
+![Interview transcript](docs/capturas/en/transcript.png)
 
 </details>
 
-*Todos los nombres y datos de las capturas son inventados.*
+*All names and data in the screenshots are made up.*
 
 ---
 
-## Qué hace
+## What it does
 
-- **Graba micrófono + audio del sistema a la vez**, o solo micrófono. Opcionalmente, vídeo
-  de la pantalla o de una ventana concreta.
-- **Separa hablantes**: usa la pista limpia del interlocutor para saber cuál de las voces
-  es la suya, en vez de adivinar por los silencios.
-- **Transcribe** con el servicio que elijas y te deja editar el texto a mano.
-- **Resume** en dos formatos: ejecutivo (por secciones) o descriptivo (prosa), y con dos
-  contextos: entrevista de selección o reunión de negocio.
-- **Organiza** por proyectos, candidatos y entrevistas, con criterios de evaluación y
-  entrevistadores por proyecto.
-- **Consentimiento del candidato** (RGPD): casilla, aviso al grabar, exportación y borrado
-  de datos.
-- **Exporta a PDF**.
+- **Records microphone + system audio at the same time**, or microphone only. Optionally,
+  video of the screen or of a specific window.
+- **Separates speakers**: it uses the other person's clean audio track to tell which voice
+  is theirs, instead of guessing from pauses.
+- **Transcribes** with the service of your choice and lets you edit the text by hand.
+- **Summarises** in two formats — bullet points by section or a narrative write-up — and
+  for two contexts: job interview or business meeting. **The summary is written in the
+  language of the interview**: an interview held in Spanish gets a Spanish report, even if
+  the app is in English.
+- **English and Spanish interface.** It starts in your Windows language, and you can change
+  it in *Settings → General*.
+- **Organises** everything into projects, candidates and interviews, with evaluation
+  criteria and interviewers per project.
+- **Candidate consent** (GDPR): a checkbox, a warning before recording, and data export and
+  deletion.
+- **Exports to PDF**.
 
-## Instalación
+## Installation
 
-1. Descarga el instalador de la [última versión](https://github.com/Vankish/Call-transcriber/releases/latest)
+1. Download the installer from the [latest release](https://github.com/Vankish/Call-transcriber/releases/latest)
    (`Call-Transcriber-Setup-X.Y.Z.exe`).
-2. Ejecútalo. **Windows te va a avisar de que el editor es desconocido**: pulsa
-   `Más información` → `Ejecutar de todas formas`.
+2. Run it. **Windows will warn you that the publisher is unknown**: click
+   `More info` → `Run anyway`.
 
-   No es un fallo ni una alarma real: ese aviso se quita comprando un certificado de firma
-   de código (200-400 €/año) y este proyecto no lo tiene. Por lo mismo, **la app no se
-   actualiza sola**: te avisa cuando hay versión nueva y te abre esta misma página para que
-   descargues el instalador.
+   It isn't a bug or a real threat: that warning only goes away with a code signing
+   certificate (€200–400 a year), which this project doesn't have. For the same reason,
+   **the app doesn't update itself**: it tells you when a new version is out and opens this
+   page so you can download the installer.
 
-3. Ábrela. Entra directa, sin cuenta ni registro.
-4. Te pedirá una **API key de IA**. La de Groq es gratis y no pide tarjeta:
-   [console.groq.com](https://console.groq.com) → *API Keys* → crear una → pegarla.
+3. Open it. You go straight in, with no account or sign-up.
+4. It will ask for an **AI API key**. Groq's is free and doesn't ask for a card:
+   [console.groq.com](https://console.groq.com) → *API Keys* → create one → paste it.
 
-Ya está. La clave se guarda solo en tu equipo y nunca se envía a ningún sitio que no sea
-el proveedor de IA que hayas elegido.
+That's all. The key is stored only on your computer and is never sent anywhere except the
+AI provider you picked.
 
-## Qué servicio de IA usar
+## Which AI service to use
 
-La app no depende de ningún proveedor: sabe hablar los dialectos de API más comunes y
-puedes cambiar de servicio en **Configuración → Motores de IA** sin tocar nada más.
+The app isn't tied to any provider: it speaks the most common API dialects, and you can
+switch services in **Settings → AI engines** without touching anything else.
 
-| Servicio | Para | Nota |
+| Service | For | Notes |
 |---|---|---|
-| **Groq** | Transcribir y resumir | Gratis, sin tarjeta. Lo más fácil para empezar. |
-| **ElevenLabs (Scribe)** | Transcribir | El mejor en español y separando hablantes. De pago pasada la cuota gratuita. |
-| **OpenAI** | Transcribir y resumir | |
-| **Deepgram** | Transcribir | |
-| **Anthropic (Claude)** | Resumir | |
-| **Otro (personalizado)** | Ambos | Escribe tú la URL: tu propio servidor, un modelo local, lo que sea. |
+| **Groq** | Transcription and summaries | Free, no card. The easiest way to start. |
+| **ElevenLabs (Scribe)** | Transcription | The best at Spanish and at separating speakers. Paid beyond the free quota. |
+| **OpenAI** | Transcription and summaries | |
+| **Deepgram** | Transcription | |
+| **Anthropic (Claude)** | Summaries | |
+| **Other (custom)** | Both | Enter the URL yourself: your own server, a local model, anything. |
 
-Los que llevan la etiqueta **«sin probar»** en la app tienen el adaptador escrito pero
-nadie los ha ejecutado contra la API real todavía.
+Services marked **"untested"** in the app have their adapter written, but nobody has run
+them against the real API yet.
 
-## Sincronizar entre ordenadores y compartir carpetas *(opcional)*
+## Sync between computers and share folders *(optional)*
 
-Sin cuenta, todo vive en este equipo. Si quieres abrir tus entrevistas desde otro
-ordenador o dar acceso a un compañero, hace falta una base de datos, y **cada usuario pone
-la suya** — así tus datos son tuyos y nadie los aloja por ti. El plan gratuito de Supabase
-llega para unas 15 entrevistas con audio.
+Without an account, everything lives on this computer. If you want to open your interviews
+from another computer or give a colleague access, you need a database, and **each user
+brings their own** — so your data is yours and nobody hosts it for you. Supabase's free
+plan is enough for about 15 interviews with audio.
 
-Esto **no viene en el instalador**: el `.exe` publicado es solo local a propósito. Para
-tener la nube hay que compilar tu propia copia:
+This **isn't included in the installer**: the published `.exe` is local-only on purpose.
+To get the cloud features you have to build your own copy:
 
 ```bash
 git clone https://github.com/Vankish/Call-transcriber.git
@@ -98,61 +104,68 @@ cd Call-transcriber
 npm install
 ```
 
-1. Crea un proyecto gratuito en [supabase.com](https://supabase.com).
-2. En su **SQL Editor** → *New query*, pega entero
-   [`supabase/setup.sql`](supabase/setup.sql) y pulsa **Run**. Crea las tablas, los
-   permisos y el almacén de audios de una vez.
-3. Copia `.env.example` a `.env` y rellénalo con los datos de
-   **Project Settings → API** de tu proyecto:
+1. Create a free project at [supabase.com](https://supabase.com).
+2. In its **SQL Editor** → *New query*, paste the whole of
+   [`supabase/setup.sql`](supabase/setup.sql) and click **Run**. It creates the tables,
+   the permissions and the audio storage in one go.
+3. Copy `.env.example` to `.env` and fill it in with the values from your project's
+   **Project Settings → API**:
 
    ```
-   VITE_SUPABASE_URL=https://TU_PROYECTO.supabase.co
-   VITE_SUPABASE_ANON_KEY=TU_CLAVE_PUBLICABLE
+   VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+   VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
    ```
 
-4. `npm run package:win:personal` genera tu instalador en `release/`. Ojo: `package:win` a
-   secas **no sirve** para esto, porque compila con credenciales de relleno a propósito (es
-   el que se publica y no debe llevar las de nadie dentro).
+4. `npm run package:win:personal` builds your installer into `release/`. Careful: plain
+   `package:win` **won't work** for this, because it deliberately builds with placeholder
+   credentials (it's the one that gets published, and it mustn't carry anyone's keys).
 
-Con eso aparece el registro en la pantalla de entrada. Al crear la cuenta, lo que ya
-tuvieras en local se sube solo.
+After that, the sign-up form appears on the start screen. When you create your account,
+anything you already had locally is uploaded automatically.
 
-**Límites del plan gratuito:** 1 GB de archivos y 50 MB por archivo. Un mp3 de una hora
-(~32 MB) entra; uno de dos horas, no. El **vídeo nunca se sube**: pesa unos 300 MB por
-entrevista y llenaría el gigabyte con dos.
+**Free plan limits:** 1 GB of files and 50 MB per file. A one-hour mp3 (~32 MB) fits; a
+two-hour one doesn't. **Video is never uploaded**: it's about 300 MB per interview and two
+of them would fill the gigabyte.
 
-## Privacidad
+## Privacy
 
-Estás grabando a personas en un proceso de selección, así que conviene saber exactamente
-por dónde pasan sus datos:
+You're recording people during a hiring process, so it's worth knowing exactly where their
+data goes:
 
-- **La grabación de audio** sale de tu equipo hacia el proveedor de transcripción que
-  hayas elegido. Todos los incluidos por defecto tienen los servidores en **Estados
-  Unidos**.
-- **El texto de la entrevista** sale hacia el proveedor de resumen.
-- **El vídeo** nunca sale de tu ordenador.
-- **Tus claves de IA** se guardan solo en el `config.json` local de la instalación.
-- Si activas la nube, los datos y los audios que subas van a **tu** proyecto de Supabase.
+- **The audio recording** leaves your computer for the transcription provider you chose.
+  All the providers included by default have their servers in the **United States**.
+- **The interview text** goes to the summary provider.
+- **Video** never leaves your computer.
+- **Your AI keys** are stored only in the installation's local `config.json`.
+- If you enable the cloud, the data and audio you upload go to **your own** Supabase
+  project.
 
-En [`legal/`](legal/) hay borradores de política de privacidad, consentimiento del
-candidato, contrato de encargo (DPA) y política de retención. **Son borradores y necesitan
-la revisión de un abogado** antes de usarse de verdad.
+[`legal/`](legal/) contains drafts of a privacy policy, a candidate consent form, a data
+processing agreement (DPA) and a retention policy. **They are in Spanish, written with
+Spanish and EU law in mind, and they're drafts: have a lawyer review them** before using
+them for real.
 
-## Desarrollo
+## Development
 
 ```bash
 npm install
-npm run desktop:dev     # app de escritorio con recarga en caliente
+npm run desktop:dev     # desktop app with hot reload
 npm run build           # tsc + vite → dist/
-npm run package:win     # build + instalador NSIS en release/
+npm run package:win     # build + NSIS installer into release/
 npm run lint
+npm run i18n:check      # make sure no string is missing its English translation
 ```
 
-⚠️ `electron-builder` **no compila nada**: empaqueta lo que haya en `dist/`. Si lo lanzas
-sin `npm run build` delante, reconstruyes el `.exe` con el código viejo.
+⚠️ `electron-builder` **doesn't compile anything**: it packages whatever is in `dist/`. If
+you run it without `npm run build` first, you'll rebuild the `.exe` with the old code.
 
-Más contexto del proyecto en [`CLAUDE.md`](CLAUDE.md).
+**Interface text.** Strings are written in Spanish inside `t('...')`, and the English
+translation goes in `src/i18n.ts` (or in `electron/i18n.cjs`, with `tr('...')`, when the
+text comes from the main process). `npm run i18n:check` flags any that are missing. The code
+comments are in Spanish too.
 
-## Licencia
+More project context in [`CLAUDE.md`](CLAUDE.md) (in Spanish).
+
+## License
 
 [MIT](LICENSE).

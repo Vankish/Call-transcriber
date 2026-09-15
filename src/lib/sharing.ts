@@ -5,6 +5,7 @@
 
 import { supabase, isSupabaseConfigured } from './supabase'
 import type { DbProjectShare } from './supabase'
+import { t } from '../i18n'
 
 export type SharedUser = { id: string; name: string; email: string }
 
@@ -23,7 +24,8 @@ type FilaUsuario = { id: string; name: string | null; email: string | null }
 
 const RE_CORREO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-const SIN_CONEXION = 'No hay conexión con la nube: entra con tu cuenta para poder compartir'
+// Función y no constante: el idioma puede cambiar mientras la app está abierta.
+const SIN_CONEXION = () => t('No hay conexión con la nube: entra con tu cuenta para poder compartir')
 
 // Si el perfil todavía no tiene nombre, la parte anterior a la @ es lo más
 // parecido a un nombre que se le puede enseñar al usuario.
@@ -40,9 +42,9 @@ const shareFromDb = (r: DbProjectShare, name: string, ownerName = ''): ProjectSh
 
 export async function buscarUsuarioPorCorreo(email: string): Promise<BuscarResultado> {
   const correo = email.trim().toLowerCase()
-  if (!correo) return { ok: false, reason: 'vacio', message: 'Escribe un correo electrónico' }
-  if (!RE_CORREO.test(correo)) return { ok: false, reason: 'formato', message: 'Eso no parece un correo electrónico' }
-  if (!isSupabaseConfigured) return { ok: false, reason: 'error', message: SIN_CONEXION }
+  if (!correo) return { ok: false, reason: 'vacio', message: t('Escribe un correo electrónico') }
+  if (!RE_CORREO.test(correo)) return { ok: false, reason: 'formato', message: t('Eso no parece un correo electrónico') }
+  if (!isSupabaseConfigured) return { ok: false, reason: 'error', message: SIN_CONEXION() }
 
   try {
     // Se busca por RPC y no con un select a profiles porque las políticas de RLS
@@ -52,16 +54,16 @@ export async function buscarUsuarioPorCorreo(email: string): Promise<BuscarResul
 
     const filas = (data ?? []) as FilaUsuario[]
     const fila = filas[0]
-    if (!fila) return { ok: false, reason: 'no-encontrado', message: 'No hay ninguna cuenta de Call Transcriber con ese correo' }
+    if (!fila) return { ok: false, reason: 'no-encontrado', message: t('No hay ninguna cuenta de Call Transcriber con ese correo') }
 
     // Segunda red por si el RPC no filtró al propio usuario (versión antigua del SQL).
     const yo = (await supabase.auth.getUser()).data.user?.id
-    if (yo && yo === fila.id) return { ok: false, reason: 'eres-tu', message: 'Ese eres tú' }
+    if (yo && yo === fila.id) return { ok: false, reason: 'eres-tu', message: t('Ese eres tú') }
 
     const correoFila = (fila.email ?? '').trim() || correo
     return { ok: true, user: { id: fila.id, name: nombreDe(fila.name, correoFila), email: correoFila } }
   } catch (e) {
-    return { ok: false, reason: 'error', message: e instanceof Error ? e.message : 'No se pudo buscar el correo' }
+    return { ok: false, reason: 'error', message: e instanceof Error ? e.message : t('No se pudo buscar el correo') }
   }
 }
 
@@ -115,7 +117,7 @@ export async function listarComparticiones(projectIds?: string[]): Promise<Proje
 export async function compartirProyecto(
   args: { projectId: string; ownerId: string; user: SharedUser },
 ): Promise<{ ok: true; share: ProjectShare } | { ok: false; message: string }> {
-  if (!isSupabaseConfigured) return { ok: false, message: SIN_CONEXION }
+  if (!isSupabaseConfigured) return { ok: false, message: SIN_CONEXION() }
 
   try {
     const { data, error } = await supabase
@@ -133,23 +135,23 @@ export async function compartirProyecto(
       // El índice único (project_id, shared_with_id) es la defensa real contra
       // compartir dos veces; aquí solo se traduce a algo legible.
       const duplicado = error.code === '23505' || /duplicate/i.test(error.message)
-      return { ok: false, message: duplicado ? 'Esa persona ya tiene acceso a este proyecto' : error.message }
+      return { ok: false, message: duplicado ? t('Esa persona ya tiene acceso a este proyecto') : error.message }
     }
 
     return { ok: true, share: shareFromDb(data as DbProjectShare, args.user.name) }
   } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : 'No se pudo compartir el proyecto' }
+    return { ok: false, message: e instanceof Error ? e.message : t('No se pudo compartir el proyecto') }
   }
 }
 
 export async function dejarDeCompartir(shareId: string): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (!isSupabaseConfigured) return { ok: false, message: SIN_CONEXION }
+  if (!isSupabaseConfigured) return { ok: false, message: SIN_CONEXION() }
 
   try {
     const { error } = await supabase.from('project_shares').delete().eq('id', shareId)
     if (error) return { ok: false, message: error.message }
     return { ok: true }
   } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : 'No se pudo retirar el acceso' }
+    return { ok: false, message: e instanceof Error ? e.message : t('No se pudo retirar el acceso') }
   }
 }

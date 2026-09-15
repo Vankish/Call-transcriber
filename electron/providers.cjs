@@ -15,6 +15,8 @@
 // Y el usuario siempre puede elegir "custom" y escribir su propia URL, así que
 // no depende de que su servicio esté en la lista.
 
+const { tr } = require('./i18n.cjs')
+
 const DEFAULT_MAX_BYTES = 24 * 1024 * 1024
 
 // Tokens por minuto que admite el plan gratuito. Importa porque los proveedores
@@ -32,6 +34,9 @@ const DEFAULT_TPM = 120000
 // Al confirmar que un proveedor funciona de verdad (con audio o texto real, no
 // solo "Probar conexión"), quitar la marca de aquí. A fecha 2026-07-29 los
 // únicos usados en serio son ElevenLabs para transcribir y Groq para resumir.
+
+// Las `note` y las `label` que no son una marca van en español y se traducen en
+// la interfaz, al pintar Configuración (ver src/i18n.ts).
 
 // ── Catálogo de transcripción (audio → texto) ────────────────────────────────
 const STT_PRESETS = [
@@ -257,7 +262,7 @@ function resolveStt(config) {
   const noSegments = (preset.noSegmentModels || []).includes(model)
   return {
     id: raw.provider || 'groq',
-    label: raw.provider === 'custom' ? (raw.label || 'tu servicio') : preset.label,
+    label: raw.provider === 'custom' ? (raw.label || tr('tu servicio')) : preset.label,
     dialect: raw.dialect || preset.dialect,
     baseUrl: String(raw.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
     apiKey: raw.apiKey || '',
@@ -273,7 +278,7 @@ function resolveLlm(config) {
   const preset = findPreset(LLM_PRESETS, raw.provider)
   return {
     id: raw.provider || 'groq',
-    label: raw.provider === 'custom' ? (raw.label || 'tu servicio') : preset.label,
+    label: raw.provider === 'custom' ? (raw.label || tr('tu servicio')) : preset.label,
     dialect: raw.dialect || preset.dialect,
     baseUrl: String(raw.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
     apiKey: raw.apiKey || '',
@@ -288,7 +293,7 @@ function resolveLlm(config) {
 async function readError(response, label) {
   let detail = ''
   try { detail = (await response.text()).slice(0, 500) } catch { /* respuesta ilegible */ }
-  return new Error(`Error de ${label} (${response.status}): ${detail || 'sin detalle'}`)
+  return new Error(tr('Error de {servicio} ({codigo}): {detalle}', { servicio: label, codigo: response.status, detalle: detail || tr('sin detalle') }))
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -333,7 +338,7 @@ const mimeForExt = (ext) => ({
 //   { text, segments: [{ start, end, text, speaker? }] }
 
 async function transcribe(provider, { buffer, fileName, language }) {
-  if (!provider.baseUrl) throw new Error('No hay URL configurada para el servicio de transcripción.')
+  if (!provider.baseUrl) throw new Error(tr('No hay URL configurada para el servicio de transcripción.'))
   if (provider.dialect === 'deepgram') return transcribeDeepgram(provider, { buffer, fileName, language })
   if (provider.dialect === 'elevenlabs') return transcribeElevenLabs(provider, { buffer, fileName, language })
   return transcribeOpenAiCompatible(provider, { buffer, fileName, language })
@@ -539,16 +544,18 @@ const allowedEfforts = (detail) =>
  *  Se marca para que quien llama pueda reintentar con menos texto en vez de
  *  tragarse el hueco. */
 function emptyByLengthError(provider, maxTokens) {
-  const err = new Error(
-    `${provider.label} agotó los ${maxTokens} tokens de respuesta antes de escribir nada ` +
-    '(el modelo los gastó razonando). Hace falta menos texto por petición.'
-  )
+  // Una sola cadena y no trozos sumados: el comprobador de traducciones solo lee
+  // el primer literal de cada tr().
+  const err = new Error(tr(
+    '{servicio} agotó los {tokens} tokens de respuesta antes de escribir nada (el modelo los gastó razonando). Hace falta menos texto por petición.',
+    { servicio: provider.label, tokens: maxTokens },
+  ))
   err.emptyByLength = true
   return err
 }
 
 async function chat(provider, { system, user, temperature = 0.1, maxTokens = 8000 }) {
-  if (!provider.baseUrl) throw new Error('No hay URL configurada para el servicio de resumen.')
+  if (!provider.baseUrl) throw new Error(tr('No hay URL configurada para el servicio de resumen.'))
   if (provider.dialect === 'anthropic') return chatAnthropic(provider, { system, user, temperature, maxTokens })
   return chatOpenAiCompatible(provider, { system, user, temperature, maxTokens })
 }
@@ -633,7 +640,7 @@ async function chatAnthropic(provider, { system, user, temperature, maxTokens })
 async function testLlm(provider) {
   try {
     const out = await chat(provider, { system: 'Responde solo con la palabra OK.', user: 'ping', maxTokens: 256 })
-    return { ok: true, detail: out.trim().slice(0, 40) || 'respuesta vacía' }
+    return { ok: true, detail: out.trim().slice(0, 40) || tr('respuesta vacía') }
   } catch (err) {
     return { ok: false, detail: String(err?.message || err) }
   }
@@ -644,7 +651,7 @@ async function testLlm(provider) {
 async function testStt(provider, silenceBuffer) {
   try {
     await transcribe(provider, { buffer: silenceBuffer, fileName: 'test.mp3', language: 'es' })
-    return { ok: true, detail: 'Conexión correcta' }
+    return { ok: true, detail: tr('Conexión correcta') }
   } catch (err) {
     return { ok: false, detail: String(err?.message || err) }
   }

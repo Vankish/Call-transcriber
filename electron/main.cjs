@@ -14,6 +14,8 @@ const {
 } = require('electron')
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
 const providers = require('./providers.cjs')
+const i18n = require('./i18n.cjs')
+const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
 
@@ -80,18 +82,18 @@ function startAuthCallbackServer() {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Autenticando...</title>
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${tr('Autenticando...')}</title>
 <style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f0f4ff}
 .box{background:#fff;border-radius:12px;padding:2rem 3rem;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
 h2{color:#2563eb;margin:0 0 .5rem}p{color:#555;margin:0}</style></head>
-<body><div class="box"><h2>Iniciando sesión...</h2><p>Puedes cerrar esta ventana.</p></div>
+<body><div class="box"><h2>${tr('Iniciando sesión...')}</h2><p>${tr('Puedes cerrar esta ventana.')}</p></div>
 <script>
 const hash = window.location.hash.substring(1)
 const params = new URLSearchParams(hash)
 const data = {}
 for (const [k,v] of params) data[k]=v
 fetch('/auth-callback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-  .then(()=>{document.querySelector('h2').textContent='✓ Sesión iniciada'})
+  .then(()=>{document.querySelector('h2').textContent=${JSON.stringify('✓ ' + tr('Sesión iniciada'))}})
   .catch(()=>{})
 </script></body></html>`)
       return
@@ -183,6 +185,8 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(() => {
+  // Antes de nada que pueda enseñar texto: diálogos, errores, la página de login.
+  void readConfig()
   startAuthCallbackServer()
 
   session.defaultSession.setDisplayMediaRequestHandler(
@@ -238,13 +242,19 @@ if (!gotTheLock) {
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'call-transcriber-config.json')
 
+// De paso deja puesto el idioma de los mensajes. Todo lo que puede fallar delante
+// del usuario empieza leyendo la configuración, así que es el sitio donde nunca se
+// queda un error en el idioma de antes.
 async function readConfig() {
+  let config
   try {
     const raw = await fs.readFile(CONFIG_FILE(), 'utf-8')
-    return JSON.parse(raw)
+    config = JSON.parse(raw)
   } catch {
-    return { groqApiKey: null, transcriptionModel: 'whisper-large-v3', transcriptionLanguage: 'es', summaryModel: 'openai/gpt-oss-120b' }
+    config = { groqApiKey: null, transcriptionModel: 'whisper-large-v3', transcriptionLanguage: 'es', summaryModel: 'openai/gpt-oss-120b' }
   }
+  i18n.usarIdiomaDe(config)
+  return config
 }
 
 // Los proyectos, candidatos y entrevistas se guardaban en el localStorage del
@@ -458,6 +468,7 @@ ipcMain.handle('config:get', async () => {
 
 ipcMain.handle('config:save', async (_event, payload) => {
   await fs.writeFile(CONFIG_FILE(), JSON.stringify(payload), 'utf-8')
+  i18n.usarIdiomaDe(payload)
   return { ok: true }
 })
 
@@ -489,10 +500,10 @@ function convertToMp3(inputPath, outputPath) {
     const proc = spawn(ffmpegPath, args)
     let stderr = ''
     proc.stderr.on('data', (d) => { stderr += d.toString() })
-    proc.on('error', (err) => reject(new Error(`ffmpeg no pudo iniciarse: ${err.message}`)))
+    proc.on('error', (err) => reject(new Error(tr('ffmpeg no pudo iniciarse: {msg}', { msg: err.message }))))
     proc.on('close', (code) => {
       if (code === 0) resolve()
-      else reject(new Error(`ffmpeg conversión falló: ${stderr.slice(-300)}`))
+      else reject(new Error(tr('La conversión con ffmpeg falló: {msg}', { msg: stderr.slice(-300) })))
     })
   })
 }
@@ -513,7 +524,8 @@ function filterHallucinatedSegments(rawSegments) {
   })
 }
 
-function formatDiarizedTranscript(segments) {
+function formatDiarizedTranscript(segments, idioma) {
+  const { hablante } = i18n.etiquetasPorDefecto(idioma)
   const speakerMap = {}
   let speakerCount = 0
   let result = ''
@@ -525,7 +537,7 @@ function formatDiarizedTranscript(segments) {
 
     if (!(rawSpeaker in speakerMap)) {
       speakerCount++
-      speakerMap[rawSpeaker] = `Hablante ${speakerCount}`
+      speakerMap[rawSpeaker] = `${hablante} ${speakerCount}`
     }
 
     const speaker = speakerMap[rawSpeaker]
@@ -544,6 +556,14 @@ function formatDiarizedTranscript(segments) {
   return result
 }
 
+/** Idioma en que se habla en una grabación: el que eligió el usuario al
+ *  transcribir, y si lo dejó en automático, el que se deduce del texto. Si el
+ *  texto no basta para decidir, el de la interfaz. */
+function idiomaDeLaLlamada(language, texto) {
+  if (language && language !== 'auto') return language
+  return i18n.detectarIdioma(texto) || i18n.getIdioma()
+}
+
 async function transcribeChunk(filePath, provider, language) {
   const audioBuffer = await fs.readFile(filePath)
   const { text, segments: rawSegments } = await providers.transcribe(provider, {
@@ -555,7 +575,7 @@ async function transcribeChunk(filePath, provider, language) {
   const segments = filterHallucinatedSegments(rawSegments)
 
   if (segments.some((s) => s.speaker !== undefined)) {
-    return formatDiarizedTranscript(segments)
+    return formatDiarizedTranscript(segments, idiomaDeLaLlamada(language, segments.map((s) => s.text).join(' ')))
   }
 
   // Si el proveedor no devolvió segmentos usamos el texto plano tal cual, porque
@@ -577,10 +597,10 @@ async function splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec
       const proc = spawn(ffmpegPath, args)
       let stderr = ''
       proc.stderr.on('data', (d) => { stderr += d.toString() })
-      proc.on('error', (err) => reject(new Error(`ffmpeg no pudo iniciarse (chunk ${i + 1}): ${err.message}`)))
+      proc.on('error', (err) => reject(new Error(tr('ffmpeg no pudo iniciarse (fragmento {n}): {msg}', { n: i + 1, msg: err.message }))))
       proc.on('close', (code) => {
         if (code === 0) resolve()
-        else reject(new Error(`ffmpeg chunk ${i + 1} falló: ${stderr.slice(-300)}`))
+        else reject(new Error(tr('ffmpeg falló al cortar el fragmento {n}: {msg}', { n: i + 1, msg: stderr.slice(-300) })))
       })
     })
     chunkPaths.push(chunkPath)
@@ -604,7 +624,7 @@ async function transcribeAudio(filePath, provider, language, chunkDurationSec = 
     }
 
     const durationSec = await getAudioDurationSec(mp3Path)
-    if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
+    if (!durationSec) throw new Error(tr('No se pudo leer la duración del audio.'))
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
     const texts = await Promise.all(chunkPaths.map((p) => transcribeChunk(p, provider, language)))
@@ -614,12 +634,13 @@ async function transcribeAudio(filePath, provider, language, chunkDurationSec = 
   }
 }
 
-async function identifySpeakers(transcript, llmProvider, candidateName, interviewerName) {
+async function identifySpeakers(transcript, llmProvider, candidateName, interviewerName, idioma) {
   if (!transcript || !llmProvider.apiKey) return transcript
   // Las etiquetas de salida son configurables: si hay nombre real de candidato/
-  // entrevistador se usan tal cual, si no se cae en las palabras fijas de siempre.
-  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
-  const cdTag = (candidateName || '').trim() || 'Candidato'
+  // entrevistador se usan tal cual, si no las palabras fijas en el idioma de la llamada.
+  const porDefecto = i18n.etiquetasPorDefecto(idioma)
+  const ivTag = (interviewerName || '').trim() || porDefecto.entrevistador
+  const cdTag = (candidateName || '').trim() || porDefecto.candidato
   const candidateHint = candidateName
     ? `El nombre del candidato es "${candidateName}". Si aparece ese nombre en el texto (o alguien se presenta con él), esa persona es el [${cdTag}].`
     : ''
@@ -689,7 +710,7 @@ async function transcribeAudioSegments(filePath, provider, language, chunkDurati
     }
 
     const durationSec = await getAudioDurationSec(mp3Path)
-    if (!durationSec) throw new Error('No se pudo leer la duración del audio.')
+    if (!durationSec) throw new Error(tr('No se pudo leer la duración del audio.'))
 
     const chunkPaths = await splitMp3IntoChunks(mp3Path, durationSec, tmpDir, chunkDurationSec)
     const results = await Promise.all(chunkPaths.map((p) => transcribeChunkSegments(p, provider, language)))
@@ -891,17 +912,23 @@ function mergeSeparatedTranscript(mixedSegments, systemSegments, interviewerLabe
 
 ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, language, candidateName, interviewerName }) => {
   const config = await readConfig()
-  // Etiquetas de salida: nombre real si se conoce, si no las palabras fijas de
-  // siempre (así una llamada sin entrevistador/candidato asignado no cambia nada).
-  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
-  const cdTag = (candidateName || '').trim() || 'Candidato'
+  // Etiquetas de salida: nombre real si se conoce; si no, las palabras fijas en el
+  // idioma en que se habla. Ese idioma solo se sabe tras transcribir, así que las
+  // etiquetas se calculan ahí y no aquí.
+  const etiquetas = (texto) => {
+    const porDefecto = i18n.etiquetasPorDefecto(idiomaDeLaLlamada(language, texto))
+    return {
+      ivTag: (interviewerName || '').trim() || porDefecto.entrevistador,
+      cdTag: (candidateName || '').trim() || porDefecto.candidato,
+    }
+  }
   const stt = providers.resolveStt(config)
   const llm = providers.resolveLlm(config)
   if (!stt.apiKey && stt.id !== 'custom') {
-    throw new Error(`Falta la API key de ${stt.label}. Configúrala en Ajustes → Motores de IA.`)
+    throw new Error(tr('Falta la API key de {servicio}. Configúrala en Configuración → Motores de IA.', { servicio: stt.label }))
   }
   if (!stt.model) {
-    throw new Error(`Falta indicar el modelo de ${stt.label}. Configúralo en Ajustes → Motores de IA.`)
+    throw new Error(tr('Falta indicar el modelo de {servicio}. Configúralo en Configuración → Motores de IA.', { servicio: stt.label }))
   }
   const chunkDuration = (config.chunkDuration && config.chunkDuration >= 5) ? config.chunkDuration : DEFAULT_CHUNK_DURATION_SEC
 
@@ -946,6 +973,7 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
         modo = 'segmentos'
       }
       log.info(`[transcripción] separación por ${modo}: ${mixed.segments.length} → ${mixedSegments.length} tramos del entrevistador`)
+      const { ivTag, cdTag } = etiquetas(`${mixed.text} ${system.text}`)
       const merged = mergeSeparatedTranscript(mixedSegments, system.segments, ivTag, cdTag, !porHablante)
       const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
       return { text }
@@ -962,7 +990,7 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
   let text = await transcribeAudio(filePath, stt, language || 'auto', chunkDuration)
 
   if (text.trim().length > 0 && !stt.canDiarize) {
-    text = await identifySpeakers(text, llm, candidateName || '', interviewerName || '').catch(() => text)
+    text = await identifySpeakers(text, llm, candidateName || '', interviewerName || '', idiomaDeLaLlamada(language, text)).catch(() => text)
   }
 
   return { text }
@@ -1083,12 +1111,12 @@ async function notesForChunk(chunk, llm, { system, label, pace, depth = 0 }) {
   }
   if (notes) return notes
 
-  const motivo = fallo ? fallo.message : 'el modelo devolvió una respuesta vacía'
+  const motivo = fallo ? fallo.message : tr('el modelo devolvió una respuesta vacía')
   const mitades = depth < MAX_SPLIT_RETRIES
     ? splitTranscript(chunk, Math.ceil(estimateTokens(chunk) / 2))
     : []
   if (mitades.length < 2) {
-    throw new Error(`No se pudieron extraer notas de un fragmento de la transcripción: ${motivo}`)
+    throw new Error(tr('No se pudieron extraer notas de un fragmento de la transcripción: {motivo}', { motivo }))
   }
 
   log.warn(`[resumen] "${label}" no dio notas (${motivo}); se reintenta partido en ${mitades.length}`)
@@ -1105,8 +1133,11 @@ async function notesForChunk(chunk, llm, { system, label, pace, depth = 0 }) {
  *  notas de verdad y quien calcula de antemano cuántas peticiones va a costar el
  *  resumen. Su tamaño entra en la cuenta del fragmento, así que si los dos no
  *  usan el mismo texto, la barra de progreso promete un total que no se cumple. */
-function notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }) {
+function notesSystemPrompt(pase, { isMeeting, ivTag, cdTag, idioma }) {
   const encuentro = isMeeting ? 'reunión de trabajo' : 'entrevista de trabajo'
+  // Las notas se toman en el idioma de la conversación: son citas casi literales,
+  // y traducirlas aquí perdería matices que el informe final necesita.
+  const responde = `Responde en ${i18n.nombreEnPrompt(idioma)} y solo con las viñetas.`
   return pase > 1
     ? `Recibes un BLOQUE de notas ya extraídas de una ${encuentro}, en viñetas y en orden cronológico.\n` +
       'Devuélvelas agrupadas y compactadas, en la mitad de viñetas o menos.\n' +
@@ -1116,7 +1147,7 @@ function notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }) {
       '- Mantén la etiqueta de quien lo dijo al principio de cada viñeta y el orden cronológico.\n' +
       '- No interpretes, no valores y no saques conclusiones.\n' +
       '- No inventes ni completes nada que no esté en las notas.\n' +
-      'Responde en español y solo con las viñetas.'
+      responde
     : `Recibes un FRAGMENTO de la transcripción de una ${encuentro}, ` +
       `con los turnos etiquetados como [${ivTag}]: y [${cdTag}]:.\n` +
       'Devuelve una lista de viñetas con TODO lo concreto que se diga en el fragmento. Cada viñeta empieza por la ' +
@@ -1128,7 +1159,7 @@ function notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }) {
       '- No inventes ni completes nada que no aparezca en el fragmento.\n' +
       '- Omite la charla intrascendente (saludos, cortesías, problemas de conexión).\n' +
       '- Si el fragmento empieza o termina a media frase, no la completes.\n' +
-      'Responde en español y solo con las viñetas.'
+      responde
 }
 
 /** Tamaño de fragmento para un pase. Dos topes, y manda el menor: lo que cabe en
@@ -1148,11 +1179,11 @@ function chunkTokensFor(pase, budget, systemTokens) {
  *  y cuesta más de una petición, y el modelo puede comprimir mejor o peor de lo
  *  previsto. Da el orden de magnitud, que es lo que hace falta para una espera
  *  de minutos; el total se corrige sobre la marcha si se queda corto. */
-function planSummaryRequests(text, { budget, fixedCost, isMeeting, ivTag, cdTag }) {
+function planSummaryRequests(text, { budget, fixedCost, isMeeting, ivTag, cdTag, idioma }) {
   let material = estimateTokens(text)
   let peticiones = 0
   for (let pase = 1; pase <= 3; pase++) {
-    const systemTokens = estimateTokens(notesSystemPrompt(pase, { isMeeting, ivTag, cdTag }))
+    const systemTokens = estimateTokens(notesSystemPrompt(pase, { isMeeting, ivTag, cdTag, idioma }))
     peticiones += Math.max(1, Math.ceil(material / chunkTokensFor(pase, budget, systemTokens)))
     const antes = material
     material = Math.round(material * (pase > 1 ? 0.5 : NOTES_COMPRESSION))
@@ -1169,8 +1200,8 @@ function planSummaryRequests(text, { budget, fixedCost, isMeeting, ivTag, cdTag 
  *  otra vez "copia todo lo concreto" sobre algo que ya es todo concreto no
  *  comprime nada — el material se estanca y se gastan pases (y minutos de cuota)
  *  para nada. En esa segunda vuelta se pide fusionar en vez de copiar. */
-async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag, pase = 1, onChunk = () => {}, onChunkDone = () => {} }) {
-  const system = notesSystemPrompt(pase, { isMeeting, ivTag, cdTag })
+async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, cdTag, idioma, pase = 1, onChunk = () => {}, onChunkDone = () => {} }) {
+  const system = notesSystemPrompt(pase, { isMeeting, ivTag, cdTag, idioma })
   const chunks = splitTranscript(text, chunkTokensFor(pase, budget, estimateTokens(system)))
   const que = pase > 1 ? 'Bloque' : 'Fragmento'
   log.info(`[resumen] pase ${pase}: ${chunks.length} ${que.toLowerCase()}(s) de ${text.length} caracteres`)
@@ -1186,17 +1217,50 @@ async function condenseTranscript(text, llm, { isMeeting, budget, pace, ivTag, c
   return notes.filter(Boolean).join('\n')
 }
 
+// Los apartados del informe se le dan al modelo ya en el idioma en que tiene que
+// escribir: si le llegan en español, tiende a copiar el título tal cual aunque el
+// resto del informe vaya en inglés. Para otros idiomas se le dan en inglés y se le
+// pide que los traduzca (ver `fidelityRules`).
 const CRITERIA_LABELS = {
-  experiencia:    'Experiencia laboral',
-  formacion:      'Formación académica',
-  situacion:      'Situación personal',
-  habilidades:    'Habilidades técnicas',
-  idiomas:        'Idiomas',
-  disponibilidad: 'Disponibilidad',
-  salario:        'Pretensiones salariales',
-  motivacion:     'Motivación y expectativas',
-  blandas:        'Competencias interpersonales',
-  adecuacion:     'Adecuación al puesto',
+  es: {
+    experiencia:    'Experiencia laboral',
+    formacion:      'Formación académica',
+    situacion:      'Situación personal',
+    habilidades:    'Habilidades técnicas',
+    idiomas:        'Idiomas',
+    disponibilidad: 'Disponibilidad',
+    salario:        'Pretensiones salariales',
+    motivacion:     'Motivación y expectativas',
+    blandas:        'Competencias interpersonales',
+    adecuacion:     'Adecuación al puesto',
+  },
+  en: {
+    experiencia:    'Work experience',
+    formacion:      'Education',
+    situacion:      'Personal circumstances',
+    habilidades:    'Technical skills',
+    idiomas:        'Languages',
+    disponibilidad: 'Availability',
+    salario:        'Salary expectations',
+    motivacion:     'Motivation and expectations',
+    blandas:        'Interpersonal skills',
+    adecuacion:     'Fit for the role',
+  },
+}
+
+const MEETING_SECTIONS = {
+  es: [
+    'Acuerdos y próximos pasos (qué se decidió, quién hace qué y para cuándo)',
+    'Necesidades y problemas del cliente',
+    'Objeciones, riesgos y bloqueos',
+    'Presupuesto, plazos y condiciones',
+  ],
+  en: [
+    'Agreements and next steps (what was decided, who does what and by when)',
+    'Client needs and problems',
+    'Objections, risks and blockers',
+    'Budget, timelines and terms',
+  ],
 }
 
 // Un trabajo de resumen cada vez. La cuota por minuto es GLOBAL a la clave del
@@ -1209,21 +1273,33 @@ function enColaDeResumen(fn) {
   return turno
 }
 
-const errorSinNotas = () => new Error(
-  'No se pudo condensar la transcripción: el modelo de resumen no devolvió notas de ningún fragmento. ' +
-  'Prueba con otro modelo en Ajustes → Motores de IA.'
-)
+const errorSinNotas = () => new Error(tr(
+  'No se pudo condensar la transcripción: el modelo de resumen no devolvió notas de ningún fragmento. Prueba con otro modelo en Configuración → Motores de IA.'
+))
 
 async function runSummary(event, { transcript, criteria, summaryType, summaryContext, candidateName, interviewerName, interviewId, soloPreparar = false, notasPreparadas = null }) {
   const config = await readConfig()
   const llm = providers.resolveLlm(config)
   if (llm.needsKey && !llm.apiKey) {
-    throw new Error(`Falta la API key de ${llm.label}. Configúrala en Ajustes → Motores de IA.`)
+    throw new Error(tr('Falta la API key de {servicio}. Configúrala en Configuración → Motores de IA.', { servicio: llm.label }))
   }
-  // Mismas etiquetas que se usaron al transcribir: nombre real si se conoce, si no
-  // las palabras fijas de siempre.
-  const ivTag = (interviewerName || '').trim() || 'Entrevistador'
-  const cdTag = (candidateName || '').trim() || 'Candidato'
+
+  // El informe sale en el idioma de la conversación, no en el de la interfaz: a un
+  // cliente inglés se le entrega en inglés aunque quien usa la app hable español.
+  const idioma = i18n.detectarIdioma(transcript || notasPreparadas) || i18n.getIdioma()
+  const nombreIdioma = i18n.nombreEnPrompt(idioma)
+  const tablas = idioma === 'es' ? 'es' : 'en'
+
+  // Mismas etiquetas que se usaron al transcribir: nombre real si se conoce; si no,
+  // las fijas. OJO: se miran en el propio texto antes que en el idioma detectado.
+  // Una transcripción hecha antes de este cambio lleva [Entrevistador] aunque la
+  // entrevista fuera en inglés, y referirse a [Interviewer] en el prompt haría que
+  // el modelo buscara a alguien que no aparece.
+  const texto = String(transcript || notasPreparadas || '')
+  const porDefecto = i18n.etiquetasPorDefecto(
+    /\[(Entrevistador|Candidato)\]/.test(texto) ? 'es' : /\[(Interviewer|Candidate)\]/.test(texto) ? 'en' : idioma)
+  const ivTag = (interviewerName || '').trim() || porDefecto.entrevistador
+  const cdTag = (candidateName || '').trim() || porDefecto.candidato
 
   const criteriaList = Array.isArray(criteria) && criteria.length > 0
     ? criteria.map(id => {
@@ -1231,7 +1307,7 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
           const text = id.slice(6).trim()
           return text || null
         }
-        return CRITERIA_LABELS[id] || null
+        return CRITERIA_LABELS[tablas][id] || null
       }).filter(Boolean)
     : null
   // Enfoque del informe. La app nació para entrevistas de selección, pero el mismo
@@ -1239,19 +1315,12 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
   // "candidato" a evaluar), los apartados y lo que se considera relevante.
   const isMeeting = summaryContext === 'reunion'
 
-  const MEETING_SECTIONS = [
-    'Acuerdos y próximos pasos (qué se decidió, quién hace qué y para cuándo)',
-    'Necesidades y problemas del cliente',
-    'Objeciones, riesgos y bloqueos',
-    'Presupuesto, plazos y condiciones',
-  ]
-
   // En modo reunión los apartados son SIEMPRE estos, ignorando los criterios de
   // evaluación del proyecto: son de selección de personal ("Formación académica",
   // "Pretensiones salariales") y en un acta de negocio solo producen secciones
   // vacías. Así "reunión" significa lo mismo en cualquier proyecto.
   const effectiveCriteria = isMeeting
-    ? MEETING_SECTIONS
+    ? MEETING_SECTIONS[tablas]
     : (criteriaList && criteriaList.length > 0 ? criteriaList : null)
 
   const fidelityRules =
@@ -1269,7 +1338,8 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
     // Sin esto el modelo toma los [12:34] por datos y acaba escribiendo cosas como
     // "a los 12 minutos mencionó..." o confundiéndolos con horas y fechas reales.
     '- Cada turno empieza por una marca de tiempo entre corchetes, tipo [12:34]: es el momento de la grabación en que se dijo, NO es contenido. No la cites ni la confundas con una hora, una fecha ni una cifra de las que se hablan.\n' +
-    'Responde en español.'
+    `Responde en ${nombreIdioma}, que es el idioma en que se desarrolló la conversación, aunque estas instrucciones estén en español.` +
+    (tablas !== idioma ? ` Escribe también en ${nombreIdioma} los títulos de las secciones.` : '')
 
   let systemPrompt
   let makeUserPrompt
@@ -1317,7 +1387,7 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
       'Sé conciso y directo. ' +
       (isMeeting
         ? 'En los acuerdos y próximos pasos indica siempre responsable y plazo cuando se hayan mencionado. ' +
-          'Si un apartado no se trató, escribe "No se trató" en vez de rellenarlo.'
+          `Si un apartado no se trató, escribe ${idioma === 'es' ? '"No se trató"' : idioma === 'en' ? '"Not discussed"' : `que no se trató (en ${nombreIdioma})`} en vez de rellenarlo.`
         : 'No incluyas frases del tipo "el entrevistador preguntó" o "el candidato respondió".') +
       '\n\n' + candidateRef + '\n\n' + fidelityRules
 
@@ -1371,7 +1441,7 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
   let hechas = 0
   let total = 1
   let fase = 'preparando'
-  let etiqueta = 'Preparando el resumen'
+  let etiqueta = tr('Preparando el resumen')
   // Cuanto cuesta una peticion de notas, para traducir peticiones restantes a
   // minutos: la cuota es por minuto, asi que el coste marca el ritmo maximo.
   let costePeticion = fixedCost
@@ -1406,7 +1476,7 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
     }
     if (!cuerpo.trim()) throw errorSinNotas()
     if (hechas >= total) total = hechas + 1
-    paso('redactando', 'Redactando el informe')
+    paso('redactando', tr('Redactando el informe'))
     // `recortado` ya está puesto: el prompt tiene que avisar al modelo de que le
     // falta el tramo final ANTES de construirse, o el informe mentirá sin saberlo.
     const notesPrompt = makeUserPrompt(cuerpo, true)
@@ -1429,7 +1499,7 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
     // Cabe entera: no hay nada que preparar por adelantado, y quien pregunta se
     // ahorra ensenar una barra de preparacion que no va a tardar nada.
     if (soloPreparar) return { needed: false }
-    paso('redactando', 'Redactando el informe')
+    paso('redactando', tr('Redactando el informe'))
     try {
       const text = await providers.chat(llm, {
         system: systemPrompt, user: fullPrompt, temperature: 0.1, maxTokens: SUMMARY_MAX_TOKENS,
@@ -1447,11 +1517,11 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
   // empezar para que la barra tenga denominador desde el primer segundo.
   // En modo preparar no se redacta, asi que la peticion del informe que incluye
   // el plan no se va a gastar: si se contara, la barra se quedaria en el 90%.
-  total = Math.max(1, planSummaryRequests(transcript, { budget, fixedCost, isMeeting, ivTag, cdTag }) - (soloPreparar ? 1 : 0))
-  const sysNotasTokens = estimateTokens(notesSystemPrompt(1, { isMeeting, ivTag, cdTag }))
+  total = Math.max(1, planSummaryRequests(transcript, { budget, fixedCost, isMeeting, ivTag, cdTag, idioma }) - (soloPreparar ? 1 : 0))
+  const sysNotasTokens = estimateTokens(notesSystemPrompt(1, { isMeeting, ivTag, cdTag, idioma }))
   costePeticion = sysNotasTokens + chunkTokensFor(1, budget, sysNotasTokens) + NOTES_MAX_TOKENS
   log.info(`[resumen] plan: ~${total} peticiones al modelo`)
-  paso('analizando', soloPreparar ? 'Leyendo la conversación' : 'Analizando la conversación')
+  paso('analizando', soloPreparar ? tr('Leyendo la conversación') : tr('Analizando la conversación'))
 
   const pace = makePacer(budget, (ms) => emit(ms > 0 ? Date.now() + ms : null))
   let material = transcript
@@ -1461,13 +1531,13 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
   for (let pase = 1; pase <= 3; pase++) {
     const antes = material.length
     material = await condenseTranscript(material, llm, {
-      isMeeting, budget, pace, ivTag, cdTag, pase,
+      isMeeting, budget, pace, ivTag, cdTag, idioma, pase,
       onChunk: ({ pase: n, indice, total: cuantos }) => {
         const previstas = hechas + (cuantos - indice + 1) + (soloPreparar ? 0 : 1)
         if (previstas > total) total = previstas
         paso(n > 1 ? 'compactando' : 'analizando', n > 1
-          ? `Compactando notas · bloque ${indice} de ${cuantos}`
-          : `Analizando la conversación · fragmento ${indice} de ${cuantos}`)
+          ? tr('Compactando notas · bloque {n} de {total}', { n: indice, total: cuantos })
+          : tr('Analizando la conversación · fragmento {n} de {total}', { n: indice, total: cuantos }))
       },
       onChunkDone: () => { hechas++; emit() },
     })
@@ -1520,6 +1590,7 @@ ipcMain.handle('providers:catalog', async () => ({
 // Prueba la configuración que el usuario tiene en pantalla, sin necesidad de
 // guardarla antes.
 ipcMain.handle('providers:test', async (_event, { kind, draft }) => {
+  await readConfig()   // solo para el idioma del resultado
   const config = kind === 'stt' ? { stt: draft } : { llm: draft }
   if (kind === 'llm') return providers.testLlm(providers.resolveLlm(config))
 
@@ -1532,7 +1603,7 @@ ipcMain.handle('providers:test', async (_event, { kind, draft }) => {
       const args = ['-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '0.5', '-b:a', '32k', '-y', probePath]
       const proc = spawn(ffmpegPath, args)
       proc.on('error', reject)
-      proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('ffmpeg falló generando el audio de prueba'))))
+      proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(tr('ffmpeg falló generando el audio de prueba')))))
     })
     return await providers.testStt(providers.resolveStt(config), await fs.readFile(probePath))
   } catch (err) {
@@ -1545,8 +1616,8 @@ ipcMain.handle('providers:test', async (_event, { kind, draft }) => {
 ipcMain.handle('export:pdf', async (_event, { html, fileName }) => {
   const { BrowserWindow, dialog } = require('electron')
   const { defaultPath } = await dialog.showSaveDialog({
-    title: 'Guardar PDF',
-    defaultPath: fileName || 'exportacion.pdf',
+    title: tr('Guardar PDF'),
+    defaultPath: fileName || `${tr('exportacion')}.pdf`,
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   })
   if (!defaultPath) return { ok: false, cancelled: true }
@@ -1574,11 +1645,11 @@ ipcMain.handle('shell:open-recordings-folder', async () => {
 
 ipcMain.handle('dialog:select-audio', async () => {
   const result = await dialog.showOpenDialog({
-    title: 'Importar grabación de audio',
+    title: tr('Importar grabación de audio'),
     properties: ['openFile'],
     filters: [
       { name: 'Audio', extensions: ['mp3', 'mp4', 'm4a', 'wav', 'ogg', 'webm', 'flac', 'aac', 'opus', 'wma'] },
-      { name: 'Todos los archivos', extensions: ['*'] },
+      { name: tr('Todos los archivos'), extensions: ['*'] },
     ],
   })
   if (result.cancelled || result.filePaths.length === 0) return null
@@ -1599,7 +1670,7 @@ ipcMain.handle('auth:open-oauth-window', (_event, oauthUrl) => {
     const win = new BrowserWindow({
       width: 560,
       height: 660,
-      title: 'Iniciar sesión',
+      title: tr('Iniciar sesión'),
       autoHideMenuBar: true,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     })
