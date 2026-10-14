@@ -1316,6 +1316,7 @@ function App() {
         // subida a la nube (al final de esta función) los necesita ya.
         let savedAudioName: string | null = null
         let savedSystemName: string | null = null
+        let savedAudioPath: string | null = null
 
         // Si el usuario descarta la grabación MIENTRAS este guardado está en curso
         // (handleDiscardRecording marca iv.id en discardedInterviewIdsRef), no hay
@@ -1324,12 +1325,13 @@ function App() {
         if (blob && window.desktopApp?.saveRecording) {
           try {
             const bytes = new Uint8Array(await blob.arrayBuffer())
-            const r = await window.desktopApp.saveRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, extension: getExt(pendingMimeTypeRef.current), format: settingsAudioFormatDraft, audioBytes: bytes })
+            const r = await window.desktopApp.saveRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, extension: getExt(pendingMimeTypeRef.current), audioBytes: bytes })
             if (discardedInterviewIdsRef.current.has(iv.id)) {
               void window.desktopApp.deleteRecording?.({ filePath: r.filePath })
             } else {
               const fileName = r.filePath.split(/[\\/]/).pop() ?? r.filePath
               savedAudioName = fileName
+              savedAudioPath = r.filePath
               updateInterview(iv.id, { recordingFilePath: fileName })
             }
           } catch { /* ignore */ }
@@ -1360,6 +1362,22 @@ function App() {
               savedSystemName = systemFileName
               updateInterview(iv.id, { systemAudioFilePath: systemFileName })
               saveSystemAudioPathCache(iv.id, systemFileName)
+            }
+          } catch { /* ignore */ }
+        }
+
+        // La conversión al formato elegido va la última, cuando todas las pistas ya
+        // están en disco y enlazadas: es el paso lento, y si la app se cierra en
+        // medio la entrevista conserva el original, que se transcribe igual.
+        if (savedAudioName && window.desktopApp?.convertRecording && !discardedInterviewIdsRef.current.has(iv.id)) {
+          try {
+            const cr = savedAudioPath ? await window.desktopApp.convertRecording({ filePath: savedAudioPath, format: settingsAudioFormatDraft }) : null
+            const convertedName = cr?.filePath.split(/[\\/]/).pop()
+            if (cr && discardedInterviewIdsRef.current.has(iv.id)) {
+              void window.desktopApp.deleteRecording?.({ filePath: cr.filePath })
+            } else if (convertedName && convertedName !== savedAudioName) {
+              savedAudioName = convertedName
+              updateInterview(iv.id, { recordingFilePath: convertedName })
             }
           } catch { /* ignore */ }
         }

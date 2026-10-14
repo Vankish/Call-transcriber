@@ -331,26 +331,38 @@ ipcMain.handle('recording:save', async (_event, payload) => {
   await fs.mkdir(recordingsDir, { recursive: true })
 
   const rawExtension = payload.extension || 'webm'
-  const desiredFormat = payload.format || null
   const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
   const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
   const buffer = Buffer.from(payload.audioBytes)
 
+  // Solo escribe el original; la conversión va aparte (recording:convert). Antes
+  // se convertía aquí dentro y la ruta no llegaba a la interfaz hasta acabar: una
+  // llamada de 40 min tarda lo suyo en pasar a mp3, y si la app se cerraba en ese
+  // rato la entrevista quedaba sin audio enlazado aunque el archivo estuviera.
   const rawPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}.${rawExtension}`)
   await fs.writeFile(rawPath, buffer)
 
-  if (desiredFormat && desiredFormat !== rawExtension) {
-    const convertedPath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}.${desiredFormat}`)
-    try {
-      await convertToFormat(rawPath, convertedPath, desiredFormat)
-      await fs.unlink(rawPath).catch(() => {})
-      return { filePath: convertedPath }
-    } catch {
-      // If conversion fails, keep the raw file
-    }
-  }
-
   return { filePath: rawPath }
+})
+
+ipcMain.handle('recording:convert', async (_event, { filePath, format }) => {
+  const currentExtension = path.extname(filePath).slice(1)
+  if (!format || format === currentExtension) return { filePath }
+
+  const convertedPath = filePath.replace(/\.[^.]+$/, `.${format}`)
+  // Se convierte a un nombre temporal y se renombra al final: así un corte a
+  // medias no deja un mp3 incompleto con el nombre bueno que parezca válido.
+  const partialPath = `${convertedPath}.partial`
+  try {
+    await convertToFormat(filePath, partialPath, format)
+    await fs.rename(partialPath, convertedPath)
+    await fs.unlink(filePath).catch(() => {})
+    return { filePath: convertedPath }
+  } catch (err) {
+    log.warn(`[grabación] no se pudo convertir ${path.basename(filePath)} a ${format}: ${err.message}`)
+    await fs.rm(partialPath, { force: true }).catch(() => {})
+    return { filePath }
+  }
 })
 
 ipcMain.handle('recording:save-system', async (_event, payload) => {

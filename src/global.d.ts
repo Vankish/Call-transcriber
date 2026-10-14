@@ -3,8 +3,12 @@ type SaveRecordingPayload = {
   candidateName: string
   createdAt: string
   extension: string
-  format?: string
   audioBytes: Uint8Array
+}
+
+type ConvertRecordingPayload = {
+  filePath: string
+  format: string
 }
 
 type SaveRecordingResult = {
@@ -174,6 +178,7 @@ interface Window {
     platform: string
     isDesktop: boolean
     saveRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
+    convertRecording: (payload: ConvertRecordingPayload) => Promise<SaveRecordingResult>
     saveVideoRecording: (payload: SaveVideoRecordingPayload) => Promise<SaveRecordingResult>
     saveSystemRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
     onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
