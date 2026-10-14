@@ -142,7 +142,7 @@ const LLM_PRESETS = [
     keyHint: 'sk-ant-...',
     dialect: 'anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
-    models: ['claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+    models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
     unverified: true,
   },
   {
@@ -290,10 +290,20 @@ function resolveLlm(config) {
 
 // ── Utilidades comunes ───────────────────────────────────────────────────────
 
+// Empieza siempre por "API ERROR · <servicio>" para que la interfaz lo reconozca
+// y lo ponga de título: un fallo del proveedor (clave caducada, sin saldo) no se
+// arregla en la app sino en la web del proveedor, y eso tiene que verse de un vistazo.
 async function readError(response, label) {
   let detail = ''
   try { detail = (await response.text()).slice(0, 500) } catch { /* respuesta ilegible */ }
-  return new Error(tr('Error de {servicio} ({codigo}): {detalle}', { servicio: label, codigo: response.status, detalle: detail || tr('sin detalle') }))
+  // Casi todos devuelven {"error":{"message":...}}; se saca la frase para no
+  // enseñar el JSON entero. Si no encaja, se deja el texto tal cual.
+  try {
+    const body = JSON.parse(detail)
+    const message = body?.error?.message || body?.message || body?.detail
+    if (typeof message === 'string' && message.trim()) detail = message.trim()
+  } catch { /* no era JSON */ }
+  return new Error(tr('API ERROR · {servicio} ({codigo}): {detalle}', { servicio: label, codigo: response.status, detalle: detail || tr('sin detalle') }))
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -556,7 +566,7 @@ function emptyByLengthError(provider, maxTokens) {
 
 async function chat(provider, { system, user, temperature = 0.1, maxTokens = 8000 }) {
   if (!provider.baseUrl) throw new Error(tr('No hay URL configurada para el servicio de resumen.'))
-  if (provider.dialect === 'anthropic') return chatAnthropic(provider, { system, user, temperature, maxTokens })
+  if (provider.dialect === 'anthropic') return chatAnthropic(provider, { system, user, maxTokens })
   return chatOpenAiCompatible(provider, { system, user, temperature, maxTokens })
 }
 
@@ -609,26 +619,52 @@ async function chatOpenAiCompatible(provider, { system, user, temperature, maxTo
   }
 }
 
-async function chatAnthropic(provider, { system, user, temperature, maxTokens }) {
+// Los Claude actuales piensan siempre antes de contestar, y lo pensado sale del
+// mismo `max_tokens` que la respuesta. Con el techo pelado del informe (2.500) o
+// de la prueba de conexión (256) se lo comerían pensando y devolverían vacío.
+// Este colchón solo se cobra si se gasta.
+const ANTHROPIC_THINKING_HEADROOM = 8000
+
+// Modelos que aceptan el plan B del servidor: si uno rechaza la petición por sus
+// filtros de seguridad, la propia API la repite con otro modelo en la misma llamada.
+// Haiku no lo admite y un modelo escrito a mano puede no admitirlo, así que solo estos.
+const ANTHROPIC_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-fable-5-1'])
+
+// Sin `temperature`: los modelos actuales de Anthropic rechazan con un 400 cualquier
+// valor que no sea el de por defecto. La constancia la dan el prompt y el esfuerzo.
+async function chatAnthropic(provider, { system, user, maxTokens }) {
+  const body = {
+    model: provider.model,
+    system,
+    messages: [{ role: 'user', content: user }],
+    max_tokens: maxTokens + ANTHROPIC_THINKING_HEADROOM,
+    // Un resumen no necesita pensar a fondo; 'medium' es además el valor por
+    // defecto de Opus 5.5, y se fija para que no cambie al elegir otro modelo.
+    output_config: { effort: 'medium' },
+  }
+  const headers = {
+    'x-api-key': provider.apiKey,
+    'anthropic-version': '2023-06-01',
+    'Content-Type': 'application/json',
+  }
+  if (ANTHROPIC_FALLBACK_MODELS.has(provider.model)) {
+    body.fallbacks = 'default'
+    headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'
+  }
+
   const response = await fetchRetryingRateLimit(`${provider.baseUrl}/messages`, {
     method: 'POST',
-    headers: {
-      'x-api-key': provider.apiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: provider.model,
-      system,
-      messages: [{ role: 'user', content: user }],
-      temperature,
-      max_tokens: maxTokens,
-    }),
+    headers,
+    body: JSON.stringify(body),
   })
   if (!response.ok) throw await readError(response, provider.label)
   const data = await response.json()
-  const text = (data.content || []).map((c) => c.text || '').join('') || ''
-  if (!text.trim() && data.stop_reason === 'max_tokens') throw emptyByLengthError(provider, maxTokens)
+  if (data.stop_reason === 'refusal') {
+    throw new Error(tr('{servicio} se ha negado a procesar este texto.', { servicio: provider.label }))
+  }
+  // Solo los bloques de texto: los de razonamiento vienen en la misma lista.
+  const text = (data.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
+  if (!text.trim() && data.stop_reason === 'max_tokens') throw emptyByLengthError(provider, body.max_tokens)
   return text
 }
 

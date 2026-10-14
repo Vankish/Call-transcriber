@@ -260,6 +260,13 @@ const fechaCorta = () => new Date().toLocaleString(locale(), { day: '2-digit', m
 // method 'x': Error: ...". Ese prefijo no le dice nada a nadie y tapa el mensaje
 // de verdad, que ya viene traducido desde main.cjs.
 const limpiarErrorIpc = (msg: string) => msg.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '')
+// Los fallos del proveedor de IA llegan como "API ERROR · Groq (401): motivo" (ver
+// readError en electron/providers.cjs). Se separan en título y detalle para que el
+// aviso diga primero QUÉ servicio ha fallado: eso se arregla en su web, no aquí.
+const separarErrorApi = (msg: string, tituloPorDefecto: string): [string, string] => {
+  const m = /^API ERROR · (.+?) \((\d+)\): ([\s\S]*)$/.exec(msg)
+  return m ? [`API ERROR · ${m[1]}`, `(${m[2]}) ${m[3]}`] : [tituloPorDefecto, msg]
+}
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 
 // ── Audios en la nube ──────────────────────────────────────────────────────
@@ -1575,7 +1582,7 @@ function App() {
     } catch (err) {
       updateInterview(interviewId, { transcriptionStatus: 'error' })
       const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
-      if (notifErrors) toast(t('Error al transcribir'), 'error', msg)
+      if (notifErrors) { const [titulo, detalle] = separarErrorApi(msg, t('Error al transcribir')); toast(titulo, 'error', detalle) }
     }
   }
 
@@ -1649,7 +1656,7 @@ function App() {
     } catch (err) {
       updateInterview(interviewId, { summaryStatus: 'error' })
       const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
-      if (notifErrors) toast(t('Error al generar resumen'), 'error', msg)
+      if (notifErrors) { const [titulo, detalle] = separarErrorApi(msg, t('Error al generar resumen')); toast(titulo, 'error', detalle) }
     } finally {
       setSummaryProgress(null)
     }
