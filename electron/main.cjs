@@ -1589,8 +1589,29 @@ async function runSummary(event, { transcript, criteria, summaryType, summaryCon
 // cara (leer la conversacion y tomar notas) y 'generate' la barata (redactar).
 // Los dos entran por la misma cola: dos resumenes a la vez se pisan la cuota del
 // minuto y acaban los dos en 429.
-ipcMain.handle('summary:generate', (event, payload) => enColaDeResumen(() => runSummary(event, payload)))
-ipcMain.handle('summary:prepare', (event, payload) => enColaDeResumen(() => runSummary(event, { ...payload, soloPreparar: true })))
+//
+// Las notas recién sacadas se recuerdan también aquí, no solo en la interfaz. Si
+// se pide el informe MIENTRAS se preparan, la interfaz manda `notasPreparadas:
+// null` (aún no las tiene) y el informe espera en la cola; sin este recuerdo, al
+// llegarle el turno volvía a sacar las notas desde cero: los mismos minutos de
+// cuota pagados dos veces seguidas.
+const notasRecientes = new Map()   // interviewId -> { clave, notas }
+const claveNotas = (p) => `${p.summaryContext}|${p.transcript}`
+const recordarNotas = (payload, res) => {
+  if (res?.notes) notasRecientes.set(payload.interviewId, { clave: claveNotas(payload), notas: res.notes })
+  return res
+}
+
+ipcMain.handle('summary:generate', (event, payload) => enColaDeResumen(async () => {
+  let notasPreparadas = payload.notasPreparadas
+  if (!notasPreparadas) {
+    const guardadas = notasRecientes.get(payload.interviewId)
+    if (guardadas?.clave === claveNotas(payload)) notasPreparadas = guardadas.notas
+  }
+  return recordarNotas(payload, await runSummary(event, { ...payload, notasPreparadas }))
+}))
+ipcMain.handle('summary:prepare', (event, payload) => enColaDeResumen(async () =>
+  recordarNotas(payload, await runSummary(event, { ...payload, soloPreparar: true }))))
 
 // ── Catálogo y prueba de proveedores (Ajustes → Motores de IA) ───────────────
 
