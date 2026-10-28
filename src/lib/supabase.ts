@@ -37,6 +37,9 @@ export interface DbProject {
   id: string; user_id: string; name: string; company: string
   status: string; created_at: string; evaluation_criteria?: string[]
   interviewers?: string[]
+  // Solo existe tras supabase-clientes.sql. Se manda solo para los proyectos de
+  // clientes, así una base sin la migración sigue funcionando con las entrevistas.
+  kind?: string
 }
 
 export interface DbCandidate {
@@ -45,6 +48,7 @@ export interface DbCandidate {
   candidate_status: string
   consent_given?: boolean; consent_at?: string | null
   created_at: string
+  crm?: unknown
 }
 
 export interface DbInterview {

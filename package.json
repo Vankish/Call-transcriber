@@ -1,7 +1,7 @@
 {
   "name": "call-transcriber-app",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Record, transcribe and summarise job interviews with AI.",
   "author": "Call Transcriber",
   "license": "MIT",
@@ -34,6 +34,7 @@
       "electron/**/*",
       "package.json"
     ],
+    "protocols": [{ "name": "Call Transcriber", "schemes": ["calltranscriber"] }],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**/*"
     ],

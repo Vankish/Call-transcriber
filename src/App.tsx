@@ -37,6 +37,7 @@ import {
   PauseIconSm,
   PencilIcon,
   PlayIcon,
+  BriefcaseIcon,
   RefreshIcon,
   SearchIcon,
   SettingsIcon,
@@ -60,7 +61,10 @@ import type { Idioma } from './i18n'
 // con "todo lo que veo es mío": hay que poder distinguir lo propio de lo que
 // otra persona te ha dejado ver, para no ofrecer botones que la base de datos
 // va a rechazar (renombrar, borrar, repartir accesos).
-type Project = { id: string; ownerId: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }
+// 'clientes' = llamadas comerciales: cada perfil es un trato del CRM de Orbit y
+// lleva sus campos (SPIN, objetivo, próximo paso). Lo que no lo dice es entrevistas.
+type ProjectKind = 'entrevistas' | 'clientes'
+type Project = { id: string; ownerId: string; name: string; company: string; createdAt: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[]; kind?: ProjectKind }
 
 // Las etiquetas se traducen al pintarlas. Lo que se guarda es el id, así que un
 // proyecto creado en español se ve bien en inglés y al revés.
@@ -77,8 +81,11 @@ const EVALUATION_CRITERIA = [
   { id: 'adecuacion',    label: k('Adecuación al puesto') },
   { id: 'otros',         label: k('Otros') },
 ]
-type Candidate = { id: string; projectId: string; createdAt: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null }
-type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen'
+// El trato del CRM al que corresponde un perfil de cliente. Los campos vacíos son
+// los que Claude rellena tras una llamada; lo que ya tiene valor no se toca.
+type CrmDeal = CrmAnalysis & { dealId: string; company: string; contactEmail: string; linkedinUrl: string; stage: string; lastSentAt: string | null }
+type Candidate = { id: string; projectId: string; createdAt: string; name: string; email: string; phone: string; role: string; notes: string; candidateStatus: 'pendiente' | 'apto' | 'descartado' | 'finalista'; consentGiven: boolean; consentAt: string | null; crm?: CrmDeal | null }
+type ProfileTab = 'entrevistas' | 'transcripcion' | 'resumen' | 'crm'
 type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopped'
 type Interview = {
   // ownerId = dueño de la entrevista. Imprescindible para el audio: en Storage
@@ -269,6 +276,37 @@ const separarErrorApi = (msg: string, tituloPorDefecto: string): [string, string
 }
 const getExt = (mime: string) => mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'bin'
 
+// Destino de una pista mientras se graba. Cada trozo de un segundo se escribe al
+// disco nada más llegar: guardarlo todo en memoria hasta parar hacía que una
+// llamada con vídeo fuera ralentizando el PC a partir de los 20 minutos. Si el
+// disco no responde, los trozos se quedan en memoria como antes y se guardan al final.
+type RecordingSink = { mimeType: string; push: (data: Blob) => void; finish: () => Promise<string | null>; fallback: Blob[] }
+
+const openRecordingSink = (payload: OpenRecordingStreamPayload, mimeType: string): RecordingSink => {
+  const app = window.desktopApp
+  const opening = app?.openRecordingStream?.(payload).catch(() => null) ?? Promise.resolve(null)
+  const fallback: Blob[] = []
+  // Una sola cola: los trozos llegan al archivo en el mismo orden en que se grabaron.
+  let queue: Promise<unknown> = opening
+  return {
+    mimeType,
+    fallback,
+    push: data => {
+      queue = queue.then(async () => {
+        const stream = await opening
+        if (!stream || !app?.appendRecordingStream) { fallback.push(data); return }
+        await app.appendRecordingStream({ streamId: stream.streamId, bytes: new Uint8Array(await data.arrayBuffer()) })
+      }).catch(() => { fallback.push(data) })
+    },
+    finish: async () => {
+      await queue
+      const stream = await opening
+      if (!stream || !app?.closeRecordingStream) return null
+      return (await app.closeRecordingStream({ streamId: stream.streamId })).filePath
+    },
+  }
+}
+
 // ── Audios en la nube ──────────────────────────────────────────────────────
 // Bucket privado de Supabase Storage. Las rutas son {dueño}/{interview_id}/{archivo}.
 // OJO: la primera carpeta es la del DUEÑO de la entrevista, no la de quien está
@@ -285,8 +323,20 @@ const initials = (name: string) => name.split(' ').slice(0, 2).map(w => w[0]?.to
 const AVATAR_COLORS = ['#2563eb', '#10b981', '#f59e33', '#eb4566', '#8b5cf6', '#ec4899']
 const avatarColor = (id: string) => AVATAR_COLORS[id.charCodeAt(id.length - 1) % AVATAR_COLORS.length]
 
-const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[], interviewers: [] as string[] }
+const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evaluationCriteria: [] as string[], interviewers: [] as string[], kind: 'entrevistas' as ProjectKind }
+const EMPTY_CRM_DEAL: CrmDeal = { dealId: '', company: '', contactEmail: '', linkedinUrl: '', stage: '', lastSentAt: null, spinSituation: '', spinProblem: '', spinImplication: '', spinNeedPayoff: '', singleSalesObjective: '', nextStep: '', nota: '' }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
+const EMPTY_CANDIDATE_CRM = { company: '', linkedinUrl: '', stage: '' }
+const crmDraftOf = (c: Candidate) => ({ company: c.crm?.company ?? '', linkedinUrl: c.crm?.linkedinUrl ?? '', stage: c.crm?.stage ?? '' })
+// Los campos del trato que se rellenan a partir de una llamada (ver electron/crm.cjs).
+const CRM_FIELDS = [
+  { id: 'spinSituation', label: k('Situación (SPIN)') },
+  { id: 'spinProblem', label: k('Problema (SPIN)') },
+  { id: 'spinImplication', label: k('Implicación (SPIN)') },
+  { id: 'spinNeedPayoff', label: k('Beneficio (SPIN)') },
+  { id: 'singleSalesObjective', label: k('Objetivo de venta') },
+  { id: 'nextStep', label: k('Próximo paso') },
+] as const
 
 function normalizeInterviews(arr: Interview[]): Interview[] {
   return arr.map(i => ({
@@ -333,8 +383,8 @@ function normalizeProjects(arr: Project[]): Project[] {
 }
 
 // ── DB ↔ App converters ────────────────────────────────────────────────────────
-const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, ownerId: r.user_id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [] })
-const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, createdAt: r.created_at ?? '', name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null })
+const projFromDb  = (r: DbProject):   Project   => ({ id: r.id, ownerId: r.user_id, name: r.name, company: r.company, createdAt: r.created_at, status: r.status as Project['status'], evaluationCriteria: (r.evaluation_criteria as string[] | undefined) ?? [], interviewers: (r.interviewers as string[] | undefined) ?? [], kind: r.kind === 'clientes' ? 'clientes' : 'entrevistas' })
+const candFromDb  = (r: DbCandidate): Candidate => ({ id: r.id, projectId: r.project_id, createdAt: r.created_at ?? '', name: r.name, email: r.email, phone: r.phone, role: r.role, notes: r.notes ?? '', candidateStatus: (r.candidate_status as Candidate['candidateStatus']) ?? 'pendiente', consentGiven: r.consent_given ?? false, consentAt: r.consent_at ?? null, crm: r.crm ? { ...EMPTY_CRM_DEAL, ...(r.crm as Partial<CrmDeal>) } : null })
 const ivFromDb    = (r: DbInterview): Interview => ({
   id: r.id, ownerId: r.user_id, candidateId: r.candidate_id, createdAt: r.created_at,
   sessionName: r.session_name, status: r.status as RecordingStatus,
@@ -399,6 +449,31 @@ const CandidateStatusPill = ({ status }: { status: Candidate['candidateStatus'] 
   return <span className="cand-pill" style={{ background: s.bg, color: s.color }}>{s.icon} {t(s.label)}</span>
 }
 
+// Las mismas etapas que el CRM de Orbit (salesVocabulary.ts en el repo de Orbit),
+// para que el trato se lea igual en los dos sitios y el enlace traiga el id tal cual.
+const DEAL_STAGES: { id: string; label: string; bg: string; color: string }[] = [
+  { id: 'replied',        label: k('Ha respondido'),    bg: '#f1f5f9', color: '#475569' },
+  { id: 'interested',     label: k('Interesado'),       bg: '#e0f2fe', color: '#0369a1' },
+  { id: 'meeting_booked', label: k('Reunión agendada'), bg: '#dbeafe', color: '#1d4ed8' },
+  { id: 'met',            label: k('Reunión hecha'),    bg: '#ede9fe', color: '#6d28d9' },
+  { id: 'won',            label: k('Ganado'),           bg: '#d1fae5', color: '#065f46' },
+  { id: 'lost',           label: k('Perdido'),          bg: '#fee2e2', color: '#991b1b' },
+  { id: 'deferred',       label: k('Aplazado'),         bg: '#fef3c7', color: '#92400e' },
+]
+
+const DealStagePill = ({ stage }: { stage?: string }) => {
+  if (!stage) return null
+  const s = DEAL_STAGES.find(x => x.id === stage)
+  return <span className="cand-pill" style={{ background: s?.bg ?? '#f1f5f9', color: s?.color ?? '#475569' }}><BriefcaseIcon size={11} /> {s ? t(s.label) : stage}</span>
+}
+
+// Una etapa escrita a mano (o que el CRM añada más adelante) se sigue mostrando.
+const stageOptions = (current: string) => [
+  { value: '', label: t('Sin etapa') },
+  ...DEAL_STAGES.map(s => ({ value: s.id, label: t(s.label) })),
+  ...(current && !DEAL_STAGES.some(s => s.id === current) ? [{ value: current, label: current }] : []),
+]
+
 const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: 'list' | 'grid') => void }) => (
   <div className="view-toggle">
     <button type="button" className={`view-toggle-btn${mode === 'list' ? ' view-toggle-btn--active' : ''}`} title={t('Lista de detalles')} onClick={() => onChange('list')}>
@@ -433,6 +508,10 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [activeCandidateId, setActiveCandidateId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<ProfileTab>('entrevistas')
+  const [crmConfig, setCrmConfig] = useState<CrmConfig | null>(null)
+  const [crmConfigDraft, setCrmConfigDraft] = useState<CrmConfig | null>(null)
+  const [crmBusyCandidateId, setCrmBusyCandidateId] = useState<string | null>(null)
+  const [crmInterviewId, setCrmInterviewId] = useState<string | null>(null)
   const [profileScreenTab, setProfileScreenTab] = useState<ProfileScreenTab>('perfil')
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [searchQuery, setSearchQuery] = useState('')
@@ -552,7 +631,7 @@ function App() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showNewCandidate, setShowNewCandidate] = useState(false)
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
-  const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[] }>(EMPTY_PROJECT)
+  const [projectDraft, setProjectDraft] = useState<{ name: string; company: string; status: 'active' | 'closed'; evaluationCriteria: string[]; interviewers: string[]; kind: ProjectKind }>(EMPTY_PROJECT)
   const [newInterviewerDraft, setNewInterviewerDraft] = useState('')
   // ── Compartir carpetas con compañeros ────────────────────────────────────
   // `shares` son todos los accesos que ve este usuario: los que él ha repartido
@@ -564,6 +643,7 @@ function App() {
   const [shareEncontrado, setShareEncontrado] = useState<SharedUser | null>(null)
   const [shareError, setShareError] = useState('')
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
+  const [candidateCrmDraft, setCandidateCrmDraft] = useState(EMPTY_CANDIDATE_CRM)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
   // Entrevistador elegido en el modal de "Nombrar sesión", y el proyecto del que
@@ -643,20 +723,17 @@ function App() {
   const systemStreamRef = useRef<MediaStream | null>(null)
   const mixedStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
-  const chunkRef = useRef<Blob[]>([])
   const activeInterviewIdRef = useRef<string | null>(null)
-  const pendingBlobRef = useRef<Blob | null>(null)
-  const pendingMimeTypeRef = useRef<string>('')
+  // Dónde va cada pista mientras se graba (ver openRecordingSink). Se apartan al
+  // parar para que el guardado final los lea una sola vez.
+  const mixSinkRef = useRef<RecordingSink | null>(null)
+  const videoSinkRef = useRef<RecordingSink | null>(null)
+  const systemSinkRef = useRef<RecordingSink | null>(null)
   const videoMediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const videoChunkRef = useRef<Blob[]>([])
-  const pendingVideoBlobRef = useRef<Blob | null>(null)
   // Grabador SOLO-sistema (voz limpia del interlocutor), en paralelo a la mezcla.
   // Se usa únicamente para transcribir: permite separar hablantes de forma
   // determinista (sistema = [Candidato]) sin que una IA tenga que adivinar.
   const systemRecorderRef = useRef<MediaRecorder | null>(null)
-  const systemChunkRef = useRef<Blob[]>([])
-  const pendingSystemBlobRef = useRef<Blob | null>(null)
-  const pendingSystemMimeRef = useRef<string>('')
   const discardedInterviewIdsRef = useRef<Set<string>>(new Set())
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
@@ -679,6 +756,50 @@ function App() {
   // ── Derived ────────────────────────────────────────────────────────────
   const activeProject = projects.find(p => p.id === activeProjectId) ?? null
   const activeCandidate = candidates.find(c => c.id === activeCandidateId) ?? null
+  const isClientProject = (projectId: string | null | undefined) => projects.find(p => p.id === projectId)?.kind === 'clientes'
+  // Una carpeta de clientes habla de clientes y llamadas, no de candidatos y
+  // entrevistas. Todo el texto que cambia según el tipo de carpeta sale de aquí.
+  const vocab = (kind?: ProjectKind) => kind === 'clientes' ? {
+    people: t('Contactos'), peopleLower: t('contactos'), calls: t('Llamadas'), callsLower: t('llamadas'),
+    sectionTitle: t('Personas de la empresa'), newPerson: t('Nuevo contacto'), editPerson: t('Editar contacto'), addPerson: t('Añadir contacto'),
+    personSub: t('Una persona de esta empresa con la que hablas'),
+    search: t('Buscar por nombre, email o cargo…'),
+    noCall: t('Sin llamada'), openCalls: t('Ver llamadas'),
+    lastCall: (fecha: string) => t('Última llamada: {fecha}', { fecha }),
+    emptyTitle: t('Todavía no hay contactos de esta empresa'), emptySub: t('Añade a la persona con la que hablas, o abre su trato desde el CRM, para empezar a grabar sus llamadas.'),
+    caller: t('Comercial'), callers: t('Comerciales'), noCaller: t('Sin comercial'), callerOf: t('Comercial de esta llamada'),
+    noCallersHint: t('Esta carpeta no tiene comerciales. Se dan de alta en la carpeta.'), addCallers: t('Añádelos en la carpeta'),
+    callersHint: t('Personas de tu equipo que llevan las llamadas de esta carpeta'),
+    firstRec: (nombre: string) => t('Graba la primera llamada con {nombre} para empezar', { nombre }),
+    sessionPlaceholder: t('Ej: Llamada de descubrimiento (opcional)'),
+    defaultSession: (fecha: string) => t('Llamada {fecha}', { fecha }),
+    deleteCalls: (n: number) => t('Eliminar ({n} llamadas)', { n }),
+    deletePeople: (n: number) => t('Eliminar ({n} contactos)', { n }),
+    consent: t('El contacto ha sido informado y consiente la grabación y transcripción de la llamada (incluido su envío a servicios de IA en EE. UU.) conforme a la política de privacidad.'),
+  } : {
+    people: t('Perfiles'), peopleLower: t('perfiles'), calls: t('Entrevistas'), callsLower: t('entrevistas'),
+    sectionTitle: t('Perfiles del proceso'), newPerson: t('Nuevo perfil'), editPerson: t('Editar perfil'), addPerson: t('Añadir perfil'),
+    personSub: t('Añade los datos de la persona a entrevistar'),
+    search: t('Buscar por nombre, email o puesto…'),
+    noCall: t('Sin entrevista'), openCalls: t('Ver entrevistas'),
+    lastCall: (fecha: string) => t('Última entrevista: {fecha}', { fecha }),
+    emptyTitle: t('No hay perfiles en este proyecto'), emptySub: t('Añade tu primer perfil para empezar a grabar y transcribir entrevistas.'),
+    caller: t('Entrevistador'), callers: t('Entrevistadores'), noCaller: t('Sin entrevistador'), callerOf: t('Entrevistador de esta llamada'),
+    noCallersHint: t('Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto.'), addCallers: t('Añádelos en el proyecto'),
+    callersHint: t('Personas de tu equipo que pueden llevar una llamada de este proyecto'),
+    firstRec: (nombre: string) => t('Graba la primera entrevista con {nombre} para empezar', { nombre }),
+    sessionPlaceholder: t('Ej: Primera entrevista técnica (opcional)'),
+    defaultSession: (fecha: string) => t('Entrevista {fecha}', { fecha }),
+    deleteCalls: (n: number) => t('Eliminar ({n} entrevistas)', { n }),
+    deletePeople: (n: number) => t('Eliminar ({n} perfiles)', { n }),
+    consent: t('El candidato ha sido informado y consiente la grabación, transcripción y tratamiento de la entrevista (incluido su envío a servicios de IA en EE. UU.) conforme a la política de privacidad.'),
+  }
+  const vocabFor = (projectId: string | null | undefined) => vocab(projects.find(p => p.id === projectId)?.kind)
+  // El modal de perfil sirve para crear (en la carpeta abierta) y para editar (en la suya).
+  const candidateModalKind = () => projects.find(p => p.id === (editingCandidateId ? candidates.find(c => c.id === editingCandidateId)?.projectId : activeProjectId))?.kind
+  // Una llamada a un cliente se resume como reunión, no como evaluación de candidato.
+  const contextForCandidate = (candidateId: string | null): SummaryContext =>
+    isClientProject(candidates.find(c => c.id === candidateId)?.projectId) ? 'reunion' : 'entrevista'
   const projectCandidates = useMemo(() => candidates.filter(c => c.projectId === activeProjectId), [candidates, activeProjectId])
 
   // ── Orden de los perfiles ──────────────────────────────────────────────
@@ -1113,10 +1234,23 @@ function App() {
   }, [activeRecordingInterview?.id, activeRecordingInterview?.status])
 
   // ── Recording timer ────────────────────────────────────────────────────
+  // El contador va aparte y la duración se apunta en la entrevista solo al pausar o
+  // parar. Antes se sumaba un segundo a la entrevista cada segundo, y cada cambio
+  // reescribía el archivo de datos entero: una escritura a disco por segundo toda
+  // la llamada.
+  const [liveRecordingSec, setLiveRecordingSec] = useState<number | null>(null)
   useEffect(() => {
     if (!activeRecordingInterview || activeRecordingInterview.status !== 'recording') return
-    const id = window.setInterval(() => setInterviews(c => c.map(i => i.id === activeRecordingInterview.id ? { ...i, durationSec: i.durationSec + 1 } : i)), 1000)
-    return () => window.clearInterval(id)
+    const interviewId = activeRecordingInterview.id
+    let sec = activeRecordingInterview.durationSec
+    setLiveRecordingSec(sec)
+    const id = window.setInterval(() => { sec += 1; setLiveRecordingSec(sec) }, 1000)
+    return () => {
+      window.clearInterval(id)
+      setLiveRecordingSec(null)
+      updateInterview(interviewId, { durationSec: sec })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRecordingInterview?.id, activeRecordingInterview?.status])
 
   // ── Live video preview (PiP) ───────────────────────────────────────────
@@ -1199,15 +1333,25 @@ function App() {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage(t('Selecciona un micrófono antes de grabar.')); return }
     const ivCandidate = candidates.find(c => c.id === iv.candidateId)
+    const ivProjectName = projects.find(p => p.id === ivCandidate?.projectId)?.name ?? ''
+    // Se guarda la ruta relativa a la carpeta de grabaciones ("Proyecto\archivo.mp3"),
+    // no solo el nombre: con una subcarpeta por proyecto el nombre suelto no basta.
+    const storedName = (full: string) => recordingsDir && full.toLowerCase().startsWith(recordingsDir.toLowerCase() + '\\')
+      ? full.slice(recordingsDir.length + 1)
+      : full.split(/[\\/]/).pop() ?? full
     if (ivCandidate && !ivCandidate.consentGiven) {
-      const proceed = window.confirm(t('{nombre} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name || t('Este candidato') }))
+      const proceed = window.confirm(isClientProject(ivCandidate.projectId) ? t('{nombre} no tiene registrado el consentimiento para grabar la llamada.\n\nGrabar sin avisar al contacto puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en la ficha del contacto).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name }) : t('{nombre} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name || t('Este candidato') }))
       if (!proceed) return
     }
     try {
       setRecordingMessage(t('Solicitando permisos…'))
-      chunkRef.current = []
-      videoChunkRef.current = []
-      systemChunkRef.current = []
+      mixSinkRef.current = videoSinkRef.current = systemSinkRef.current = null
+      // Hasta que el grabador arranca, Chromium deja `mimeType` vacío si no se le
+      // pidió uno concreto; lo que acaba grabando es webm, así que se da por hecho.
+      const sinkFor = (kind: OpenRecordingStreamPayload['kind'], recorderMime: string) => {
+        const mimeType = recorderMime || (kind === 'video' ? 'video/webm' : 'audio/webm')
+        return openRecordingSink({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', projectName: ivProjectName, createdAt: iv.createdAt, kind, extension: getExt(mimeType) }, mimeType)
+      }
       // echoCancellation es clave cuando se graba sin auriculares: sin ella, la voz
       // del interlocutor que sale por los altavoces se "filtra" de vuelta al micro,
       // y esa fuga acaba etiquetada como [Entrevistador] al mezclarse con tu voz.
@@ -1281,8 +1425,14 @@ function App() {
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
         const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
         try {
-          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: 'video/webm', videoBitsPerSecond, audioBitsPerSecond: qualityBitsPerSecond })
-          videoRecorder.ondataavailable = e => { if (e.data.size > 0) videoChunkRef.current.push(e.data) }
+          // H.264 lo comprime la tarjeta gráfica; VP8 lo hace el procesador. Medido el
+          // 2026-10-28 en el PC de David: la mitad de carga con H.264. Si el equipo no
+          // tiene codificador por hardware, Chromium dice que no y se queda en VP8.
+          const videoMime = MediaRecorder.isTypeSupported('video/webm;codecs=h264') ? 'video/webm;codecs=h264' : 'video/webm'
+          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond, audioBitsPerSecond: qualityBitsPerSecond })
+          const videoSink = sinkFor('video', videoRecorder.mimeType)
+          videoSinkRef.current = videoSink
+          videoRecorder.ondataavailable = e => { if (e.data.size > 0) videoSink.push(e.data) }
           videoMediaRecorderRef.current = videoRecorder
           videoRecorder.start(1000)
           setLivePreviewStream(videoWithAudioStream)
@@ -1299,7 +1449,9 @@ function App() {
         try {
           const sysAudioStream = new MediaStream(sysStream!.getAudioTracks())
           systemRecorder = new MediaRecorder(sysAudioStream, { audioBitsPerSecond: qualityBitsPerSecond })
-          systemRecorder.ondataavailable = e => { if (e.data.size > 0) systemChunkRef.current.push(e.data) }
+          const systemSink = sinkFor('system', systemRecorder.mimeType)
+          systemSinkRef.current = systemSink
+          systemRecorder.ondataavailable = e => { if (e.data.size > 0) systemSink.push(e.data) }
           systemRecorderRef.current = systemRecorder
           systemRecorder.start(1000)
         } catch { systemRecorder = null; systemRecorderRef.current = null }
@@ -1309,14 +1461,12 @@ function App() {
       // confirme el modal de nombre de sesión — así el audio sobrevive aunque la
       // app se cierre, casque, o el usuario descarte antes de confirmar (Bug #1).
       const persistRecordingToDisk = async () => {
-        // OJO: los 2 blobs se leen y se "reservan" (refs a null) AQUÍ, síncronamente,
-        // antes de cualquier await. Si se leyeran uno a uno justo antes de usarlos,
-        // confirmar el modal rápido (handleConfirmSessionName) podría vaciar los refs
-        // ANTES de llegar a leer el de vídeo — perdiéndolo por una carrera.
-        const blob = pendingBlobRef.current
-        const videoBlob = pendingVideoBlobRef.current
-        const systemBlob = pendingSystemBlobRef.current
-        pendingBlobRef.current = null; pendingVideoBlobRef.current = null; pendingSystemBlobRef.current = null
+        // OJO: las pistas se leen y se "reservan" (refs a null) AQUÍ, síncronamente,
+        // antes de cualquier await, para que una grabación nueva no las pise.
+        const mixSink = mixSinkRef.current
+        const videoSink = videoSinkRef.current
+        const systemSink = systemSinkRef.current
+        mixSinkRef.current = videoSinkRef.current = systemSinkRef.current = null
 
         // Los nombres de archivo que se acaban de guardar. Se anotan aquí porque
         // updateInterview actualiza el estado de React de forma asíncrona y la
@@ -1325,52 +1475,44 @@ function App() {
         let savedSystemName: string | null = null
         let savedAudioPath: string | null = null
 
-        // Si el usuario descarta la grabación MIENTRAS este guardado está en curso
-        // (handleDiscardRecording marca iv.id en discardedInterviewIdsRef), no hay
-        // ya ninguna entrevista en la lista donde enganchar la ruta del archivo —
-        // en vez de dejarlo suelto en disco sin que nada lo referencie, se borra.
-        if (blob && window.desktopApp?.saveRecording) {
-          try {
-            const bytes = new Uint8Array(await blob.arrayBuffer())
-            const r = await window.desktopApp.saveRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, extension: getExt(pendingMimeTypeRef.current), audioBytes: bytes })
-            if (discardedInterviewIdsRef.current.has(iv.id)) {
-              void window.desktopApp.deleteRecording?.({ filePath: r.filePath })
-            } else {
-              const fileName = r.filePath.split(/[\\/]/).pop() ?? r.filePath
-              savedAudioName = fileName
-              savedAudioPath = r.filePath
-              updateInterview(iv.id, { recordingFilePath: fileName })
-            }
-          } catch { /* ignore */ }
+        // Cierra el archivo que se fue escribiendo durante la llamada. Solo si el
+        // disco falló al abrirlo quedan trozos en memoria, y se guardan como antes.
+        // Si el usuario descartó la grabación mientras tanto (handleDiscardRecording
+        // marca iv.id), no hay entrevista donde enganchar el archivo: se borra.
+        const finishTrack = async (sink: RecordingSink | null, saveFromMemory: (bytes: Uint8Array) => Promise<SaveRecordingResult> | undefined) => {
+          if (!sink) return null
+          let filePath = await sink.finish().catch(() => null)
+          if (!filePath && sink.fallback.length) {
+            const bytes = new Uint8Array(await new Blob(sink.fallback, { type: sink.mimeType }).arrayBuffer())
+            filePath = (await saveFromMemory(bytes)?.catch(() => undefined))?.filePath ?? null
+          }
+          if (filePath && discardedInterviewIdsRef.current.has(iv.id)) {
+            void window.desktopApp?.deleteRecording?.({ filePath })
+            return null
+          }
+          return filePath
+        }
+        const trackPayload = { interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', projectName: ivProjectName, createdAt: iv.createdAt }
+
+        const audioPath = await finishTrack(mixSink, audioBytes => window.desktopApp?.saveRecording?.({ ...trackPayload, extension: getExt(mixSink?.mimeType ?? ''), audioBytes }))
+        if (audioPath) {
+          savedAudioName = storedName(audioPath)
+          savedAudioPath = audioPath
+          updateInterview(iv.id, { recordingFilePath: savedAudioName })
         }
 
-        if (videoBlob && window.desktopApp?.saveVideoRecording) {
-          try {
-            const videoBytes = new Uint8Array(await videoBlob.arrayBuffer())
-            const vr = await window.desktopApp.saveVideoRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, videoBytes })
-            if (discardedInterviewIdsRef.current.has(iv.id)) {
-              void window.desktopApp.deleteRecording?.({ filePath: vr.filePath })
-            } else {
-              const videoFileName = vr.filePath.split(/[\\/]/).pop() ?? vr.filePath
-              updateInterview(iv.id, { videoFilePath: videoFileName })
-              saveVideoPathCache(iv.id, videoFileName)
-            }
-          } catch { /* ignore */ }
+        const videoPath = await finishTrack(videoSink, videoBytes => window.desktopApp?.saveVideoRecording?.({ ...trackPayload, videoBytes }))
+        if (videoPath) {
+          const videoFileName = storedName(videoPath)
+          updateInterview(iv.id, { videoFilePath: videoFileName })
+          saveVideoPathCache(iv.id, videoFileName)
         }
 
-        if (systemBlob && window.desktopApp?.saveSystemRecording) {
-          try {
-            const systemBytes = new Uint8Array(await systemBlob.arrayBuffer())
-            const sr = await window.desktopApp.saveSystemRecording({ interviewId: iv.id, candidateName: ivCandidate?.name ?? 'candidata', createdAt: iv.createdAt, extension: getExt(pendingSystemMimeRef.current), audioBytes: systemBytes })
-            if (discardedInterviewIdsRef.current.has(iv.id)) {
-              void window.desktopApp.deleteRecording?.({ filePath: sr.filePath })
-            } else {
-              const systemFileName = sr.filePath.split(/[\\/]/).pop() ?? sr.filePath
-              savedSystemName = systemFileName
-              updateInterview(iv.id, { systemAudioFilePath: systemFileName })
-              saveSystemAudioPathCache(iv.id, systemFileName)
-            }
-          } catch { /* ignore */ }
+        const systemPath = await finishTrack(systemSink, audioBytes => window.desktopApp?.saveSystemRecording?.({ ...trackPayload, extension: getExt(systemSink?.mimeType ?? ''), audioBytes }))
+        if (systemPath) {
+          savedSystemName = storedName(systemPath)
+          updateInterview(iv.id, { systemAudioFilePath: savedSystemName })
+          saveSystemAudioPathCache(iv.id, savedSystemName)
         }
 
         // La conversión al formato elegido va la última, cuando todas las pistas ya
@@ -1379,7 +1521,7 @@ function App() {
         if (savedAudioName && window.desktopApp?.convertRecording && !discardedInterviewIdsRef.current.has(iv.id)) {
           try {
             const cr = savedAudioPath ? await window.desktopApp.convertRecording({ filePath: savedAudioPath, format: settingsAudioFormatDraft }) : null
-            const convertedName = cr?.filePath.split(/[\\/]/).pop()
+            const convertedName = cr ? storedName(cr.filePath) : undefined
             if (cr && discardedInterviewIdsRef.current.has(iv.id)) {
               void window.desktopApp.deleteRecording?.({ filePath: cr.filePath })
             } else if (convertedName && convertedName !== savedAudioName) {
@@ -1399,24 +1541,24 @@ function App() {
           void uploadInterviewAudio({ ...iv, recordingFilePath: savedAudioName, systemAudioFilePath: savedSystemName }, { silent: true })
         }
 
-        if (!wasDiscarded && autoTranscribe) void handleTranscribe(iv.id)
+        if (!wasDiscarded && autoTranscribe) transcribeWhenSaved(iv.id)
       }
 
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunkRef.current.push(e.data) }
+      const mixSink = sinkFor('mix', recorder.mimeType)
+      mixSinkRef.current = mixSink
+      recorder.ondataavailable = e => { if (e.data.size > 0) mixSink.push(e.data) }
       recorder.onstop = () => {
-        const blob = new Blob(chunkRef.current, { type: recorder.mimeType })
         const src = hasSystemAudio ? 'mic+system' : 'mic'
-        pendingBlobRef.current = blob; pendingMimeTypeRef.current = recorder.mimeType
         if (activeInterviewIdRef.current) updateInterview(activeInterviewIdRef.current, { status: 'stopped', captureSource: src })
 
         // El vídeo y la pista de sistema son grabadores aparte y opcionales; hay que
-        // esperar a que AMBOS terminen de volcar su blob antes de persistir a disco.
+        // esperar a que AMBOS entreguen su último trozo antes de cerrar los archivos.
         const vr = videoMediaRecorderRef.current
         const sr = systemRecorderRef.current
         let pending = 0
         const done = () => { if (--pending <= 0) { cleanupRecording(); void persistRecordingToDisk() } }
-        if (vr && vr.state !== 'inactive') { pending++; vr.onstop = () => { pendingVideoBlobRef.current = new Blob(videoChunkRef.current, { type: vr.mimeType }); done() } }
-        if (sr && sr.state !== 'inactive') { pending++; sr.onstop = () => { pendingSystemBlobRef.current = new Blob(systemChunkRef.current, { type: sr.mimeType }); pendingSystemMimeRef.current = sr.mimeType; done() } }
+        if (vr && vr.state !== 'inactive') { pending++; vr.onstop = done }
+        if (sr && sr.state !== 'inactive') { pending++; sr.onstop = done }
         if (pending === 0) { cleanupRecording(); void persistRecordingToDisk() }
         else {
           if (vr && vr.state !== 'inactive') vr.stop()
@@ -1455,7 +1597,7 @@ function App() {
       recordingUrl: null, recordingFilePath: filePath, videoFilePath: null, systemAudioFilePath: null,
       captureSource: 'none', transcriptionStatus: 'pending',
       summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen',
-      summaryContext: 'entrevista', interviewerName: '', audioUploaded: false,
+      summaryContext: contextForCandidate(activeCandidateId), interviewerName: '', audioUploaded: false,
     }
     setInterviews(c => [n, ...c])
     setSelectedInterviewId(n.id)
@@ -1464,13 +1606,13 @@ function App() {
         .then(({ error }) => { if (error) toast(t('Error al guardar importación en la nube: {msg}', { msg: error.message }), 'error') })
     }
     toast(t('Audio importado: {archivo}', { archivo: fileName }))
-    if (autoTranscribe) void handleTranscribe(n.id)
+    if (autoTranscribe) transcribeWhenSaved(n.id)
   }
 
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
-    const n: Interview = { id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: 'entrevista', interviewerName: '', audioUploaded: false }
+    const n: Interview = { id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: contextForCandidate(activeCandidateId), interviewerName: '', audioUploaded: false }
     setInterviews(c => [n, ...c])
     if (session) {
       supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: n.candidateId, project_id: activeCandidate.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: n.interviewerName, created_at: n.createdAt, updated_at: n.createdAt })
@@ -1482,7 +1624,6 @@ function App() {
 
   const handleDiscardRecording = async () => {
     const iId = activeInterviewIdRef.current
-    pendingBlobRef.current = null; pendingVideoBlobRef.current = null; pendingSystemBlobRef.current = null
     activeInterviewIdRef.current = null
     setShowSessionNameModal(false)
     setDiscardConfirming(false)
@@ -1533,23 +1674,30 @@ function App() {
   // El audio/vídeo se guarda a disco en segundo plano en cuanto paró la grabación
   // (ver persistRecordingToDisk en handleStartRecording), en paralelo a que se
   // muestre este modal — puede que aún no haya terminado cuando el usuario confirma.
-  // Por eso aquí NO se tocan pendingBlobRef/pendingVideoBlobRef: hacerlo antes de
-  // que persistRecordingToDisk los lea provocaba perder el vídeo si se confirmaba
-  // el nombre demasiado rápido.
+  // Por eso aquí NO se tocan las pistas: hacerlo antes de que persistRecordingToDisk
+  // las lea provocaba perder el vídeo si se confirmaba el nombre demasiado rápido.
   const handleConfirmSessionName = () => {
     const iId = activeInterviewIdRef.current
     if (!iId) return
-    const blob = pendingBlobRef.current
-    const defaultName = t('Entrevista {fecha}', { fecha: fechaCorta() })
+    const defaultName = vocab(sessionModalProject?.kind).defaultSession(fechaCorta())
     const finalName = sessionNameDraft.trim() || defaultName
     setShowSessionNameModal(false); setDiscardConfirming(false)
-    updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft, ...(blob ? { recordingUrl: URL.createObjectURL(blob) } : {}) })
+    updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft })
     setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
     toast(t('Grabación guardada'))
   }
 
   // ── Transcription / Summary ────────────────────────────────────────────
+  // La transcripción automática se lanza desde funciones creadas antes de que la
+  // entrevista (o su archivo) estuviera en la lista. Llamando a handleTranscribe
+  // desde ahí, buscaba en esa lista vieja y fallaba con "No se encuentra la
+  // entrevista". Se espera a que React pinte los cambios y se usa la versión al día.
+  const handleTranscribeRef = useRef<(interviewId: string) => Promise<void>>(async () => {})
+  const transcribeWhenSaved = (interviewId: string) => {
+    window.setTimeout(() => { void handleTranscribeRef.current(interviewId) }, 300)
+  }
+
   const handleTranscribe = async (interviewId: string, language?: string) => {
     const interview = interviews.find(i => i.id === interviewId)
     // Estas salidas eran mudas: al pulsar "Transcribir" no pasaba nada y no había
@@ -1570,9 +1718,16 @@ function App() {
     const { filePath: fullPath, systemFilePath: systemPath } = audio
     const candidateName = candidates.find(c => c.id === interview.candidateId)?.name ?? ''
     const interviewerName = (interview.interviewerName || userName || '').trim()
+    // Si se lanza otra transcripción de la misma entrevista (p. ej. una sobre el
+    // audio original y otra sobre el mp3 recién convertido), solo cuenta la última:
+    // un fallo tardío de la primera no puede pisar el texto bueno de la segunda.
+    const runId = (transcribeRunRef.current[interviewId] ?? 0) + 1
+    transcribeRunRef.current[interviewId] = runId
+    const isLatest = () => transcribeRunRef.current[interviewId] === runId
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
     try {
       const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemPath ?? undefined, language: language ?? txLang, candidateName, interviewerName })
+      if (!isLatest()) return
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast(t('Transcripción completada'))
@@ -1580,6 +1735,7 @@ function App() {
       // ha terminado y esto es un adelanto que corre por detrás.
       void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
     } catch (err) {
+      if (!isLatest()) return
       updateInterview(interviewId, { transcriptionStatus: 'error' })
       const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
       if (notifErrors) { const [titulo, detalle] = separarErrorApi(msg, t('Error al transcribir')); toast(titulo, 'error', detalle) }
@@ -1627,6 +1783,9 @@ function App() {
       setPreparingIds(ids => ids.filter(id => id !== interviewId))
     }
   }
+
+  const transcribeRunRef = useRef<Record<string, number>>({})
+  useEffect(() => { handleTranscribeRef.current = handleTranscribe })
 
   const handleGenerateSummary = async (interviewId: string) => {
     const interview = interviews.find(i => i.id === interviewId)
@@ -1873,10 +2032,11 @@ function App() {
     const now = new Date().toISOString()
     const consentAt = candidateConsentDraft ? now : null
     const c: Candidate = { id: uid(), projectId: activeProjectId, createdAt: now, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt }
+    if (isClientProject(activeProjectId)) c.crm = { ...EMPTY_CRM_DEAL, ...candidateCrmDraft, company: activeProject?.name ?? '', contactEmail: c.email }
     setCandidates(curr => [...curr, c])
     setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false)
     if (session) {
-      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: c.createdAt })
+      const { error } = await supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: c.phone, role: c.role, notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: c.consentGiven, consent_at: c.consentAt, created_at: c.createdAt, ...(c.crm ? { crm: c.crm } : {}) })
       if (error) { toast(t('Error guardando perfil: {msg}', { msg: error.message }), 'error'); setCandidates(curr => curr.filter(x => x.id !== c.id)); return }
     }
     toast(t('Perfil {nombre} creado', { nombre: c.name }))
@@ -1886,8 +2046,11 @@ function App() {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
     const prev = candidates.find(x => x.id === editingCandidateId)
     const consentAt = candidateConsentDraft ? (prev?.consentAt ?? new Date().toISOString()) : null
-    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt } : x))
-    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt }).eq('id', editingCandidateId)
+    const crm: CrmDeal | null | undefined = prev && isClientProject(prev.projectId)
+      ? { ...EMPTY_CRM_DEAL, ...(prev.crm ?? {}), ...candidateCrmDraft, company: prev.crm?.company || projects.find(p => p.id === prev.projectId)?.name || '', contactEmail: candidateDraft.email.trim() || prev.crm?.contactEmail || '' }
+      : prev?.crm
+    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt, crm } : x))
+    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt, ...(crm ? { crm } : {}) }).eq('id', editingCandidateId)
       .then(({ error }) => { if (error) toast(t('Error sincronizando perfil: {msg}', { msg: error.message }), 'error') }, () => {})
     setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast(t('Perfil actualizado'))
   }
@@ -1957,18 +2120,22 @@ function App() {
       if (changes.status             !== undefined) db.status              = changes.status
       if (changes.evaluationCriteria !== undefined) db.evaluation_criteria = changes.evaluationCriteria
       if (changes.interviewers       !== undefined) db.interviewers        = changes.interviewers
+      // Ver DbProject.kind: solo viaja si la base ya tiene la columna o hace falta.
+      if (changes.kind === 'clientes' || (changes.kind && projects.find(p => p.id === id)?.kind === 'clientes')) db.kind = changes.kind
       supabase.from('projects').update(db).eq('id', id)
         .then(({ error }) => { if (error) toast(t('Error sincronizando proyecto: {msg}', { msg: error.message }), 'error') }, () => {})
     }
   }
 
+  const ownCompany = () => userCompany.trim() || 'Upskill'
+
   const handleCreateProject = async () => {
     if (!projectDraft.name.trim()) return
-    const p: Project = { id: uid(), ownerId: session?.user.id ?? '', name: projectDraft.name.trim(), company: projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers }
+    const p: Project = { id: uid(), ownerId: session?.user.id ?? '', name: projectDraft.name.trim(), company: projectDraft.kind === 'clientes' ? ownCompany() : projectDraft.company.trim(), createdAt: new Date().toISOString(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers, kind: projectDraft.kind }
     setProjects(c => [...c, p])
     setShowNewProject(false); setProjectDraft(EMPTY_PROJECT)
     if (session) {
-      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, interviewers: p.interviewers, created_at: p.createdAt })
+      const { error } = await supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: p.evaluationCriteria, interviewers: p.interviewers, created_at: p.createdAt, ...(p.kind === 'clientes' ? { kind: p.kind } : {}) })
       if (error) { toast(t('Error guardando proyecto: {msg}', { msg: error.message }), 'error'); setProjects(c => c.filter(x => x.id !== p.id)); return }
     }
     toast(t('Proyecto {nombre} creado', { nombre: p.name }))
@@ -1982,14 +2149,19 @@ function App() {
       toast(t('Esta carpeta no es tuya'), 'warning', t('Solo quien la creó puede cambiar sus datos'))
       setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir(); return
     }
-    updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers })
+    updateProject(editingProjectId, { name: projectDraft.name.trim(), company: projectDraft.kind === 'clientes' ? ownCompany() : projectDraft.company.trim(), status: projectDraft.status, evaluationCriteria: projectDraft.evaluationCriteria, interviewers: projectDraft.interviewers, kind: projectDraft.kind })
     setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir()
     toast(t('Proyecto actualizado'))
   }
 
+  // Con "misma clave" vale la que haya en cualquiera de los dos lados. Copiar solo
+  // de transcripción a resumen borraba la de resumen al cambiar de servicio de
+  // transcripción, porque ese cambio deja su clave en blanco.
+  const sharedKey = () => sttDraft.apiKey || llmDraft.apiKey
+
   const handleSaveSettings = async () => {
-    const nextStt = sttDraft
-    const nextLlm = sameKeyForLlm ? { ...llmDraft, apiKey: sttDraft.apiKey } : llmDraft
+    const nextStt = sameKeyForLlm ? { ...sttDraft, apiKey: sharedKey() } : sttDraft
+    const nextLlm = sameKeyForLlm ? { ...llmDraft, apiKey: sharedKey() } : llmDraft
     if (window.desktopApp?.saveConfig) await window.desktopApp.saveConfig({
       stt: nextStt, llm: nextLlm,
       // Campos antiguos: se siguen escribiendo para que una versión anterior de la
@@ -2036,9 +2208,12 @@ function App() {
   // imposible como "Deepgram + llama-3.3".
   const changeProvider = (kind: 'stt' | 'llm', providerId: string) => {
     const preset = findPreset(kind === 'stt' ? providerCatalog?.stt : providerCatalog?.llm, providerId)
+    // Si el otro motor ya usa este servicio, su clave vale también aquí: así no hay
+    // que pegarla dos veces. Con "custom" no, porque cada uno puede ir a una URL distinta.
+    const other = kind === 'stt' ? llmDraft : sttDraft
     const next: ProviderConfig = {
       provider: providerId,
-      apiKey: '',
+      apiKey: providerId !== 'custom' && other.provider === providerId ? other.apiKey : '',
       model: preset?.models[0] ?? '',
       ...(providerId === 'custom' ? { baseUrl: '', dialect: 'openai' } : {}),
     }
@@ -2048,7 +2223,8 @@ function App() {
 
   const testProvider = async (kind: 'stt' | 'llm') => {
     if (!window.desktopApp?.testProvider) return
-    const draft = kind === 'stt' ? sttDraft : (sameKeyForLlm ? { ...llmDraft, apiKey: sttDraft.apiKey } : llmDraft)
+    const base = kind === 'stt' ? sttDraft : llmDraft
+    const draft = sameKeyForLlm ? { ...base, apiKey: sharedKey() } : base
     const setter = kind === 'stt' ? setSttTest : setLlmTest
     setter('testing')
     try {
@@ -2122,7 +2298,8 @@ function App() {
 
   const resolveAudioPath = useCallback((stored: string | null): string | null => {
     if (!stored) return null
-    if (stored.includes('/') || stored.includes('\\')) return stored // legacy absolute path
+    // Absoluta solo si empieza por unidad o barra: "Proyecto\archivo.mp3" es relativa.
+    if (/^([a-zA-Z]:)?[\\/]/.test(stored)) return stored // legacy absolute path
     return recordingsDir ? `${recordingsDir}\\${stored}` : stored
   }, [recordingsDir])
 
@@ -2433,12 +2610,12 @@ function App() {
                   <div className="plc-body">
                     <div className="plc-top">
                       <div className="plc-info">
-                        <h3 className="plc-title">{p.name}</h3>
+                        <h3 className="plc-title">{p.name}{p.kind === 'clientes' && <span className="kind-badge">{t('Clientes')}</span>}</h3>
                         <p className="plc-meta">{p.company} · {t('Creado {fecha}', { fecha: fs(p.createdAt) })}</p>
                         {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers, kind: p.kind ?? 'entrevistas' }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> {t('Cerrado')}</> : <><DotFilled /> {t('Activo')}</>}
                         </span>
@@ -2446,8 +2623,8 @@ function App() {
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
-                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{t('perfiles')}</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{t('entrevistas')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{vocab(p.kind).peopleLower}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{vocab(p.kind).callsLower}</span></div>
                         <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">{t('transcritas')}</span></div>
                         <div className="plc-stat">
                           <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
@@ -2565,12 +2742,12 @@ function App() {
                   <div className="plc-body">
                     <div className="plc-top">
                       <div className="plc-info">
-                        <h3 className="plc-title">{p.name}</h3>
+                        <h3 className="plc-title">{p.name}{p.kind === 'clientes' && <span className="kind-badge">{t('Clientes')}</span>}</h3>
                         <p className="plc-meta">{p.company} · {t('Creado {fecha}', { fecha: fs(p.createdAt) })}</p>
                         {renderSharedBadge(p)}
                       </div>
                       <div className="plc-top-right" onClick={e => e.stopPropagation()}>
-                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
+                        {esMiProyecto(p) && <button type="button" className="plc-edit-btn" onClick={e => { e.stopPropagation(); setProjectDraft({ name: p.name, company: p.company, status: p.status, evaluationCriteria: p.evaluationCriteria, interviewers: p.interviewers, kind: p.kind ?? 'entrevistas' }); setEditingProjectId(p.id); setShowEditProject(true); limpiarBuscadorCompartir() }}><PencilIcon /> {t('Editar')}</button>}
                         <span className={`plc-badge${isClosed ? ' plc-badge--closed' : ' plc-badge--active'}`}>
                           {isClosed ? <><SquareFilled /> {t('Cerrado')}</> : <><DotFilled /> {t('Activo')}</>}
                         </span>
@@ -2578,8 +2755,8 @@ function App() {
                     </div>
                     <div className="plc-bottom">
                       <div className="plc-stats">
-                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{t('perfiles')}</span></div>
-                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{t('entrevistas')}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{cCnt}</span><span className="plc-stat-lbl">{vocab(p.kind).peopleLower}</span></div>
+                        <div className="plc-stat"><span className="plc-stat-num">{iCnt}</span><span className="plc-stat-lbl">{vocab(p.kind).callsLower}</span></div>
                         <div className="plc-stat"><span className="plc-stat-num">{tCnt}</span><span className="plc-stat-lbl">{t('transcritas')}</span></div>
                         <div className="plc-stat">
                           <span className={`plc-stat-num${!isClosed && pCnt > 0 ? ' plc-stat-num--pending' : ''}${isClosed ? ' plc-stat-num--dim' : ''}`}>{pCnt}</span>
@@ -2610,6 +2787,8 @@ function App() {
 
   const renderProjectDetail = () => {
     if (!activeProject) return null
+    const v = vocab(activeProject.kind)
+    const isCli = activeProject.kind === 'clientes'
     const iCount = interviews.filter(i => projectCandidates.find(c => c.id === i.candidateId)).length
     const tCount = interviews.filter(i => projectCandidates.find(c => c.id === i.candidateId) && i.transcriptionStatus === 'done').length
     return (
@@ -2623,8 +2802,8 @@ function App() {
               <p className="proj-header-sub">{activeProject.company} · {t('Creado {fecha}', { fecha: fs(activeProject.createdAt) })}</p>
             </div>
             <div className="proj-header-stats">
-              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">{t('perfiles')}</span></div>
-              <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">{t('entrevistas')}</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{projectCandidates.length}</span><span className="proj-stat-l">{v.peopleLower}</span></div>
+              <div className="proj-stat"><span className="proj-stat-n">{iCount}</span><span className="proj-stat-l">{v.callsLower}</span></div>
               <div className="proj-stat"><span className="proj-stat-n">{tCount}</span><span className="proj-stat-l">{t('transcritas')}</span></div>
             </div>
             <div className="proj-header-actions">
@@ -2636,7 +2815,7 @@ function App() {
                 onClick={() => void handleDeleteProject(activeProject.id)}
               >
                 {pendingDeleteId === activeProject.id
-                  ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} perfiles)', { n: projectCandidates.length })}</span></>
+                  ? <><CheckIcon /><span className="confirming-label">{v.deletePeople(projectCandidates.length)}</span></>
                   : <TrashIcon />}
               </button>}
             </div>
@@ -2644,6 +2823,13 @@ function App() {
         </div>
 
         {/* Criteria row */}
+        {isCli ? (
+          <div className="proj-criteria-row">
+            <div className="proj-criteria-chips">
+              <span className="criteria-chip criteria-chip--empty">{t('Carpeta de clientes: las llamadas se resumen como reunión comercial y Claude rellena el trato (SPIN, objetivo y próximo paso).')}</span>
+            </div>
+          </div>
+        ) : (
         <div className="proj-criteria-row">
           <div className="proj-criteria-chips">
             {activeProject.evaluationCriteria.length > 0
@@ -2670,10 +2856,11 @@ function App() {
             </div>
           )}
         </div>
+        )}
 
         {/* Tabs */}
         <div className="proj-tabs">
-          <button type="button" className={`proj-tab${projDetailTab === 'perfiles' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('perfiles')}>{t('Perfiles')}</button>
+          <button type="button" className={`proj-tab${projDetailTab === 'perfiles' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('perfiles')}>{v.people}</button>
           <button type="button" className={`proj-tab${projDetailTab === 'analisis' ? ' proj-tab--active' : ''}`} onClick={() => setProjDetailTab('analisis')}>{t('Análisis')}</button>
         </div>
 
@@ -2696,11 +2883,11 @@ function App() {
               <div className="pa-stats-row">
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{projectCandidates.length}</span>
-                  <span className="pa-stat-l">{t('Candidatos')}</span>
+                  <span className="pa-stat-l">{isCli ? t('Contactos') : t('Candidatos')}</span>
                 </div>
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{total}</span>
-                  <span className="pa-stat-l">{t('Entrevistas')}</span>
+                  <span className="pa-stat-l">{v.calls}</span>
                 </div>
                 <div className="pa-stat-card">
                   <span className="pa-stat-n">{total > 0 ? `${Math.round((transcribed / total) * 100)}%` : '—'}</span>
@@ -2729,6 +2916,24 @@ function App() {
                 ))}
               </div>
 
+              {isCli && projectCandidates.length > 0 && (
+                <div className="pa-section">
+                  <h4 className="pa-section-title">{t('Tratos por etapa')}</h4>
+                  {[...DEAL_STAGES.map(st => ({ id: st.id, label: t(st.label), color: st.color })), { id: '', label: t('Sin etapa'), color: '#94a3b8' }].map(st => {
+                    const n = projectCandidates.filter(c => st.id ? c.crm?.stage === st.id : !DEAL_STAGES.some(d => d.id === c.crm?.stage)).length
+                    if (n === 0) return null
+                    return (
+                      <div key={st.id || 'none'} className="pa-funnel-row">
+                        <span className="pa-funnel-label">{st.label}</span>
+                        <div className="pa-funnel-bar-bg">
+                          <div className="pa-funnel-bar-fill" style={{ width: `${bar(n, projectCandidates.length)}%`, background: st.color }} />
+                        </div>
+                        <span className="pa-funnel-val">{n} / {projectCandidates.length}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {(pendingCands.length > 0 || noCands.length > 0) && (
                 <div className="pa-section">
                   <h4 className="pa-section-title">{t('Requieren atención')}</h4>
@@ -2736,7 +2941,7 @@ function App() {
                     <div key={c.id} className="pa-alert-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                       <div className="pa-alert-dot pa-alert-dot--gray" />
                       <span className="pa-alert-name">{c.name}</span>
-                      <span className="pa-alert-tag">{t('Sin entrevista')}</span>
+                      <span className="pa-alert-tag">{v.noCall}</span>
                     </div>
                   ))}
                   {pendingCands.map(c => (
@@ -2773,25 +2978,25 @@ function App() {
           <>
         {/* Section header */}
         <div className="proj-section-header">
-          <h3 className="proj-section-title">{t('Perfiles del proceso')}</h3>
+          <h3 className="proj-section-title">{v.sectionTitle}</h3>
           <div className="proj-section-header-actions">
             <SortSelect value={profilesSort} onChange={changeProfilesSort} />
             <ViewToggle mode={profilesViewMode} onChange={setProfilesViewMode} />
-            <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }}>{t('Nuevo perfil')}</button>
+            <button type="button" className="primary-btn pill-btn" onClick={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setCandidateCrmDraft(EMPTY_CANDIDATE_CRM); setShowNewCandidate(true) }}>{v.newPerson}</button>
           </div>
         </div>
 
         {/* Search */}
         <div className="search-bar">
           <span className="search-icon"><SearchIcon /></span>
-          <input type="text" placeholder={t('Buscar por nombre, email o puesto…')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          <input type="text" placeholder={v.search} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           {searchQuery && <button type="button" className="search-clear" onClick={() => setSearchQuery('')}><CloseIcon size={13} /></button>}
         </div>
 
         {filteredCandidates.length === 0 ? (
           searchQuery
             ? <EmptyState title={t('Sin resultados')} sub={t('No hay perfiles que coincidan con «{texto}».', { texto: searchQuery })} />
-            : <EmptyState icon={<UsersIcon />} title={t('No hay perfiles en este proyecto')} sub={t('Añade tu primer perfil para empezar a grabar y transcribir entrevistas.')} btnLabel={t('Nuevo perfil')} onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setShowNewCandidate(true) }} />
+            : <EmptyState icon={<UsersIcon />} title={v.emptyTitle} sub={v.emptySub} btnLabel={v.newPerson} onBtn={() => { setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false); setCandidateCrmDraft(EMPTY_CANDIDATE_CRM); setShowNewCandidate(true) }} />
         ) : (
           <div className={`pdc-list${profilesViewMode === 'grid' ? ' pdc-list--grid' : ''}`} style={profilesViewMode === 'grid' ? { '--cols': Math.min(3, filteredCandidates.length) } as React.CSSProperties : undefined}>
             {filteredCandidates.map(c => {
@@ -2801,7 +3006,7 @@ function App() {
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
               const statusInfo: [React.ReactNode, string] = last
                 ? hasDone ? [<><DotFilled /> {t('Transcrita')}</>, 'pdc-badge--done'] : hasPending ? [<><DotRing /> {t('Pendiente')}</>, 'pdc-badge--pending'] : [<><DotRing /> {t('Sin transcripción')}</>, 'pdc-badge--pending']
-                : [<><DotRing /> {t('Sin entrevista')}</>, 'pdc-badge--none']
+                : [<><DotRing /> {v.noCall}</>, 'pdc-badge--none']
               return (
                 <div key={c.id} className="pdc-row" onClick={() => goToCandidate(c.id, activeProject.id)}>
                   <div className="pdc-row-accent" />
@@ -2809,14 +3014,14 @@ function App() {
                     <div className="pdc-row-avatar">{initials(c.name)}</div>
                     <div className="pdc-row-info">
                       <span className="pdc-row-name">{c.name}</span>
-                      <span className="pdc-row-meta">{c.email}{last ? ` · ${t('Última entrevista: {fecha}', { fecha: fs(last.createdAt) })}` : c.role ? ` · ${c.role}` : ''}</span>
+                      <span className="pdc-row-meta">{c.email}{last ? ` · ${v.lastCall(fs(last.createdAt))}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
-                    {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
+                    {isClientProject(c.projectId) ? <DealStagePill stage={c.crm?.stage} /> : c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
-                      <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} entrevistas)', { n: interviews.filter(i => i.candidateId === c.id).length })}</span></> : <TrashIcon />}</button>
-                      <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>{t('Ver entrevistas')}</button>
+                      <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(c)); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                      <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{vocabFor(c.projectId).deleteCalls(interviews.filter(i => i.candidateId === c.id).length)}</span></> : <TrashIcon />}</button>
+                      <button type="button" className="pdc-open-btn" onClick={() => goToCandidate(c.id, activeProject.id)}>{vocabFor(c.projectId).openCalls}</button>
                     </div>
                   </div>
                 </div>
@@ -2864,7 +3069,7 @@ function App() {
               const hasPending = ci.some(i => i.transcriptionStatus === 'pending')
               const [statusLabel, statusCls] = last
                 ? hasDone ? [<><DotFilled /> {t('Transcrita')}</>, 'status-done'] : hasPending ? [<><DotRing /> {t('Pendiente')}</>, 'status-pending'] : [<><DotRing /> {t('Sin transcripción')}</>, 'status-pending']
-                : [<><DotRing /> {t('Sin entrevista')}</>, 'status-none']
+                : [<><DotRing /> {vocabFor(c.projectId).noCall}</>, 'status-none']
               return (
                 <div key={c.id} className="ctr" onClick={() => goToCandidate(c.id, c.projectId, 'all')}>
                   <div className="ctr-avatar">{initials(c.name)}</div>
@@ -2873,18 +3078,178 @@ function App() {
                     <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · ${t('Última: {fecha}', { fecha: fs(last.createdAt) })}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
-                  {c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
+                  {isClientProject(c.projectId) ? <DealStagePill stage={c.crm?.stage} /> : c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
-                    <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
-                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? t('¿Confirmar eliminación?') : t('Eliminar perfil')} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{t('Eliminar ({n} entrevistas)', { n: interviews.filter(i => i.candidateId === c.id).length })}</span></> : <TrashIcon />}</button>
+                    <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(c)); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                    <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} title={pendingDeleteId === c.id ? t('¿Confirmar eliminación?') : t('Eliminar perfil')} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{vocabFor(c.projectId).deleteCalls(interviews.filter(i => i.candidateId === c.id).length)}</span></> : <TrashIcon />}</button>
                   </div>
-                  <button type="button" className="ctr-open">{t('Ver entrevistas')} <ArrowRightIcon size={12} /></button>
+                  <button type="button" className="ctr-open">{vocabFor(c.projectId).openCalls} <ArrowRightIcon size={12} /></button>
                 </div>
               )
             })}
           </div>
         )}
+      </div>
+    )
+  }
+
+  // ── CRM de Orbit ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    void window.desktopApp?.getCrmConfig?.().then(cfg => { setCrmConfig(cfg); setCrmConfigDraft(cfg) }).catch(() => {})
+  }, [])
+
+  const handleSaveCrmConfig = async () => {
+    if (!crmConfigDraft || !window.desktopApp?.saveCrmConfig) return
+    const saved = await window.desktopApp.saveCrmConfig(crmConfigDraft)
+    setCrmConfig(saved); setCrmConfigDraft(saved)
+    toast(t('Conexión con el CRM guardada'))
+  }
+
+  const updateCandidateCrm = (candidateId: string, patch: Partial<CrmDeal>) => {
+    const current = candidates.find(c => c.id === candidateId)
+    if (!current) return
+    const crm: CrmDeal = { ...EMPTY_CRM_DEAL, ...(current.crm ?? {}), ...patch }
+    setCandidates(c => c.map(x => x.id === candidateId ? { ...x, crm } : x))
+    if (session) {
+      supabase.from('candidates').update({ crm }).eq('id', candidateId)
+        .then(({ error }) => { if (error) toast(t('Error sincronizando el trato: {msg}', { msg: error.message }), 'error', t('Falta ejecutar supabase-migration-clientes.sql')) }, () => {})
+    }
+  }
+
+  // Un enlace calltranscriber://deal/… abre la ficha de ese trato. Si no existe se
+  // crea en la primera carpeta de clientes (o en una nueva), con lo que trae el enlace.
+  const openDealFromLink = (deal: CrmDealLink) => {
+    const existing = candidates.find(c => c.crm?.dealId === deal.dealId)
+    if (existing) { goToCandidate(existing.id, existing.projectId); setActiveTab('crm'); return }
+    // La carpeta es la empresa del trato; dentro va la persona. Se reconoce por el
+    // nombre, sin distinguir mayúsculas, para no duplicarla si ya la creaste a mano.
+    const companyName = deal.company.trim() || t('Clientes (CRM)')
+    let project = projects.find(p => p.kind === 'clientes' && p.name.trim().toLowerCase() === companyName.toLowerCase())
+    if (!project) {
+      project = { id: uid(), ownerId: session?.user.id ?? '', name: companyName, company: ownCompany(), createdAt: new Date().toISOString(), status: 'active', evaluationCriteria: [], interviewers: [], kind: 'clientes' }
+      const p = project
+      setProjects(c => [...c, p])
+      if (session) void supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: [], interviewers: [], created_at: p.createdAt, kind: 'clientes' })
+    }
+    const now = new Date().toISOString()
+    const crm: CrmDeal = { ...EMPTY_CRM_DEAL, dealId: deal.dealId, company: deal.company, contactEmail: deal.email, linkedinUrl: deal.linkedin, stage: deal.stage }
+    const c: Candidate = { id: uid(), projectId: project.id, createdAt: now, name: deal.name || deal.company || t('Trato sin nombre'), email: deal.email, phone: '', role: '', notes: '', candidateStatus: 'pendiente', consentGiven: false, consentAt: null, crm }
+    setCandidates(curr => [...curr, c])
+    if (session) void supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: '', role: c.role, notes: '', candidate_status: 'pendiente', consent_given: false, consent_at: null, created_at: now, crm })
+    goToCandidate(c.id, project.id); setActiveTab('crm')
+    toast(t('Trato abierto desde el CRM: {nombre}', { nombre: c.name }))
+  }
+
+  // Los avisos del enlace llegan a una suscripción creada una sola vez, así que
+  // se llama siempre a la versión al día (con los proyectos y perfiles actuales).
+  const openDealRef = useRef(openDealFromLink)
+  useEffect(() => { openDealRef.current = openDealFromLink })
+  useEffect(() => window.desktopApp?.onOpenDeal?.(deal => openDealRef.current(deal)), [])
+  // Si la app se abrió desde el enlace, se espera a tener los datos cargados.
+  const pendingDealTakenRef = useRef(false)
+  useEffect(() => {
+    if (pendingDealTakenRef.current || (!localDataLoaded.current && !session)) return
+    pendingDealTakenRef.current = true
+    void window.desktopApp?.takePendingDeal?.().then(deal => { if (deal) openDealRef.current(deal) })
+  }, [projects, candidates, session])
+
+  const handleSendToCrm = async (candidateId: string, interviewId: string) => {
+    const cand = candidates.find(c => c.id === candidateId)
+    const iv = interviews.find(i => i.id === interviewId)
+    if (!cand || !iv || !window.desktopApp?.analyzeAndSendToCrm) return
+    const transcript = (iv.transcriptEdited || iv.transcriptOriginal).trim()
+    if (iv.transcriptionStatus !== 'done' || !transcript) { toast(t('Transcribe primero la llamada'), 'warning'); return }
+    const deal: CrmDeal = { ...EMPTY_CRM_DEAL, ...(cand.crm ?? {}) }
+    setCrmBusyCandidateId(cand.id)
+    try {
+      const r = await window.desktopApp.analyzeAndSendToCrm({
+        interviewId: iv.id, candidateName: cand.name, deal, transcript,
+        callAt: new Date(iv.createdAt).getTime(), callDate: new Date(iv.createdAt).toLocaleDateString(locale()),
+        durationMin: Math.round(iv.durationSec / 60),
+      })
+      // Solo se rellenan los huecos: lo que ya estaba escrito en el trato no se pisa.
+      const patch: Partial<CrmDeal> = { nota: r.analysis.nota }
+      for (const f of CRM_FIELDS) if (!deal[f.id].trim() && r.analysis[f.id]) patch[f.id] = r.analysis[f.id]
+      if (r.sent) patch.lastSentAt = new Date().toISOString()
+      updateCandidateCrm(cand.id, patch)
+      if (!iv.summaryText.trim()) updateInterview(iv.id, { summaryText: r.analysis.nota, summaryStatus: 'done', summaryContext: 'reunion' })
+      if (r.sent) toast(t('Llamada enviada al CRM'), 'success', t('Revisa el trato en el CRM'))
+      else toast(t('Trato rellenado en la app'), 'warning', r.sendError ?? undefined)
+    } catch (err) {
+      toast(t('No se pudo analizar la llamada'), 'error', err instanceof Error ? limpiarErrorIpc(err.message) : undefined)
+    } finally {
+      setCrmBusyCandidateId(null)
+    }
+  }
+
+  const renderCrmTab = () => {
+    if (!activeCandidate) return null
+    const cand = activeCandidate
+    const deal: CrmDeal = { ...EMPTY_CRM_DEAL, ...(cand.crm ?? {}) }
+    const transcribed = candidateInterviews.filter(i => i.transcriptionStatus === 'done')
+    const callId = transcribed.some(i => i.id === crmInterviewId) ? crmInterviewId : transcribed[0]?.id ?? null
+    const busy = crmBusyCandidateId === cand.id
+    const crmReady = !!(crmConfig?.apiUrl && crmConfig?.apiKey)
+    // Sin estado propio por campo: se guarda al salir del cuadro. La `key` cambia
+    // con el valor guardado, así lo que rellena Claude aparece sin recargar.
+    const field = (id: keyof CrmDeal, label: string, multiline = false) => {
+      const value = String(deal[id] ?? '')
+      const save = (v: string) => { if (v !== value) updateCandidateCrm(cand.id, { [id]: v }) }
+      return (
+        <div className="modal-field" key={id}>
+          <span className="modal-field-label">{label}</span>
+          {multiline
+            ? <textarea key={`${cand.id}-${id}-${value}`} className="modal-input modal-input--figma crm-textarea" defaultValue={value} onBlur={e => save(e.target.value)} />
+            : <input key={`${cand.id}-${id}-${value}`} type="text" className="modal-input modal-input--figma" defaultValue={value} onBlur={e => save(e.target.value)} />}
+        </div>
+      )
+    }
+    return (
+      <div className="crm-tab">
+        <div className="crm-card">
+          <h3 className="rec-section-title">{t('Enviar una llamada al CRM')}</h3>
+          {transcribed.length === 0 ? (
+            <p className="cfg-field-desc">{t('Todavía no hay ninguna llamada transcrita. Graba o importa la llamada, transcríbela y vuelve aquí.')}</p>
+          ) : (
+            <div className="crm-send-row">
+              <Select
+                className="cfg-select"
+                value={callId ?? ''}
+                onChange={setCrmInterviewId}
+                options={transcribed.map(i => ({ value: i.id, label: `${i.sessionName || t('Llamada')} · ${new Date(i.createdAt).toLocaleDateString(locale())}` }))}
+              />
+              <button type="button" className="primary-btn pill-btn" disabled={busy || !callId} onClick={() => { if (callId) void handleSendToCrm(cand.id, callId) }}>
+                {busy ? t('Claude está analizando la llamada…') : t('Enviar al CRM')}
+              </button>
+            </div>
+          )}
+          <p className="cfg-field-desc">
+            {crmReady
+              ? t('Claude lee la llamada con el contexto de Orbit, rellena los campos vacíos y deja la nota en el CRM. Lo que ya está escrito no se toca.')
+              : t('Sin clave del CRM: Claude rellena el trato aquí, pero no se envía.')}
+            {!crmReady && <> <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>{t('Conectar el CRM')} <ArrowRightIcon size={12} /></button></>}
+          </p>
+          {deal.lastSentAt && <p className="cfg-field-desc">{t('Último envío: {fecha}', { fecha: new Date(deal.lastSentAt).toLocaleString(locale()) })}</p>}
+        </div>
+
+        <div className="crm-card">
+          <h3 className="rec-section-title">{t('Trato')}</h3>
+          <div className="modal-row-2">{field('company', t('Empresa'))}<div className="modal-field"><span className="modal-field-label">{t('Etapa')}</span><Select className="modal-input modal-input--figma modal-select" value={deal.stage} onChange={st => updateCandidateCrm(cand.id, { stage: st })} options={stageOptions(deal.stage)} /></div></div>
+          <div className="modal-row-2">{field('contactEmail', t('Email del contacto'))}{field('linkedinUrl', 'LinkedIn')}</div>
+          {deal.dealId && <p className="cfg-field-desc">{t('Id del trato en el CRM: {id}', { id: deal.dealId })}</p>}
+        </div>
+
+        <div className="crm-card">
+          <h3 className="rec-section-title">{t('Campos del trato')}</h3>
+          {CRM_FIELDS.map(f => field(f.id, t(f.label), true))}
+          {deal.nota && (
+            <div className="modal-field">
+              <span className="modal-field-label">{t('Nota de la última llamada')}</span>
+              <div className="crm-note">{deal.nota}</div>
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -2926,16 +3291,16 @@ function App() {
               <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? t('Consentimiento registrado el {fecha}', { fecha: new Date(activeCandidate.consentAt).toLocaleString(locale()) }) : t('Sin consentimiento registrado')}>
                 {activeCandidate.consentGiven ? <><LockIcon size={12} /> {t('Consentimiento')}</> : <><WarnTriangle /> {t('Sin consentimiento')}</>}
               </span>
-              {activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
+              {isClientProject(activeCandidate.projectId) ? <DealStagePill stage={activeCandidate.crm?.stage} /> : activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
-                <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
+                <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(activeCandidate)); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
               </div>
             </div>
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', <><MicIcon /> {t('Entrevistas')}</>], ['transcripcion', <><DocIcon /> {t('Transcripción')}</>], ['resumen', <><StarIcon /> {t('Resumen IA')}</>]] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
+          {([['entrevistas', <><MicIcon /> {vocabFor(activeCandidate.projectId).calls}</>], ['transcripcion', <><DocIcon /> {t('Transcripción')}</>], ['resumen', <><StarIcon /> {t('Resumen IA')}</>], ...(isClientProject(activeCandidate.projectId) ? [['crm', <><BriefcaseIcon /> {t('Trato CRM')}</>]] : [])] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
             <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => {
               setActiveTab(tab)
               const iv = tab === 'resumen' ? interviews.find(i => i.id === selectedInterviewId) : null
@@ -2950,12 +3315,14 @@ function App() {
         {activeTab === 'entrevistas' && renderInterviewsTab()}
         {activeTab === 'transcripcion' && renderTranscriptTab()}
         {activeTab === 'resumen' && renderSummaryTab()}
+        {activeTab === 'crm' && renderCrmTab()}
       </div>
     )
   }
 
   const renderInterviewsTab = () => {
     const ivProject = activeCandidate ? projects.find(p => p.id === activeCandidate.projectId) ?? null : null
+    const v = vocab(ivProject?.kind)
     return (
     <div className="interviews-tab">
       {!sttReady && (
@@ -2982,7 +3349,7 @@ function App() {
         </div>
       </div>
       {candidateInterviews.length === 0 ? (
-        <EmptyState icon={<MicIcon />} title={t('No hay grabaciones todavía')} sub={t('Graba la primera entrevista con {nombre} para empezar', { nombre: activeCandidate?.name ?? t('el perfil') })} btnLabel={t('Nueva grabación')} onBtn={handleNewRecording} />
+        <EmptyState icon={<MicIcon />} title={t('No hay grabaciones todavía')} sub={v.firstRec(activeCandidate?.name ?? t('el perfil'))} btnLabel={t('Nueva grabación')} onBtn={handleNewRecording} />
       ) : (
         <>
           {candidateInterviews.length > 2 && (
@@ -3024,19 +3391,19 @@ function App() {
                     {(ivProject?.interviewers.length ?? 0) > 0 ? (
                       <Select
                         className={`rec-row-interviewer-select${iv.interviewerName ? '' : ' rec-row-interviewer-select--empty'}`}
-                        title={t('Entrevistador de esta llamada')}
+                        title={v.callerOf}
                         value={iv.interviewerName || ''}
                         onChange={v => updateInterview(iv.id, { interviewerName: v })}
-                        options={[{ value: '', label: t('Sin entrevistador') }, ...(ivProject?.interviewers ?? []).map(name => ({ value: name, label: name }))]}
+                        options={[{ value: '', label: v.noCaller }, ...(ivProject?.interviewers ?? []).map(name => ({ value: name, label: name }))]}
                       />
                     ) : (
                       <button
                         type="button"
                         className="rec-row-interviewer-select rec-row-interviewer-select--empty rec-row-interviewer-link"
-                        title={t('Este proyecto no tiene entrevistadores. Se dan de alta en el proyecto.')}
-                        onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers }); setEditingProjectId(ivProject.id); setShowEditProject(true); limpiarBuscadorCompartir() } }}
+                        title={v.noCallersHint}
+                        onClick={() => { if (ivProject) { setProjectDraft({ name: ivProject.name, company: ivProject.company, status: ivProject.status, evaluationCriteria: ivProject.evaluationCriteria, interviewers: ivProject.interviewers, kind: ivProject.kind ?? 'entrevistas' }); setEditingProjectId(ivProject.id); setShowEditProject(true); limpiarBuscadorCompartir() } }}
                       >
-                        {t('Añádelos en el proyecto')}
+                        {v.addCallers}
                       </button>
                     )}
                   </span>
@@ -3553,6 +3920,33 @@ function App() {
               {renderEngineSection('stt')}
               {renderEngineSection('llm')}
               <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
+              {crmConfigDraft && (
+                <div className="settings-section">
+                  <div className="settings-section-label">{t('CRM DE ORBIT')}</div>
+                  <div className="settings-section-divider" />
+                  <p className="cfg-field-desc">{t('Para mandar las llamadas comerciales al CRM. La clave se crea en el CRM, en Connections → Inbound API, y se guarda solo en este equipo.')}</p>
+                  <div className="cfg-field">
+                    <span className="cfg-field-label">{t('Dirección de la API')}</span>
+                    <input type="text" className="cfg-input" value={crmConfigDraft.apiUrl} placeholder="https://….convex.site" onChange={e => setCrmConfigDraft(d => d && ({ ...d, apiUrl: e.target.value }))} />
+                    <p className="cfg-field-desc">{t('La del CRM que acaba en .convex.site')}</p>
+                  </div>
+                  <div className="cfg-field">
+                    <span className="cfg-field-label">{t('Clave de la API')}</span>
+                    <input type="password" className="cfg-input" value={crmConfigDraft.apiKey} placeholder="gtm_…" onChange={e => setCrmConfigDraft(d => d && ({ ...d, apiKey: e.target.value }))} />
+                  </div>
+                  <div className="cfg-field">
+                    <span className="cfg-field-label">{t('Carpeta del proyecto de Orbit')}</span>
+                    <input type="text" className="cfg-input" value={crmConfigDraft.orbitDir} placeholder="" onChange={e => setCrmConfigDraft(d => d && ({ ...d, orbitDir: e.target.value }))} />
+                    <p className="cfg-field-desc">{t('Claude se abre aquí para leer el contexto antes de rellenar el trato')}</p>
+                  </div>
+                  <div className="cfg-field">
+                    <span className="cfg-field-label">{t('Carpeta de tu memoria')}</span>
+                    <input type="text" className="cfg-input" value={crmConfigDraft.vaultDir} placeholder="" onChange={e => setCrmConfigDraft(d => d && ({ ...d, vaultDir: e.target.value }))} />
+                    <p className="cfg-field-desc">{t('Las notas de leads, guiones e ICP que Claude consulta')}</p>
+                  </div>
+                  <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveCrmConfig()}>{t('Guardar conexión con el CRM')}</button></div>
+                </div>
+              )}
             </div>
           )}
           {settingsTab === 'grabacion' && (
@@ -4025,14 +4419,14 @@ function App() {
                   <button type="button" className="chip-remove-btn" title={t('Quitar')} onClick={() => onChange(interviewersList.filter(n => n !== name))}><CloseIcon size={13} /></button>
                 </span>
               ))
-            : <span className="interviewer-chip interviewer-chip--empty">{t('Sin entrevistadores todavía')}</span>
+            : <span className="interviewer-chip interviewer-chip--empty">{projectDraft.kind === 'clientes' ? t('Sin comerciales todavía') : t('Sin entrevistadores todavía')}</span>
           }
         </div>
         <div className="interviewer-add-row">
           <input
             type="text"
             className="modal-input modal-input--figma"
-            placeholder={t('Nombre del entrevistador…')}
+            placeholder={projectDraft.kind === 'clientes' ? t('Nombre del comercial…') : t('Nombre del entrevistador…')}
             value={newInterviewerDraft}
             onChange={e => setNewInterviewerDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addInterviewer() } }}
@@ -4042,6 +4436,23 @@ function App() {
       </>
     )
   }
+
+  // Entrevistas o clientes: cambia qué se rellena en cada perfil (evaluación del
+  // candidato o trato del CRM) y el enfoque por defecto de los resúmenes.
+  const projectKindField = (
+    <div className="modal-field">
+      <span className="modal-field-label">{t('Tipo de carpeta')}</span>
+      <Select
+        className="modal-input modal-input--figma modal-select"
+        value={projectDraft.kind}
+        onChange={v => setProjectDraft(d => ({ ...d, kind: v === 'clientes' ? 'clientes' : 'entrevistas' }))}
+        options={[
+          { value: 'entrevistas', label: t('Entrevistas a candidatos') },
+          { value: 'clientes', label: t('Clientes · llamadas comerciales (CRM)') },
+        ]}
+      />
+    </div>
+  )
 
   const renderRecordingScreen = () => {
     if (!activeRecordingInterview) return null
@@ -4062,7 +4473,7 @@ function App() {
           <div className={`rec-badge${isRecording ? '' : ' rec-badge--paused'}`}>
             {isRecording ? <><DotFilled /> {t('EN GRABACIÓN')}</> : <><PauseIconSm size={11} /> {t('EN PAUSA')}</>}
           </div>
-          <div className="rec-screen-timer">{fmt(activeRecordingInterview.durationSec)}</div>
+          <div className="rec-screen-timer">{fmt(liveRecordingSec ?? activeRecordingInterview.durationSec)}</div>
           {contextLabel && <p className="rec-screen-context">{contextLabel}</p>}
           <div className="rec-screen-separator" />
           <div className="rec-waveform">
@@ -4126,7 +4537,7 @@ function App() {
     const exportText = allCandidatesToExport.map(cand => {
       const ci = interviews.filter(i => i.candidateId === cand.id && (i.transcriptionStatus === 'done' || i.summaryStatus === 'done'))
       if (ci.length === 0) return `# ${cand.name}\n${t('Sin entrevistas transcritas.')}`
-      return `# ${cand.name}\n${cand.role ? `${t('Puesto')}: ${cand.role}\n` : ''}${cand.email ? `Email: ${cand.email}\n` : ''}\n` +
+      return `# ${cand.name}\n${cand.role ? `${t('Puesto')}: ${cand.role}\n` : ''}${cand.crm?.company ? `${t('Empresa')}: ${cand.crm.company}\n` : ''}${cand.email ? `Email: ${cand.email}\n` : ''}\n` +
         ci.map(i => {
           let out = `## ${i.sessionName || fd(i.createdAt)}\n`
           if (i.summaryText) out += `### ${t('Resumen IA')}\n${i.summaryText}\n`
@@ -4393,11 +4804,11 @@ function App() {
           <div className="modal-box" onClick={e => e.stopPropagation()}>
             <h2>{t('Nombrar sesión')}</h2>
             <p>{t('¿Cómo quieres llamar a esta sesión?')}</p>
-            <label className="modal-label">{t('Nombre')}<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder={t('Ej: Primera entrevista técnica (opcional)')} autoFocus /></label>
+            <label className="modal-label">{t('Nombre')}<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder={vocab(sessionModalProject?.kind).sessionPlaceholder} autoFocus /></label>
             {/* Quién ha llevado la llamada, en caliente y recién terminada. Se puede
                 cambiar luego desde la lista de grabaciones. */}
             {sessionModalProject && sessionModalProject.interviewers.length > 0 && (
-              <label className="modal-label">{t('Entrevistador')}
+              <label className="modal-label">{vocab(sessionModalProject.kind).caller}
                 <Select
                   className="modal-input"
                   value={sessionInterviewerDraft}
@@ -4424,13 +4835,13 @@ function App() {
       )}
 
       {/* Candidate modal */}
-      {(showNewCandidate || editingCandidateId !== null) && (
+      {(showNewCandidate || editingCandidateId !== null) && (() => { const cmKind = candidateModalKind(); const cmv = vocab(cmKind); const cmCli = cmKind === 'clientes'; return (
         <div className="modal-overlay" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">{editingCandidateId ? t('Editar perfil') : t('Nuevo perfil')}</h2>
-                <p className="modal-subtitle">{t('Añade los datos de la persona a entrevistar')}</p>
+                <h2 className="modal-title">{editingCandidateId ? cmv.editPerson : cmv.newPerson}</h2>
+                <p className="modal-subtitle">{cmv.personSub}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}><CloseIcon size={13} /></button>
             </div>
@@ -4451,12 +4862,24 @@ function App() {
             </div>
             <div className="modal-field">
               <span className="modal-field-label">{t('Cargo')}</span>
-              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={t('Ej: Desarrollador Frontend')} />
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={cmCli ? t('Ej: Directora de operaciones') : t('Ej: Desarrollador Frontend')} />
             </div>
+            {cmCli && (
+              <div className="modal-field">
+                  <span className="modal-field-label">LinkedIn</span>
+                  <input type="text" className="modal-input modal-input--figma" value={candidateCrmDraft.linkedinUrl} onChange={e => setCandidateCrmDraft(d => ({ ...d, linkedinUrl: e.target.value }))} placeholder="https://linkedin.com/in/…" />
+                </div>
+            )}
             <div className="modal-field">
               <span className="modal-field-label">{t('Notas previas (opcional)')}</span>
-              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
+              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={cmCli ? t('De dónde viene el lead, qué sabemos de su empresa, puntos a tratar…') : t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
             </div>
+            {cmCli ? (
+              <div className="modal-field">
+                <span className="modal-field-label">{t('Etapa del trato')}</span>
+                <Select className="modal-input modal-input--figma modal-select" value={candidateCrmDraft.stage} onChange={st => setCandidateCrmDraft(d => ({ ...d, stage: st }))} options={stageOptions(candidateCrmDraft.stage)} />
+              </div>
+            ) : (
             <div className="modal-field">
               <span className="modal-field-label">{t('Estado')}</span>
               <Select
@@ -4471,20 +4894,21 @@ function App() {
                 ]}
               />
             </div>
+            )}
             <div className="modal-field">
               <label className="consent-check">
                 <input type="checkbox" checked={candidateConsentDraft} onChange={e => setCandidateConsentDraft(e.target.checked)} />
-                <span>{t('El candidato ha sido informado y consiente la grabación, transcripción y tratamiento de la entrevista (incluido su envío a servicios de IA en EE. UU.) conforme a la política de privacidad.')}</span>
+                <span>{cmv.consent}</span>
               </label>
             </div>
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>{t('Cancelar')}</button>
-              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> {t('Guardar cambios')}</> : <><UserIcon /> {t('Añadir perfil')}</>}</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> {t('Guardar cambios')}</> : <><UserIcon /> {cmv.addPerson}</>}</button>
             </div>
           </div>
         </div>
-      )}
+      )})()}
 
       {/* Audio setup modal */}
       {showAudioSetupModal && (
@@ -4599,21 +5023,25 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">{t('Nuevo proyecto')}</h2>
-                <p className="modal-subtitle">{t('Define el proceso de selección que vas a gestionar')}</p>
+                <h2 className="modal-title">{projectDraft.kind === 'clientes' ? t('Nuevo cliente') : t('Nuevo proyecto')}</h2>
+                <p className="modal-subtitle">{projectDraft.kind === 'clientes' ? t('La empresa a la que vas a venderle: dentro irán las personas con las que hablas y sus llamadas') : t('Define el proceso de selección que vas a gestionar')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
+            {projectKindField}
             <div className="modal-field">
-              <span className="modal-field-label">{t('Nombre del proyecto *')}</span>
-              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Administrativo/a de oficina')} autoFocus />
+              <span className="modal-field-label">{projectDraft.kind === 'clientes' ? t('Nombre de la empresa *') : t('Nombre del proyecto *')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={projectDraft.kind === 'clientes' ? t('Ej: Talento Norte S.L.') : t('Ej: Administrativo/a de oficina')} autoFocus />
             </div>
             <div className="modal-row-2">
+              {projectDraft.kind !== 'clientes' && (
               <div className="modal-field">
                 <span className="modal-field-label">{t('Empresa / Cliente *')}</span>
                 <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder={t('Ej: Empresa Ejemplo S.L.')} />
               </div>
+              )}
+              {projectDraft.kind !== 'clientes' && (
               <div className="modal-field">
                 <span className="modal-field-label">{t('Tipo de proceso')}</span>
                 <Select
@@ -4628,7 +5056,9 @@ function App() {
                   ]}
                 />
               </div>
+              )}
             </div>
+            {projectDraft.kind !== 'clientes' && (
             <div className="modal-field">
               <span className="modal-field-label">{t('Criterios de evaluación del resumen')}</span>
               <p className="modal-field-hint">{t('Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato')}</p>
@@ -4637,9 +5067,10 @@ function App() {
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
               )}
             </div>
+            )}
             <div className="modal-field">
-              <span className="modal-field-label">{t('Entrevistadores')}</span>
-              <p className="modal-field-hint">{t('Personas de tu equipo que pueden llevar una llamada de este proyecto')}</p>
+              <span className="modal-field-label">{vocab(projectDraft.kind).callers}</span>
+              <p className="modal-field-hint">{vocab(projectDraft.kind).callersHint}</p>
               {renderInterviewerEditor(
                 projectDraft.interviewers,
                 updated => setProjectDraft(d => ({ ...d, interviewers: updated }))
@@ -4648,7 +5079,7 @@ function App() {
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewProject(false); setProjectDraft(EMPTY_PROJECT);  }}>{t('Cancelar')}</button>
-              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>{t('Crear proyecto')}</button>
+              <button type="button" className="modal-action-btn" onClick={handleCreateProject} disabled={!projectDraft.name.trim()}>{projectDraft.kind === 'clientes' ? t('Crear cliente') : t('Crear proyecto')}</button>
             </div>
           </div>
         </div>
@@ -4660,21 +5091,24 @@ function App() {
           <div className="modal-box modal-box--figma" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h2 className="modal-title">{t('Editar proyecto')}</h2>
-                <p className="modal-subtitle">{t('Modifica los datos y criterios del proyecto')}</p>
+                <h2 className="modal-title">{projectDraft.kind === 'clientes' ? t('Editar cliente') : t('Editar proyecto')}</h2>
+                <p className="modal-subtitle">{projectDraft.kind === 'clientes' ? t('Modifica los datos de la carpeta') : t('Modifica los datos y criterios del proyecto')}</p>
               </div>
               <button type="button" className="modal-close" onClick={() => { setShowEditProject(false); setEditingProjectId(null); setProjectDraft(EMPTY_PROJECT); limpiarBuscadorCompartir() }}><CloseIcon size={13} /></button>
             </div>
             <div className="modal-header-divider" />
+            {projectKindField}
             <div className="modal-field">
-              <span className="modal-field-label">{t('Nombre del proyecto *')}</span>
-              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Administrativo/a de oficina')} autoFocus />
+              <span className="modal-field-label">{projectDraft.kind === 'clientes' ? t('Nombre de la empresa *') : t('Nombre del proyecto *')}</span>
+              <input type="text" className="modal-input modal-input--figma" value={projectDraft.name} onChange={e => setProjectDraft(d => ({ ...d, name: e.target.value }))} placeholder={projectDraft.kind === 'clientes' ? t('Ej: Talento Norte S.L.') : t('Ej: Administrativo/a de oficina')} autoFocus />
             </div>
             <div className="modal-row-2">
+              {projectDraft.kind !== 'clientes' && (
               <div className="modal-field">
                 <span className="modal-field-label">{t('Empresa / Cliente')}</span>
                 <input type="text" className="modal-input modal-input--figma" value={projectDraft.company} onChange={e => setProjectDraft(d => ({ ...d, company: e.target.value }))} placeholder={t('Ej: Empresa Ejemplo S.L.')} />
               </div>
+              )}
               <div className="modal-field">
                 <span className="modal-field-label">{t('Estado')}</span>
                 <Select
@@ -4688,6 +5122,7 @@ function App() {
                 />
               </div>
             </div>
+            {projectDraft.kind !== 'clientes' && (
             <div className="modal-field">
               <span className="modal-field-label">{t('Criterios de evaluación del resumen')}</span>
               <p className="modal-field-hint">{t('Selecciona qué aspectos quieres que se analicen en el resumen de cada candidato')}</p>
@@ -4696,9 +5131,10 @@ function App() {
                 updated => setProjectDraft(d => ({ ...d, evaluationCriteria: updated }))
               )}
             </div>
+            )}
             <div className="modal-field">
-              <span className="modal-field-label">{t('Entrevistadores')}</span>
-              <p className="modal-field-hint">{t('Personas de tu equipo que pueden llevar una llamada de este proyecto')}</p>
+              <span className="modal-field-label">{vocab(projectDraft.kind).callers}</span>
+              <p className="modal-field-hint">{vocab(projectDraft.kind).callersHint}</p>
               {renderInterviewerEditor(
                 projectDraft.interviewers,
                 updated => setProjectDraft(d => ({ ...d, interviewers: updated }))

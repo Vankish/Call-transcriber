@@ -1,6 +1,7 @@
 type SaveRecordingPayload = {
   interviewId: string
   candidateName: string
+  projectName?: string
   createdAt: string
   extension: string
   audioBytes: Uint8Array
@@ -18,8 +19,41 @@ type SaveRecordingResult = {
 type SaveVideoRecordingPayload = {
   interviewId: string
   candidateName: string
+  projectName?: string
   createdAt: string
   videoBytes: Uint8Array
+}
+
+/** Una pista que se va escribiendo a disco mientras se graba. */
+type OpenRecordingStreamPayload = {
+  interviewId: string
+  candidateName: string
+  projectName?: string
+  createdAt: string
+  kind: 'mix' | 'system' | 'video'
+  extension: string
+}
+
+/** Conexión con el CRM de Orbit. Vive en un archivo local aparte, nunca en la nube. */
+type CrmConfig = { apiUrl: string; apiKey: string; orbitDir: string; vaultDir: string }
+
+/** Lo que trae un enlace calltranscriber://deal/<id> desde el botón del CRM. */
+type CrmDealLink = { dealId: string; name: string; company: string; email: string; linkedin: string; stage: string }
+
+/** Campos del trato que Claude rellena a partir de la llamada, más la nota. */
+type CrmAnalysis = {
+  spinSituation: string; spinProblem: string; spinImplication: string; spinNeedPayoff: string
+  singleSalesObjective: string; nextStep: string; nota: string
+}
+
+type CrmAnalyzePayload = {
+  interviewId: string
+  candidateName: string
+  deal: { company: string; contactEmail: string; linkedinUrl: string } & Partial<CrmAnalysis>
+  transcript: string
+  callAt: number
+  callDate: string
+  durationMin: number
 }
 
 type CaptureSourceOption = {
@@ -181,6 +215,14 @@ interface Window {
     convertRecording: (payload: ConvertRecordingPayload) => Promise<SaveRecordingResult>
     saveVideoRecording: (payload: SaveVideoRecordingPayload) => Promise<SaveRecordingResult>
     saveSystemRecording: (payload: SaveRecordingPayload) => Promise<SaveRecordingResult>
+    openRecordingStream?: (payload: OpenRecordingStreamPayload) => Promise<{ streamId: number; filePath: string }>
+    appendRecordingStream?: (payload: { streamId: number; bytes: Uint8Array }) => Promise<{ ok: boolean }>
+    closeRecordingStream?: (payload: { streamId: number }) => Promise<{ filePath: string | null }>
+    getCrmConfig?: () => Promise<CrmConfig>
+    saveCrmConfig?: (cfg: CrmConfig) => Promise<CrmConfig>
+    takePendingDeal?: () => Promise<CrmDealLink | null>
+    onOpenDeal?: (cb: (deal: CrmDealLink) => void) => () => void
+    analyzeAndSendToCrm?: (payload: CrmAnalyzePayload) => Promise<{ analysis: CrmAnalysis; sent: boolean; sendError: string | null }>
     onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
     pickCaptureSource: (sourceId: string | null) => Promise<{ ok: boolean }>
     setCaptureMode: (wantsVideo: boolean) => Promise<{ ok: boolean }>

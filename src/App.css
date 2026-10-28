@@ -5503,3 +5503,75 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 }
 
 .readonly-note strong { font-weight: 700; }
+
+/* ── CRM de Orbit: carpetas de clientes y ficha del trato ── */
+.kind-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.crm-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+.crm-card {
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crm-send-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.crm-send-row .cfg-select { min-width: 280px; }
+
+.crm-textarea {
+  min-height: 64px;
+  height: auto;
+  padding: 10px 14px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.crm-note {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #374151;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.cfg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.cfg-field-label { font-size: 13px; font-weight: 600; color: #374151; }
+.cfg-field .cfg-input { width: 100%; max-width: 520px; }

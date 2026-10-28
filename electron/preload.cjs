@@ -7,6 +7,18 @@ contextBridge.exposeInMainWorld('desktopApp', {
   convertRecording: (payload) => ipcRenderer.invoke('recording:convert', payload),
   saveVideoRecording: (payload) => ipcRenderer.invoke('recording:save-video', payload),
   saveSystemRecording: (payload) => ipcRenderer.invoke('recording:save-system', payload),
+  openRecordingStream: (payload) => ipcRenderer.invoke('recording:stream-open', payload),
+  appendRecordingStream: (payload) => ipcRenderer.invoke('recording:stream-append', payload),
+  closeRecordingStream: (payload) => ipcRenderer.invoke('recording:stream-close', payload),
+  getCrmConfig: () => ipcRenderer.invoke('crm:get-config'),
+  saveCrmConfig: (cfg) => ipcRenderer.invoke('crm:save-config', cfg),
+  takePendingDeal: () => ipcRenderer.invoke('crm:take-pending-deal'),
+  onOpenDeal: (cb) => {
+    const handler = (_e, deal) => cb(deal)
+    ipcRenderer.on('crm:open-deal', handler)
+    return () => ipcRenderer.removeListener('crm:open-deal', handler)
+  },
+  analyzeAndSendToCrm: (payload) => ipcRenderer.invoke('crm:analyze-and-send', payload),
   onCaptureSources: (cb) => ipcRenderer.on('capture:sources', (_e, sources) => cb(sources)),
   pickCaptureSource: (sourceId) => ipcRenderer.invoke('capture:pick-source', sourceId),
   setCaptureMode: (wantsVideo) => ipcRenderer.invoke('capture:set-mode', wantsVideo),

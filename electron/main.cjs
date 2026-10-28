@@ -15,6 +15,7 @@ const {
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
 const providers = require('./providers.cjs')
 const i18n = require('./i18n.cjs')
+const crm = require('./crm.cjs')
 const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
@@ -173,14 +174,31 @@ function createWindow() {
 // ventanas + choque del servidor de login en el puerto 3000). Con el lock, la
 // segunda apertura simplemente enfoca la ventana que ya está abierta.
 const gotTheLock = app.requestSingleInstanceLock()
+
+// ── Enlaces calltranscriber:// desde el CRM ──────────────────────────────────
+// El botón "Abrir en Call Transcriber" de un trato abre calltranscriber://deal/…
+// Windows lanza el .exe con el enlace como argumento: si la app ya está abierta
+// llega por 'second-instance'; si no, viene en el arranque y se guarda hasta que
+// la ventana lo pida (todavía no estaría escuchando).
+let pendingDealLink = null
+const dealLinkIn = (argv) => argv.map(crm.parseDealLink).find(Boolean) ?? null
+
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  // Empaquetada basta con el .exe. En desarrollo el .exe es el de Electron y hay
+  // que decirle qué script abrir.
+  if (process.defaultApp && process.argv[1]) app.setAsDefaultProtocolClient('calltranscriber', process.execPath, [path.resolve(process.argv[1])])
+  else app.setAsDefaultProtocolClient('calltranscriber')
+  pendingDealLink = dealLinkIn(process.argv)
+
+  app.on('second-instance', (_event, argv) => {
     const w = mainWindowRef
     if (w && !w.isDestroyed()) {
       if (w.isMinimized()) w.restore()
       w.focus()
+      const deal = dealLinkIn(argv)
+      if (deal) w.webContents.send('crm:open-deal', deal)
     }
   })
 
@@ -265,20 +283,36 @@ async function readConfig() {
 const DATA_FILE = () => path.join(app.getPath('userData'), 'call-transcriber-datos.json')
 
 async function readData() {
-  try {
-    const raw = await fs.readFile(DATA_FILE(), 'utf-8')
-    return JSON.parse(raw)
-  } catch {
-    return null
+  for (const file of [DATA_FILE(), `${DATA_FILE()}.bak`]) {
+    try {
+      return JSON.parse(await fs.readFile(file, 'utf-8'))
+    } catch { /* dañado o inexistente: probar la copia anterior */ }
   }
+  return null
 }
 
 // Se escribe a un temporal y se renombra: si la app se cierra a media escritura,
 // el archivo bueno sigue intacto en vez de quedarse a medio JSON.
+//
+// El renombrado solo no basta: Windows puede apuntar el nombre al archivo nuevo antes
+// de haber volcado su contenido al disco, y un apagado en ese hueco deja el archivo
+// lleno de ceros (pasó el 2026-10-26 y se perdió el histórico de un mes). Por eso se
+// fuerza el volcado con sync() antes de renombrar y se guarda la versión anterior en
+// .bak, que readData usa si la principal no se puede leer.
 async function writeData(payload) {
   const target = DATA_FILE()
   const tmp = `${target}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(payload), 'utf-8')
+  const handle = await fs.open(tmp, 'w')
+  try {
+    await handle.writeFile(JSON.stringify(payload), 'utf-8')
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  try {
+    JSON.parse(await fs.readFile(target, 'utf-8'))
+    await fs.copyFile(target, `${target}.bak`)
+  } catch { /* la actual está dañada o no existe: no pisar la copia buena */ }
   await fs.rename(tmp, target)
 }
 
@@ -308,11 +342,15 @@ function convertToFormat(inputPath, outputPath, format) {
 async function writeDurationHeader(filePath) {
   const fixedPath = filePath.replace(/(\.[^.]+)$/, '.fixed$1')
   try {
-    await new Promise((resolve, reject) => {
-      const proc = spawn(ffmpegPath, ['-y', '-i', filePath, '-c', 'copy', fixedPath])
+    const remux = (extraArgs) => new Promise((resolve, reject) => {
+      const proc = spawn(ffmpegPath, ['-y', '-i', filePath, '-c', 'copy', ...extraArgs, fixedPath])
       proc.on('error', reject)
       proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg salió con ${code}`))))
     })
+    // El vídeo grabado con la tarjeta gráfica es H.264, que el formato webm no
+    // admite: ffmpeg se niega por la extensión. Se reescribe como matroska, el
+    // contenedor del que webm es un subconjunto, y el reproductor lo abre igual.
+    await remux([]).catch(() => remux(['-f', 'matroska']))
     // Solo se sustituye si el resultado tiene tamaño coherente: más vale un vídeo
     // con la barra torcida que un vídeo corrupto.
     const [orig, fixed] = await Promise.all([fs.stat(filePath), fs.stat(fixedPath)])
@@ -326,9 +364,20 @@ async function writeDurationHeader(filePath) {
   }
 }
 
+// Cada grabación va a una subcarpeta con el nombre de su proyecto. El 2026-10-26 se
+// perdió el archivo de datos y con él saber de qué proyecto era cada llamada: los
+// audios estaban todos sueltos en la misma carpeta. Así, aunque se pierdan los
+// datos, la carpeta sigue diciendo de dónde es cada una.
+async function recordingsDirFor(payload) {
+  const base = path.join(app.getPath('documents'), 'CallTranscriber')
+  const project = sanitizeName(String(payload.projectName || '')).replace(/^\.+/, '')
+  const dir = project ? path.join(base, project) : base
+  await fs.mkdir(dir, { recursive: true })
+  return dir
+}
+
 ipcMain.handle('recording:save', async (_event, payload) => {
-  const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
-  await fs.mkdir(recordingsDir, { recursive: true })
+  const recordingsDir = await recordingsDirFor(payload)
 
   const rawExtension = payload.extension || 'webm'
   const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
@@ -351,8 +400,10 @@ ipcMain.handle('recording:convert', async (_event, { filePath, format }) => {
 
   const convertedPath = filePath.replace(/\.[^.]+$/, `.${format}`)
   // Se convierte a un nombre temporal y se renombra al final: así un corte a
-  // medias no deja un mp3 incompleto con el nombre bueno que parezca válido.
-  const partialPath = `${convertedPath}.partial`
+  // medias no deja un mp3 incompleto con el nombre bueno que parezca válido. La
+  // extensión real va al final porque ffmpeg elige el formato por ella: con
+  // ".mp3.partial" fallaba siempre y la grabación se quedaba en webm.
+  const partialPath = convertedPath.replace(/(\.[^.]+)$/, '.partial$1')
   try {
     await convertToFormat(filePath, partialPath, format)
     await fs.rename(partialPath, convertedPath)
@@ -366,8 +417,7 @@ ipcMain.handle('recording:convert', async (_event, { filePath, format }) => {
 })
 
 ipcMain.handle('recording:save-system', async (_event, payload) => {
-  const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
-  await fs.mkdir(recordingsDir, { recursive: true })
+  const recordingsDir = await recordingsDirFor(payload)
 
   const rawExtension = payload.extension || 'webm'
   const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
@@ -457,8 +507,7 @@ ipcMain.handle('capture:pick-source', (_event, sourceId) => {
 })
 
 ipcMain.handle('recording:save-video', async (_event, payload) => {
-  const recordingsDir = path.join(app.getPath('documents'), 'CallTranscriber')
-  await fs.mkdir(recordingsDir, { recursive: true })
+  const recordingsDir = await recordingsDirFor(payload)
 
   const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
   const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
@@ -469,6 +518,90 @@ ipcMain.handle('recording:save-video', async (_event, payload) => {
   await writeDurationHeader(videoPath)
 
   return { filePath: videoPath }
+})
+
+// ── Grabación escrita a disco mientras dura ──────────────────────────────────
+// Antes cada pista se acumulaba entera en la memoria de la ventana y se copiaba
+// de golpe al parar. Con vídeo eso son cientos de MB que crecen toda la llamada
+// y se duplican varias veces al guardar: pasados unos 20 minutos el PC entero
+// iba lento. Ahora cada trozo de un segundo se añade al archivo nada más llegar,
+// y si la app se cierra a mitad la grabación ya está en disco.
+const recordingStreams = new Map()
+let nextStreamId = 1
+let metricsTimer = null
+
+const STREAM_SUFFIX = { mix: '', system: '_system', video: '_video' }
+
+// Deja en el log cuánta memoria y CPU usa la app mientras graba, para poder
+// saber qué pasó si una llamada larga vuelve a ralentizar el equipo.
+// El CPU de cada proceso va por tipo (ventana, GPU, audio…) para saber cuál es, y
+// el del PC entero al lado: si el equipo va lento pero la app no sube, el
+// problema está fuera de ella.
+let lastCpuTimes = null
+function systemCpuPercent() {
+  const times = os.cpus().map(c => c.times)
+  const total = times.reduce((s, t) => s + t.user + t.nice + t.sys + t.idle + t.irq, 0)
+  const idle = times.reduce((s, t) => s + t.idle, 0)
+  const prev = lastCpuTimes
+  lastCpuTimes = { total, idle }
+  if (!prev || total === prev.total) return null
+  return Math.round(100 * (1 - (idle - prev.idle) / (total - prev.total)))
+}
+
+function logRecordingMetrics() {
+  const byType = {}
+  for (const m of app.getAppMetrics()) {
+    const entry = byType[m.type] ?? (byType[m.type] = { mem: 0, cpu: 0 })
+    entry.mem += (m.memory?.workingSetSize ?? 0) / 1024
+    entry.cpu += m.cpu?.percentCPUUsage ?? 0
+  }
+  const procs = Object.entries(byType).map(([type, e]) => `${type} ${Math.round(e.mem)} MB ${Math.round(e.cpu)} %`).join(' · ')
+  const written = [...recordingStreams.values()].map(s => `${s.kind} ${Math.round(s.bytes / 1048576)} MB`).join(', ')
+  const freeGb = (os.freemem() / 1073741824).toFixed(1)
+  log.info(`[grabación] PC: CPU ${systemCpuPercent() ?? '?'} %, RAM libre ${freeGb} GB · app: ${procs} · escrito: ${written}`)
+}
+
+ipcMain.handle('recording:stream-open', async (_event, payload) => {
+  const recordingsDir = await recordingsDirFor(payload)
+  const candidateSafe = sanitizeName(payload.candidateName || 'candidata')
+  const createdSafe = payload.createdAt.replace(/[:.]/g, '-')
+  const suffix = STREAM_SUFFIX[payload.kind] ?? ''
+  const extension = payload.kind === 'video' ? 'webm' : (payload.extension || 'webm')
+  const filePath = path.join(recordingsDir, `${candidateSafe}_${createdSafe}_${payload.interviewId}${suffix}.${extension}`)
+  const handle = await fs.open(filePath, 'w')
+  const streamId = nextStreamId++
+  recordingStreams.set(streamId, { handle, filePath, kind: payload.kind, bytes: 0, queue: Promise.resolve() })
+  if (!metricsTimer) metricsTimer = setInterval(logRecordingMetrics, 10_000)
+  return { streamId, filePath }
+})
+
+ipcMain.handle('recording:stream-append', (_event, { streamId, bytes }) => {
+  const stream = recordingStreams.get(streamId)
+  if (!stream) return { ok: false }
+  // En cola: dos trozos no pueden escribirse a la vez ni desordenarse.
+  stream.queue = stream.queue.then(async () => {
+    await stream.handle.write(Buffer.from(bytes))
+    stream.bytes += bytes.length
+  }).catch(err => log.warn(`[grabación] no se pudo escribir en ${path.basename(stream.filePath)}: ${err.message}`))
+  return stream.queue.then(() => ({ ok: true }))
+})
+
+ipcMain.handle('recording:stream-close', async (_event, { streamId }) => {
+  const stream = recordingStreams.get(streamId)
+  if (!stream) return { filePath: null }
+  recordingStreams.delete(streamId)
+  if (!recordingStreams.size && metricsTimer) { logRecordingMetrics(); clearInterval(metricsTimer); metricsTimer = null }
+  await stream.queue
+  await stream.handle.close()
+  // Lo que escribe MediaRecorder no lleva la duración en la cabecera; sin ella el
+  // reproductor no deja saltar a un minuto concreto.
+  if (stream.kind !== 'mix' && /\.webm$/i.test(stream.filePath)) await writeDurationHeader(stream.filePath)
+  return { filePath: stream.filePath }
+})
+
+// Si la app se cierra grabando, lo escrito hasta ahí se queda en disco y válido.
+app.on('before-quit', () => {
+  for (const stream of recordingStreams.values()) void stream.handle.close().catch(() => {})
 })
 
 ipcMain.handle('config:get', async () => {
@@ -489,6 +622,35 @@ ipcMain.handle('data:get', async () => readData())
 ipcMain.handle('data:save', async (_event, payload) => {
   await writeData(payload)
   return { ok: true }
+})
+
+// ── CRM de Orbit (ver crm.cjs) ───────────────────────────────────────────────
+ipcMain.handle('crm:get-config', () => crm.readCrmConfig(app.getPath('userData')))
+ipcMain.handle('crm:save-config', (_event, cfg) => crm.saveCrmConfig(app.getPath('userData'), cfg))
+
+// El enlace con el que se abrió la app, si vino de un trato. Se entrega una vez.
+ipcMain.handle('crm:take-pending-deal', () => {
+  const deal = pendingDealLink
+  pendingDealLink = null
+  return deal
+})
+
+// Analiza la llamada con Claude y, si hay clave, la manda al CRM. Si el envío
+// falla, el análisis se devuelve igual: lo caro ya está hecho y no se pierde.
+ipcMain.handle('crm:analyze-and-send', async (_event, payload) => {
+  const cfg = await crm.readCrmConfig(app.getPath('userData'))
+  const analysis = await crm.analyzeCall(cfg, payload, log)
+  let sent = false
+  let sendError = null
+  try {
+    const r = await crm.sendToCrm(cfg, { ...payload, analysis })
+    sent = r.sent
+    if (!r.sent) sendError = r.reason
+  } catch (err) {
+    sendError = err.message
+    log.warn(`[crm] no se pudo enviar al CRM: ${err.message}`)
+  }
+  return { analysis, sent, sendError }
 })
 
 const DEFAULT_CHUNK_DURATION_SEC = 600 // 10 minutos por chunk

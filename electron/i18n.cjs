@@ -145,6 +145,16 @@ const EN = {
   'exportacion': 'export',
   'Importar grabación de audio': 'Import audio recording',
   'Todos los archivos': 'All files',
+
+  // CRM de Orbit
+  'Claude no devolvió el JSON esperado': 'Claude did not return the expected JSON',
+  'Falta la carpeta de Orbit en Configuración → CRM': 'The Orbit folder is missing in Settings → CRM',
+  'No existe la carpeta de Orbit: {ruta}': 'The Orbit folder does not exist: {ruta}',
+  'Claude tardó más de 10 minutos y se canceló': 'Claude took more than 10 minutes and was cancelled',
+  'No se pudo abrir Claude Code ({msg}). ¿Está instalado en este PC?': 'Could not open Claude Code ({msg}). Is it installed on this PC?',
+  'Claude Code salió con error {code}: {msg}': 'Claude Code exited with error {code}: {msg}',
+  'Sin clave del CRM: el resultado se queda solo en la app': 'No CRM key: the result stays in the app only',
+  'El CRM respondió {status}: {msg}': 'The CRM replied {status}: {msg}',
 }
 
 module.exports = { usarIdiomaDe, getIdioma, tr, kr, detectarIdioma, etiquetasPorDefecto, nombreEnPrompt, EN }
