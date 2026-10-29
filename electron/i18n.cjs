@@ -155,6 +155,7 @@ const EN = {
   'Claude Code salió con error {code}: {msg}': 'Claude Code exited with error {code}: {msg}',
   'Sin clave del CRM: el resultado se queda solo en la app': 'No CRM key: the result stays in the app only',
   'El CRM respondió {status}: {msg}': 'The CRM replied {status}: {msg}',
+  'El CRM rechazó la llamada: {msg}': 'The CRM rejected the call: {msg}',
 }
 
 module.exports = { usarIdiomaDe, getIdioma, tr, kr, detectarIdioma, etiquetasPorDefecto, nombreEnPrompt, EN }

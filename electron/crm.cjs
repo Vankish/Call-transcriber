@@ -128,8 +128,11 @@ async function analyzeCall(cfg, payload, log) {
 }
 
 // Los registros que la API de entrada ya acepta hoy (syncRecordValidator.ts).
-// Los campos SPIN del trato todavía no tienen registro propio: van dentro de la
-// nota hasta que exista `deal.fill`.
+// La llamada va como actividad de tipo "call": es el único registro que el CRM
+// cuelga del trato abierto del contacto (una note.add se queda en el contacto y
+// una meeting.upsert solo encuentra a la persona por email o por nombre exacto).
+// El SPIN todavía no tiene campos propios: va dentro del texto hasta que exista
+// `deal.fill`.
 function buildRecords({ interviewId, candidateName, deal, callAt, durationMin, analysis }) {
   const contact = {
     email: deal.contactEmail || null,
@@ -145,17 +148,17 @@ function buildRecords({ interviewId, candidateName, deal, callAt, durationMin, a
     ['Objetivo de venta', analysis.singleSalesObjective],
     ['Próximo paso', analysis.nextStep],
   ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n')
-  const body = [`Llamada del ${new Date(callAt).toLocaleDateString('es-ES')} (Call Transcriber)`, '', analysis.nota, spin && `\n${spin}`].filter(Boolean).join('\n')
+  const body = [analysis.nota, spin && `\n${spin}`].filter(Boolean).join('\n')
+  const minutos = durationMin ? ` · ${durationMin} min` : ''
 
   return [
     {
-      type: 'meeting.upsert',
-      ref: ref('call'),
-      data: { title: `Llamada con ${candidateName || deal.company || 'lead'}`, type: 'other', scheduledAt: callAt, durationMin: durationMin || null, status: 'held' },
-      attendees: [{ email: contact.email, fullName: contact.fullName }],
+      type: 'activity.log',
+      ref: ref('call-activity'),
+      contact,
+      data: { type: 'call', direction: 'sent', subject: `Llamada con ${candidateName || deal.company || 'lead'}${minutos} (Call Transcriber)`, body, occurredAt: callAt },
     },
     { type: 'stage.signal', ref: ref('call-held'), contact, at: callAt, signal: { kind: 'meeting_held' } },
-    { type: 'note.add', ref: ref('call-note'), contact, body },
   ]
 }
 
@@ -172,6 +175,13 @@ async function sendToCrm(cfg, payload) {
     let msg = text
     try { msg = JSON.parse(text).error ?? text } catch { /* texto plano */ }
     throw new Error(tr('El CRM respondió {status}: {msg}', { status: res.status, msg: String(msg).slice(0, 300) }))
+  }
+  // Un 200 no quiere decir que todo entrara: cada registro rechazado viene en
+  // `rejections` con su motivo (p. ej. que no encuentra al contacto).
+  let rejections = []
+  try { rejections = JSON.parse(text).rejections ?? [] } catch { /* sin cuerpo */ }
+  if (rejections.length > 0) {
+    throw new Error(tr('El CRM rechazó la llamada: {msg}', { msg: JSON.stringify(rejections).slice(0, 300) }))
   }
   return { sent: true }
 }

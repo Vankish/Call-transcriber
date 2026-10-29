@@ -1,7 +1,7 @@
 {
   "name": "call-transcriber-app",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Record, transcribe and summarise job interviews with AI.",
   "author": "Call Transcriber",
   "license": "MIT",

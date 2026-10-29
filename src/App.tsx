@@ -327,6 +327,11 @@ const EMPTY_PROJECT = { name: '', company: '', status: 'active' as const, evalua
 const EMPTY_CRM_DEAL: CrmDeal = { dealId: '', company: '', contactEmail: '', linkedinUrl: '', stage: '', lastSentAt: null, spinSituation: '', spinProblem: '', spinImplication: '', spinNeedPayoff: '', singleSalesObjective: '', nextStep: '', nota: '' }
 const EMPTY_CANDIDATE = { name: '', email: '', phone: '', role: '' }
 const EMPTY_CANDIDATE_CRM = { company: '', linkedinUrl: '', stage: '' }
+// El LinkedIn es lo único que tenemos siempre de un lead, así que es la llave del
+// contacto. Se compara sin protocolo, www, barra final ni parámetros, que cambian
+// según de dónde se copie.
+const linkedinKey = (url?: string | null) => (url ?? '').trim().toLowerCase()
+  .replace(/^https?:\/\//, '').replace(/^([a-z]{2,3}\.)?(www\.)?linkedin\.com/, 'linkedin.com').replace(/[?#].*$/, '').replace(/\/+$/, '')
 const crmDraftOf = (c: Candidate) => ({ company: c.crm?.company ?? '', linkedinUrl: c.crm?.linkedinUrl ?? '', stage: c.crm?.stage ?? '' })
 // Los campos del trato que se rellenan a partir de una llamada (ver electron/crm.cjs).
 const CRM_FIELDS = [
@@ -448,31 +453,6 @@ const CandidateStatusPill = ({ status }: { status: Candidate['candidateStatus'] 
   if (!s) return null
   return <span className="cand-pill" style={{ background: s.bg, color: s.color }}>{s.icon} {t(s.label)}</span>
 }
-
-// Las mismas etapas que el CRM de Orbit (salesVocabulary.ts en el repo de Orbit),
-// para que el trato se lea igual en los dos sitios y el enlace traiga el id tal cual.
-const DEAL_STAGES: { id: string; label: string; bg: string; color: string }[] = [
-  { id: 'replied',        label: k('Ha respondido'),    bg: '#f1f5f9', color: '#475569' },
-  { id: 'interested',     label: k('Interesado'),       bg: '#e0f2fe', color: '#0369a1' },
-  { id: 'meeting_booked', label: k('Reunión agendada'), bg: '#dbeafe', color: '#1d4ed8' },
-  { id: 'met',            label: k('Reunión hecha'),    bg: '#ede9fe', color: '#6d28d9' },
-  { id: 'won',            label: k('Ganado'),           bg: '#d1fae5', color: '#065f46' },
-  { id: 'lost',           label: k('Perdido'),          bg: '#fee2e2', color: '#991b1b' },
-  { id: 'deferred',       label: k('Aplazado'),         bg: '#fef3c7', color: '#92400e' },
-]
-
-const DealStagePill = ({ stage }: { stage?: string }) => {
-  if (!stage) return null
-  const s = DEAL_STAGES.find(x => x.id === stage)
-  return <span className="cand-pill" style={{ background: s?.bg ?? '#f1f5f9', color: s?.color ?? '#475569' }}><BriefcaseIcon size={11} /> {s ? t(s.label) : stage}</span>
-}
-
-// Una etapa escrita a mano (o que el CRM añada más adelante) se sigue mostrando.
-const stageOptions = (current: string) => [
-  { value: '', label: t('Sin etapa') },
-  ...DEAL_STAGES.map(s => ({ value: s.id, label: t(s.label) })),
-  ...(current && !DEAL_STAGES.some(s => s.id === current) ? [{ value: current, label: current }] : []),
-]
 
 const ViewToggle = ({ mode, onChange }: { mode: 'list' | 'grid'; onChange: (m: 'list' | 'grid') => void }) => (
   <div className="view-toggle">
@@ -735,6 +715,11 @@ function App() {
   // determinista (sistema = [Candidato]) sin que una IA tenga que adivinar.
   const systemRecorderRef = useRef<MediaRecorder | null>(null)
   const discardedInterviewIdsRef = useRef<Set<string>>(new Set())
+  // Al parar, la transcripción arranca mientras sigue abierta la ventana de
+  // "Nombrar sesión". El envío al CRM espera a que se pulse Guardar: hasta
+  // entonces la llamada se puede descartar, y no debe llegar al trato.
+  const crmAwaitingSaveRef = useRef<Set<string>>(new Set())
+  const crmTranscriptOnHoldRef = useRef<Record<string, string>>({})
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -1567,6 +1552,7 @@ function App() {
         setSessionNameDraft('')
         setSessionInterviewerDraft(iv.interviewerName || '')
         setSessionModalProjectId(ivCandidate?.projectId ?? null)
+        crmAwaitingSaveRef.current.add(iv.id)
         setShowSessionNameModal(true)
       }
       recorder.start(1000)
@@ -1625,6 +1611,7 @@ function App() {
   const handleDiscardRecording = async () => {
     const iId = activeInterviewIdRef.current
     activeInterviewIdRef.current = null
+    if (iId) { crmAwaitingSaveRef.current.delete(iId); delete crmTranscriptOnHoldRef.current[iId] }
     setShowSessionNameModal(false)
     setDiscardConfirming(false)
     if (iId) {
@@ -1685,6 +1672,11 @@ function App() {
     updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft })
     setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
+    // Ya guardada: si la transcripción terminó mientras se nombraba, sale ahora.
+    crmAwaitingSaveRef.current.delete(iId)
+    const heldTranscript = crmTranscriptOnHoldRef.current[iId]
+    delete crmTranscriptOnHoldRef.current[iId]
+    if (heldTranscript) { const ivNow = interviews.find(i => i.id === iId); if (ivNow) window.setTimeout(() => { void sendToCrmRef.current?.(ivNow.candidateId, iId, { transcript: heldTranscript }) }, 300) }
     toast(t('Grabación guardada'))
   }
 
@@ -1734,6 +1726,12 @@ function App() {
       // La lectura de la conversación arranca sola aquí. Sin await: transcribir ya
       // ha terminado y esto es un adelanto que corre por detrás.
       void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
+      // La llamada de un trato del CRM se manda sola en cuanto está transcrita y
+      // guardada (si aún se está nombrando, espera al botón Guardar).
+      if (interview) {
+        if (crmAwaitingSaveRef.current.has(interviewId)) crmTranscriptOnHoldRef.current[interviewId] = result.text
+        else void sendToCrmRef.current?.(interview.candidateId, interviewId, { transcript: result.text })
+      }
     } catch (err) {
       if (!isLatest()) return
       updateInterview(interviewId, { transcriptionStatus: 'error' })
@@ -1785,6 +1783,9 @@ function App() {
   }
 
   const transcribeRunRef = useRef<Record<string, number>>({})
+  // Envío al CRM al terminar de transcribir. Va por ref porque se define más abajo
+  // y así siempre ve los contactos y la configuración del momento.
+  const sendToCrmRef = useRef<((candidateId: string, interviewId: string, auto?: { transcript: string }) => Promise<void>) | null>(null)
   useEffect(() => { handleTranscribeRef.current = handleTranscribe })
 
   const handleGenerateSummary = async (interviewId: string) => {
@@ -2916,24 +2917,6 @@ function App() {
                 ))}
               </div>
 
-              {isCli && projectCandidates.length > 0 && (
-                <div className="pa-section">
-                  <h4 className="pa-section-title">{t('Tratos por etapa')}</h4>
-                  {[...DEAL_STAGES.map(st => ({ id: st.id, label: t(st.label), color: st.color })), { id: '', label: t('Sin etapa'), color: '#94a3b8' }].map(st => {
-                    const n = projectCandidates.filter(c => st.id ? c.crm?.stage === st.id : !DEAL_STAGES.some(d => d.id === c.crm?.stage)).length
-                    if (n === 0) return null
-                    return (
-                      <div key={st.id || 'none'} className="pa-funnel-row">
-                        <span className="pa-funnel-label">{st.label}</span>
-                        <div className="pa-funnel-bar-bg">
-                          <div className="pa-funnel-bar-fill" style={{ width: `${bar(n, projectCandidates.length)}%`, background: st.color }} />
-                        </div>
-                        <span className="pa-funnel-val">{n} / {projectCandidates.length}</span>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
               {(pendingCands.length > 0 || noCands.length > 0) && (
                 <div className="pa-section">
                   <h4 className="pa-section-title">{t('Requieren atención')}</h4>
@@ -3017,7 +3000,7 @@ function App() {
                       <span className="pdc-row-meta">{c.email}{last ? ` · ${v.lastCall(fs(last.createdAt))}` : c.role ? ` · ${c.role}` : ''}</span>
                     </div>
                     <span className={`pdc-badge ${statusInfo[1]}`}>{statusInfo[0]}</span>
-                    {isClientProject(c.projectId) ? <DealStagePill stage={c.crm?.stage} /> : c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
+                    {!isClientProject(c.projectId) && c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                     <div className="pdc-row-actions" onClick={e => e.stopPropagation()}>
                       <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(c)); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
                       <button type="button" className={`btn-trash${pendingDeleteId === c.id ? ' confirming' : ''}`} onClick={() => handleDeleteCandidate(c.id)}>{pendingDeleteId === c.id ? <><CheckIcon /><span className="confirming-label">{vocabFor(c.projectId).deleteCalls(interviews.filter(i => i.candidateId === c.id).length)}</span></> : <TrashIcon />}</button>
@@ -3078,7 +3061,7 @@ function App() {
                     <span className="ctr-meta">{project ? `${project.name}` : ''}{c.role ? ` · ${c.role}` : ''}{last ? ` · ${t('Última: {fecha}', { fecha: fs(last.createdAt) })}` : ''}</span>
                   </div>
                   <span className={`ctr-status ${statusCls}`}>{statusLabel}</span>
-                  {isClientProject(c.projectId) ? <DealStagePill stage={c.crm?.stage} /> : c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
+                  {!isClientProject(c.projectId) && c.candidateStatus !== 'pendiente' && <CandidateStatusPill status={c.candidateStatus} />}
                   <div className="ctr-actions" onClick={e => e.stopPropagation()}>
                     <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(c.id); setShowExport(true) }}><DownloadIcon /></button>
                     <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: c.name, email: c.email, phone: c.phone, role: c.role }); setCandidateNotesDraft(c.notes ?? ''); setCandidateStatusDraft(c.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(c.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(c)); setEditingCandidateId(c.id); setShowNewCandidate(true) }}><PencilIcon /></button>
@@ -3120,8 +3103,13 @@ function App() {
   // Un enlace calltranscriber://deal/… abre la ficha de ese trato. Si no existe se
   // crea en la primera carpeta de clientes (o en una nueva), con lo que trae el enlace.
   const openDealFromLink = (deal: CrmDealLink) => {
+    const key = linkedinKey(deal.linkedin)
     const existing = candidates.find(c => c.crm?.dealId === deal.dealId)
-    if (existing) { goToCandidate(existing.id, existing.projectId); setActiveTab('crm'); return }
+      ?? (key ? candidates.find(c => isClientProject(c.projectId) && linkedinKey(c.crm?.linkedinUrl) === key) : undefined)
+    if (existing) {
+      if (existing.crm?.dealId !== deal.dealId) updateCandidateCrm(existing.id, { dealId: deal.dealId })
+      goToCandidate(existing.id, existing.projectId); setActiveTab('crm'); return
+    }
     // La carpeta es la empresa del trato; dentro va la persona. Se reconoce por el
     // nombre, sin distinguir mayúsculas, para no duplicarla si ya la creaste a mano.
     const companyName = deal.company.trim() || t('Clientes (CRM)')
@@ -3154,12 +3142,19 @@ function App() {
     void window.desktopApp?.takePendingDeal?.().then(deal => { if (deal) openDealRef.current(deal) })
   }, [projects, candidates, session])
 
-  const handleSendToCrm = async (candidateId: string, interviewId: string) => {
+  // `auto`: viene de terminar una transcripción. Entonces solo se envía si el
+  // contacto es de un trato del CRM y todo está listo; si no, se calla.
+  const handleSendToCrm = async (candidateId: string, interviewId: string, auto?: { transcript: string }) => {
     const cand = candidates.find(c => c.id === candidateId)
     const iv = interviews.find(i => i.id === interviewId)
     if (!cand || !iv || !window.desktopApp?.analyzeAndSendToCrm) return
-    const transcript = (iv.transcriptEdited || iv.transcriptOriginal).trim()
-    if (iv.transcriptionStatus !== 'done' || !transcript) { toast(t('Transcribe primero la llamada'), 'warning'); return }
+    if (auto && !(isClientProject(cand.projectId) && cand.crm?.dealId && cand.crm.linkedinUrl?.trim() && crmConfig?.apiUrl && crmConfig?.apiKey)) return
+    if (crmBusyCandidateId === cand.id) return
+    const transcript = (auto?.transcript ?? (iv.transcriptEdited || iv.transcriptOriginal)).trim()
+    if ((!auto && iv.transcriptionStatus !== 'done') || !transcript) { toast(t('Transcribe primero la llamada'), 'warning'); return }
+    if (!crmConfig?.apiUrl || !crmConfig?.apiKey) { toast(t('Falta conectar el CRM'), 'warning'); openSettings('api-keys'); return }
+    if (!cand.crm?.linkedinUrl?.trim()) { toast(t('Falta el LinkedIn del contacto'), 'warning', t('Añádelo con el lápiz de editar')); return }
+    if (auto) toast(t('Enviando la llamada al CRM'), 'info', t('Claude la está leyendo con el contexto de Orbit'))
     const deal: CrmDeal = { ...EMPTY_CRM_DEAL, ...(cand.crm ?? {}) }
     setCrmBusyCandidateId(cand.id)
     try {
@@ -3168,9 +3163,10 @@ function App() {
         callAt: new Date(iv.createdAt).getTime(), callDate: new Date(iv.createdAt).toLocaleDateString(locale()),
         durationMin: Math.round(iv.durationSec / 60),
       })
-      // Solo se rellenan los huecos: lo que ya estaba escrito en el trato no se pisa.
+      // Lo último que sacó Claude se guarda como contexto para analizar la siguiente
+      // llamada; el trato de verdad es el del CRM.
       const patch: Partial<CrmDeal> = { nota: r.analysis.nota }
-      for (const f of CRM_FIELDS) if (!deal[f.id].trim() && r.analysis[f.id]) patch[f.id] = r.analysis[f.id]
+      for (const f of CRM_FIELDS) if (r.analysis[f.id]) patch[f.id] = r.analysis[f.id]
       if (r.sent) patch.lastSentAt = new Date().toISOString()
       updateCandidateCrm(cand.id, patch)
       if (!iv.summaryText.trim()) updateInterview(iv.id, { summaryText: r.analysis.nota, summaryStatus: 'done', summaryContext: 'reunion' })
@@ -3183,6 +3179,8 @@ function App() {
     }
   }
 
+  useEffect(() => { sendToCrmRef.current = handleSendToCrm })
+
   const renderCrmTab = () => {
     if (!activeCandidate) return null
     const cand = activeCandidate
@@ -3191,22 +3189,23 @@ function App() {
     const callId = transcribed.some(i => i.id === crmInterviewId) ? crmInterviewId : transcribed[0]?.id ?? null
     const busy = crmBusyCandidateId === cand.id
     const crmReady = !!(crmConfig?.apiUrl && crmConfig?.apiKey)
-    // Sin estado propio por campo: se guarda al salir del cuadro. La `key` cambia
-    // con el valor guardado, así lo que rellena Claude aparece sin recargar.
-    const field = (id: keyof CrmDeal, label: string, multiline = false) => {
-      const value = String(deal[id] ?? '')
-      const save = (v: string) => { if (v !== value) updateCandidateCrm(cand.id, { [id]: v }) }
-      return (
-        <div className="modal-field" key={id}>
-          <span className="modal-field-label">{label}</span>
-          {multiline
-            ? <textarea key={`${cand.id}-${id}-${value}`} className="modal-input modal-input--figma crm-textarea" defaultValue={value} onBlur={e => save(e.target.value)} />
-            : <input key={`${cand.id}-${id}-${value}`} type="text" className="modal-input modal-input--figma" defaultValue={value} onBlur={e => save(e.target.value)} />}
-        </div>
-      )
-    }
+    const companyName = deal.company || activeProject?.name || ''
+    // El CRM reconoce al contacto por su LinkedIn: sin él la llamada no tendría a
+    // qué trato engancharse.
+    const canMatch = !!deal.linkedinUrl.trim()
     return (
       <div className="crm-tab">
+        <div className="crm-card">
+          <h3 className="rec-section-title">{companyName ? `${companyName} · ${cand.name}` : cand.name}</h3>
+          <p className="cfg-field-desc">
+            {deal.dealId
+              ? t('Vinculado al trato del CRM ({id}). Lo demás del trato se lleva en el CRM.', { id: deal.dealId })
+              : t('Este contacto no viene de un trato del CRM. Ábrelo desde el botón del trato para vincularlo.')}
+          </p>
+          {deal.linkedinUrl.trim() && <p className="cfg-field-desc"><a href={/^https?:/i.test(deal.linkedinUrl) ? deal.linkedinUrl : `https://${deal.linkedinUrl}`} target="_blank" rel="noreferrer">{deal.linkedinUrl}</a></p>}
+          {!canMatch && <p className="cfg-field-desc">{t('Falta su LinkedIn: es lo que usa el CRM para saber a qué trato va la llamada. Añádelo con el lápiz de editar.')}</p>}
+        </div>
+
         <div className="crm-card">
           <h3 className="rec-section-title">{t('Enviar una llamada al CRM')}</h3>
           {transcribed.length === 0 ? (
@@ -3226,29 +3225,11 @@ function App() {
           )}
           <p className="cfg-field-desc">
             {crmReady
-              ? t('Claude lee la llamada con el contexto de Orbit, rellena los campos vacíos y deja la nota en el CRM. Lo que ya está escrito no se toca.')
-              : t('Sin clave del CRM: Claude rellena el trato aquí, pero no se envía.')}
+              ? t('Al terminar de transcribir, la llamada se manda sola: Claude la lee con el contexto de Orbit y deja en el trato la reunión, el SPIN, el próximo paso y una nota. El botón sirve para volver a mandarla.')
+              : t('Falta conectar el CRM: sin la clave la llamada no se envía.')}
             {!crmReady && <> <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>{t('Conectar el CRM')} <ArrowRightIcon size={12} /></button></>}
           </p>
           {deal.lastSentAt && <p className="cfg-field-desc">{t('Último envío: {fecha}', { fecha: new Date(deal.lastSentAt).toLocaleString(locale()) })}</p>}
-        </div>
-
-        <div className="crm-card">
-          <h3 className="rec-section-title">{t('Trato')}</h3>
-          <div className="modal-row-2">{field('company', t('Empresa'))}<div className="modal-field"><span className="modal-field-label">{t('Etapa')}</span><Select className="modal-input modal-input--figma modal-select" value={deal.stage} onChange={st => updateCandidateCrm(cand.id, { stage: st })} options={stageOptions(deal.stage)} /></div></div>
-          <div className="modal-row-2">{field('contactEmail', t('Email del contacto'))}{field('linkedinUrl', 'LinkedIn')}</div>
-          {deal.dealId && <p className="cfg-field-desc">{t('Id del trato en el CRM: {id}', { id: deal.dealId })}</p>}
-        </div>
-
-        <div className="crm-card">
-          <h3 className="rec-section-title">{t('Campos del trato')}</h3>
-          {CRM_FIELDS.map(f => field(f.id, t(f.label), true))}
-          {deal.nota && (
-            <div className="modal-field">
-              <span className="modal-field-label">{t('Nota de la última llamada')}</span>
-              <div className="crm-note">{deal.nota}</div>
-            </div>
-          )}
         </div>
       </div>
     )
@@ -3291,7 +3272,7 @@ function App() {
               <span className={`consent-badge${activeCandidate.consentGiven ? ' consent-badge--ok' : ' consent-badge--missing'}`} title={activeCandidate.consentGiven && activeCandidate.consentAt ? t('Consentimiento registrado el {fecha}', { fecha: new Date(activeCandidate.consentAt).toLocaleString(locale()) }) : t('Sin consentimiento registrado')}>
                 {activeCandidate.consentGiven ? <><LockIcon size={12} /> {t('Consentimiento')}</> : <><WarnTriangle /> {t('Sin consentimiento')}</>}
               </span>
-              {isClientProject(activeCandidate.projectId) ? <DealStagePill stage={activeCandidate.crm?.stage} /> : activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
+              {!isClientProject(activeCandidate.projectId) && activeCandidate.candidateStatus !== 'pendiente' && <CandidateStatusPill status={activeCandidate.candidateStatus} />}
               <div className="cand-header-actions">
                 <button type="button" className="btn-icon" title={t('Exportar')} onClick={() => { setExportCandidateId(activeCandidate.id); setShowExport(true) }}><DownloadIcon /></button>
                 <button type="button" className="btn-icon" title={t('Editar')} onClick={() => { setCandidateDraft({ name: activeCandidate.name, email: activeCandidate.email, phone: activeCandidate.phone, role: activeCandidate.role }); setCandidateNotesDraft(activeCandidate.notes ?? ''); setCandidateStatusDraft(activeCandidate.candidateStatus ?? 'pendiente'); setCandidateConsentDraft(activeCandidate.consentGiven ?? false); setCandidateCrmDraft(crmDraftOf(activeCandidate)); setEditingCandidateId(activeCandidate.id); setShowNewCandidate(true) }}><PencilIcon /></button>
@@ -3300,7 +3281,7 @@ function App() {
           </div>
         </div>
         <div className="profile-tabs-pill">
-          {([['entrevistas', <><MicIcon /> {vocabFor(activeCandidate.projectId).calls}</>], ['transcripcion', <><DocIcon /> {t('Transcripción')}</>], ['resumen', <><StarIcon /> {t('Resumen IA')}</>], ...(isClientProject(activeCandidate.projectId) ? [['crm', <><BriefcaseIcon /> {t('Trato CRM')}</>]] : [])] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
+          {([['entrevistas', <><MicIcon /> {vocabFor(activeCandidate.projectId).calls}</>], ['transcripcion', <><DocIcon /> {t('Transcripción')}</>], ['resumen', <><StarIcon /> {t('Resumen IA')}</>], ...(isClientProject(activeCandidate.projectId) ? [['crm', <><BriefcaseIcon /> CRM</>]] : [])] as [ProfileTab, ReactNode][]).map(([tab, label]) => (
             <button key={tab} type="button" className={`pill-tab${activeTab === tab ? ' pill-tab--active' : ''}`} onClick={() => {
               setActiveTab(tab)
               const iv = tab === 'resumen' ? interviews.find(i => i.id === selectedInterviewId) : null
@@ -4850,6 +4831,12 @@ function App() {
               <span className="modal-field-label">{t('Nombre completo *')}</span>
               <input type="text" className="modal-input modal-input--figma" value={candidateDraft.name} onChange={e => setCandidateDraft(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Ana García')} autoFocus />
             </div>
+            {cmCli && (
+              <div className="modal-field">
+                <span className="modal-field-label">{t('LinkedIn *')}</span>
+                <input type="text" className="modal-input modal-input--figma" value={candidateCrmDraft.linkedinUrl} onChange={e => setCandidateCrmDraft(d => ({ ...d, linkedinUrl: e.target.value }))} placeholder="https://linkedin.com/in/…" />
+              </div>
+            )}
             <div className="modal-row-2">
               <div className="modal-field">
                 <span className="modal-field-label">Email</span>
@@ -4864,22 +4851,11 @@ function App() {
               <span className="modal-field-label">{t('Cargo')}</span>
               <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={cmCli ? t('Ej: Directora de operaciones') : t('Ej: Desarrollador Frontend')} />
             </div>
-            {cmCli && (
-              <div className="modal-field">
-                  <span className="modal-field-label">LinkedIn</span>
-                  <input type="text" className="modal-input modal-input--figma" value={candidateCrmDraft.linkedinUrl} onChange={e => setCandidateCrmDraft(d => ({ ...d, linkedinUrl: e.target.value }))} placeholder="https://linkedin.com/in/…" />
-                </div>
-            )}
             <div className="modal-field">
               <span className="modal-field-label">{t('Notas previas (opcional)')}</span>
               <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={cmCli ? t('De dónde viene el lead, qué sabemos de su empresa, puntos a tratar…') : t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
             </div>
-            {cmCli ? (
-              <div className="modal-field">
-                <span className="modal-field-label">{t('Etapa del trato')}</span>
-                <Select className="modal-input modal-input--figma modal-select" value={candidateCrmDraft.stage} onChange={st => setCandidateCrmDraft(d => ({ ...d, stage: st }))} options={stageOptions(candidateCrmDraft.stage)} />
-              </div>
-            ) : (
+            {!cmCli && (
             <div className="modal-field">
               <span className="modal-field-label">{t('Estado')}</span>
               <Select
