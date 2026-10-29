@@ -1725,7 +1725,9 @@ function App() {
       if (notifTranscription) toast(t('Transcripción completada'))
       // La lectura de la conversación arranca sola aquí. Sin await: transcribir ya
       // ha terminado y esto es un adelanto que corre por detrás.
-      void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
+      // En una carpeta de clientes no: el resumen lo escribe Claude al mandarla al CRM.
+      const ivCand = candidates.find(c => c.id === interview?.candidateId)
+      if (!ivCand || !isClientProject(ivCand.projectId)) void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
       // La llamada de un trato del CRM se manda sola en cuanto está transcrita y
       // guardada (si aún se está nombrando, espera al botón Guardar).
       if (interview) {
