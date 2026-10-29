@@ -715,11 +715,11 @@ function App() {
   // determinista (sistema = [Candidato]) sin que una IA tenga que adivinar.
   const systemRecorderRef = useRef<MediaRecorder | null>(null)
   const discardedInterviewIdsRef = useRef<Set<string>>(new Set())
-  // Al parar, la transcripción arranca mientras sigue abierta la ventana de
-  // "Nombrar sesión". El envío al CRM espera a que se pulse Guardar: hasta
-  // entonces la llamada se puede descartar, y no debe llegar al trato.
-  const crmAwaitingSaveRef = useRef<Set<string>>(new Set())
-  const crmTranscriptOnHoldRef = useRef<Record<string, string>>({})
+  // Al parar sale la ventana de "Nombrar sesión" y, mientras está abierta, la
+  // llamada aún se puede descartar. Nada arranca hasta que se pulsa Guardar:
+  // ni la transcripción ni, detrás de ella, el envío al CRM.
+  const awaitingSaveRef = useRef<Set<string>>(new Set())
+  const transcribeAfterSaveRef = useRef<Set<string>>(new Set())
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -1526,7 +1526,11 @@ function App() {
           void uploadInterviewAudio({ ...iv, recordingFilePath: savedAudioName, systemAudioFilePath: savedSystemName }, { silent: true })
         }
 
-        if (!wasDiscarded && autoTranscribe) transcribeWhenSaved(iv.id)
+        if (!wasDiscarded && autoTranscribe) {
+          // Si todavía no se ha pulsado Guardar, se apunta y arranca al guardar.
+          if (awaitingSaveRef.current.has(iv.id)) transcribeAfterSaveRef.current.add(iv.id)
+          else transcribeWhenSaved(iv.id)
+        }
       }
 
       const mixSink = sinkFor('mix', recorder.mimeType)
@@ -1552,7 +1556,7 @@ function App() {
         setSessionNameDraft('')
         setSessionInterviewerDraft(iv.interviewerName || '')
         setSessionModalProjectId(ivCandidate?.projectId ?? null)
-        crmAwaitingSaveRef.current.add(iv.id)
+        awaitingSaveRef.current.add(iv.id)
         setShowSessionNameModal(true)
       }
       recorder.start(1000)
@@ -1611,7 +1615,7 @@ function App() {
   const handleDiscardRecording = async () => {
     const iId = activeInterviewIdRef.current
     activeInterviewIdRef.current = null
-    if (iId) { crmAwaitingSaveRef.current.delete(iId); delete crmTranscriptOnHoldRef.current[iId] }
+    if (iId) { awaitingSaveRef.current.delete(iId); transcribeAfterSaveRef.current.delete(iId) }
     setShowSessionNameModal(false)
     setDiscardConfirming(false)
     if (iId) {
@@ -1672,11 +1676,10 @@ function App() {
     updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft })
     setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
-    // Ya guardada: si la transcripción terminó mientras se nombraba, sale ahora.
-    crmAwaitingSaveRef.current.delete(iId)
-    const heldTranscript = crmTranscriptOnHoldRef.current[iId]
-    delete crmTranscriptOnHoldRef.current[iId]
-    if (heldTranscript) { const ivNow = interviews.find(i => i.id === iId); if (ivNow) window.setTimeout(() => { void sendToCrmRef.current?.(ivNow.candidateId, iId, { transcript: heldTranscript }) }, 300) }
+    // Ya guardada: si el audio ya estaba en disco, la transcripción arranca ahora;
+    // si no, la lanzará persistRecordingToDisk al terminar.
+    awaitingSaveRef.current.delete(iId)
+    if (transcribeAfterSaveRef.current.delete(iId)) transcribeWhenSaved(iId)
     toast(t('Grabación guardada'))
   }
 
@@ -1728,12 +1731,9 @@ function App() {
       // En una carpeta de clientes no: el resumen lo escribe Claude al mandarla al CRM.
       const ivCand = candidates.find(c => c.id === interview?.candidateId)
       if (!ivCand || !isClientProject(ivCand.projectId)) void prepareSummaryNotes(interviewId, result.text, interview?.summaryContext ?? 'entrevista')
-      // La llamada de un trato del CRM se manda sola en cuanto está transcrita y
-      // guardada (si aún se está nombrando, espera al botón Guardar).
-      if (interview) {
-        if (crmAwaitingSaveRef.current.has(interviewId)) crmTranscriptOnHoldRef.current[interviewId] = result.text
-        else void sendToCrmRef.current?.(interview.candidateId, interviewId, { transcript: result.text })
-      }
+      // La llamada de un trato del CRM se manda sola en cuanto está transcrita (y
+      // la transcripción solo empieza una vez guardada).
+      if (interview && !awaitingSaveRef.current.has(interviewId)) void sendToCrmRef.current?.(interview.candidateId, interviewId, { transcript: result.text })
     } catch (err) {
       if (!isLatest()) return
       updateInterview(interviewId, { transcriptionStatus: 'error' })
