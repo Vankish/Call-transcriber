@@ -9,13 +9,18 @@ const {
   desktopCapturer,
   dialog,
   ipcMain,
+  Menu,
+  Notification,
   session,
   shell,
+  Tray,
 } = require('electron')
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked')
 const providers = require('./providers.cjs')
 const i18n = require('./i18n.cjs')
 const crm = require('./crm.cjs')
+const { startCallDetector } = require('./call-detector.cjs')
+let stopCallDetector = () => {}
 const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
@@ -25,6 +30,59 @@ const isDev = process.env.ELECTRON_DEV === '1'
 let mainWindowRef = null
 let pendingCaptureSourceResolve = null
 let nextCaptureWantsVideo = false
+
+// ── Siempre encendida, para grabar las llamadas sola ─────────────────────────
+// La grabación automática solo sirve si la app está abierta cuando empieza la
+// llamada. Por eso arranca con Windows (oculta) y al cerrar la ventana se queda en
+// la bandeja; "Salir" en el menú de la bandeja la cierra de verdad.
+const startHidden = process.argv.includes('--oculta')
+let isQuitting = false
+let trayRef = null
+let hideNoticeShown = false
+// Lo que dice la configuración; se lee al arrancar y al guardarla.
+let autoRecordCalls = true
+let openAtLogin = true
+
+function applyAppSettings(config) {
+  autoRecordCalls = config?.autoRecordCalls !== false
+  openAtLogin = config?.openAtLogin !== false
+  // Solo la app instalada: en desarrollo apuntaría al electron.exe de node_modules.
+  if (app.isPackaged && process.platform === 'win32') {
+    app.setLoginItemSettings({ openAtLogin, args: ['--oculta'] })
+  }
+}
+
+function showMainWindow() {
+  const w = mainWindowRef
+  if (!w || w.isDestroyed()) { createWindow(); return }
+  if (w.isMinimized()) w.restore()
+  if (!w.isVisible()) { w.show(); w.maximize() }
+  w.focus()
+}
+
+function notify(title, body) {
+  try {
+    if (!Notification.isSupported()) return
+    const n = new Notification({ title, body, silent: false })
+    n.on('click', () => showMainWindow())
+    n.show()
+  } catch { /* sin notificaciones no pasa nada: la bandeja y la ventana avisan igual */ }
+}
+
+async function createTray() {
+  if (trayRef || process.platform !== 'win32') return
+  // El icono sale del propio .exe: build/icon.ico no se empaqueta.
+  const icon = await app.getFileIcon(process.execPath, { size: 'small' }).catch(() => null)
+  if (!icon) return
+  trayRef = new Tray(icon)
+  trayRef.setToolTip('Call Transcriber')
+  trayRef.setContextMenu(Menu.buildFromTemplate([
+    { label: tr('Abrir Call Transcriber'), click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: tr('Salir'), click: () => { isQuitting = true; app.quit() } },
+  ]))
+  trayRef.on('click', () => showMainWindow())
+}
 
 // ── Aviso de nueva versión (electron-updater + GitHub Releases) ───────────────
 //
@@ -138,6 +196,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     autoHideMenuBar: true,
+    // Arrancada con Windows no se enseña: se queda vigilando las llamadas.
+    show: !startHidden,
     // Empaquetada, el icono va incrustado en el .exe por electron-builder. En
     // desarrollo no hay .exe propio, así que sin esto saldría el logo genérico
     // de Electron. build/icon.ico no se empaqueta (no está en build.files), de
@@ -147,11 +207,26 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Oculta en la bandeja, Chromium frena los temporizadores de la página a uno
+      // por minuto: la grabación automática y la transcripción a 1 min llegarían tarde.
+      backgroundThrottling: false,
     },
   })
 
   mainWindowRef = mainWindow
-  mainWindow.maximize()
+  if (!startHidden) mainWindow.maximize()
+
+  // Cerrar la ventana la esconde en la bandeja mientras la grabación automática
+  // esté activa: si se cerrara, la siguiente llamada ya no se grabaría.
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !autoRecordCalls || !trayRef) return
+    event.preventDefault()
+    mainWindow.hide()
+    if (!hideNoticeShown) {
+      hideNoticeShown = true
+      notify(tr('Call Transcriber sigue abierta'), tr('Está en la bandeja, junto al reloj, y grabará sola tus llamadas. Para cerrarla del todo: clic derecho en el icono → Salir.'))
+    }
+  })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
@@ -195,8 +270,8 @@ if (!gotTheLock) {
   app.on('second-instance', (_event, argv) => {
     const w = mainWindowRef
     if (w && !w.isDestroyed()) {
-      if (w.isMinimized()) w.restore()
-      w.focus()
+      // Abrir el acceso directo con la app escondida en la bandeja la saca.
+      showMainWindow()
       const deal = dealLinkIn(argv)
       if (deal) w.webContents.send('crm:open-deal', deal)
     }
@@ -204,7 +279,8 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
   // Antes de nada que pueda enseñar texto: diálogos, errores, la página de login.
-  void readConfig()
+  void readConfig().then(applyAppSettings)
+  if (process.platform === 'win32') app.setAppUserModelId('com.calltranscriber.desktop')
   startAuthCallbackServer()
 
   session.defaultSession.setDisplayMediaRequestHandler(
@@ -248,7 +324,20 @@ if (!gotTheLock) {
   )
 
   createWindow()
+  void createTray()
   setupAutoUpdater()
+
+  // Quién graba es la ventana (tiene el micro y el audio del sistema); aquí solo se
+  // le avisa de que una llamada empieza o termina.
+  stopCallDetector = startCallDetector({
+    isEnabled: () => autoRecordCalls,
+    log,
+    onEvent: (ev) => {
+      const w = mainWindowRef
+      if (w && !w.isDestroyed()) w.webContents.send('call:event', ev)
+      trayRef?.setToolTip(ev.type === 'start' ? tr('Call Transcriber · grabando la llamada') : 'Call Transcriber')
+    },
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -599,8 +688,13 @@ ipcMain.handle('recording:stream-close', async (_event, { streamId }) => {
   return { filePath: stream.filePath }
 })
 
+ipcMain.handle('window:show', () => { showMainWindow() })
+ipcMain.handle('app:notify', (_event, payload) => { notify(String(payload?.title ?? ''), String(payload?.body ?? '')) })
+
 // Si la app se cierra grabando, lo escrito hasta ahí se queda en disco y válido.
 app.on('before-quit', () => {
+  isQuitting = true
+  stopCallDetector() // y con él el PowerShell que vigila el micro
   for (const stream of recordingStreams.values()) void stream.handle.close().catch(() => {})
 })
 
@@ -614,6 +708,7 @@ ipcMain.handle('config:get', async () => {
 ipcMain.handle('config:save', async (_event, payload) => {
   await fs.writeFile(CONFIG_FILE(), JSON.stringify(payload), 'utf-8')
   i18n.usarIdiomaDe(payload)
+  applyAppSettings(payload)
   return { ok: true }
 })
 
@@ -903,6 +998,32 @@ async function transcribeAudioSegments(filePath, provider, language, chunkDurati
   }
 }
 
+// Las dos pistas van a la vez y el plan gratuito de Groq cuenta segundos de audio
+// por hora: a menudo entra una y la otra choca con el límite. Sin guardar la que
+// entró, cada reintento la volvía a pagar y el límite no se alcanzaba nunca. Se
+// guarda en disco (sobrevive a cerrar la app) y se borra cuando la llamada acaba.
+const TRACK_CACHE_DIR = () => path.join(app.getPath('userData'), 'pistas-transcritas')
+
+async function trackCacheFile(filePath, provider, language) {
+  const st = await fs.stat(filePath)
+  const key = require('node:crypto').createHash('sha1')
+    .update([filePath, st.size, st.mtimeMs, provider.id, provider.model, language].join('|')).digest('hex')
+  return path.join(TRACK_CACHE_DIR(), `${key}.json`)
+}
+
+async function transcribeTrackCached(filePath, provider, language, chunkDurationSec) {
+  const file = await trackCacheFile(filePath, provider, language)
+  try { return JSON.parse(await fs.readFile(file, 'utf-8')) } catch { /* no estaba */ }
+  const result = await transcribeAudioSegments(filePath, provider, language, chunkDurationSec)
+  await fs.mkdir(TRACK_CACHE_DIR(), { recursive: true }).catch(() => {})
+  await fs.writeFile(file, JSON.stringify(result), 'utf-8').catch(() => {})
+  return result
+}
+
+async function forgetCachedTracks(paths, provider, language) {
+  for (const p of paths) await fs.rm(await trackCacheFile(p, provider, language), { force: true }).catch(() => {})
+}
+
 // Fracción de la duración de `seg` que solapa temporalmente con cualquier segmento de `others`.
 function segOverlapFraction(seg, others) {
   const a0 = seg.start ?? 0
@@ -1117,11 +1238,15 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
   // cruzar las dos pistas, así que se cae al camino clásico sin avisar al usuario).
   if (systemExists && stt.canSegment) {
     try {
-      const [mixed, system, speech] = await Promise.all([
-        transcribeAudioSegments(filePath, stt, language || 'auto', chunkDuration),
-        transcribeAudioSegments(systemFilePath, stt, language || 'auto', chunkDuration),
+      // allSettled y no all: si una pista falla, la otra termina y queda guardada.
+      const settled = await Promise.allSettled([
+        transcribeTrackCached(filePath, stt, language || 'auto', chunkDuration),
+        transcribeTrackCached(systemFilePath, stt, language || 'auto', chunkDuration),
         getSpeechIntervals(systemFilePath),
       ])
+      const failed = settled.find((r) => r.status === 'rejected')
+      if (failed) throw failed.reason
+      const [mixed, system, speech] = settled.map((r) => r.value)
 
       // Mejor camino: marcas por palabra + tramos de voz medidos en el audio.
       // Si el proveedor no da palabras (Whisper) o falla la medición, se cae a los
@@ -1150,18 +1275,29 @@ ipcMain.handle('transcription:run', async (_event, { filePath, systemFilePath, l
       const { ivTag, cdTag } = etiquetas(`${mixed.text} ${system.text}`)
       const merged = mergeSeparatedTranscript(mixedSegments, system.segments, ivTag, cdTag, !porHablante)
       const text = merged || [mixed.text, system.text].filter(Boolean).join('\n')
+      await forgetCachedTracks([filePath, systemFilePath], stt, language || 'auto')
       return { text }
     } catch (err) {
+      // Si es el límite de uso del proveedor, el camino clásico volvería a mandar
+      // la mezcla entera y gastaría todavía más cuota: mejor fallar y que la
+      // interfaz reintente cuando el proveedor diga.
+      if (/\(429\)|rate.?limit/i.test(String(err?.message || err))) {
+        log.error(`[transcripción] límite del proveedor: ${String(err?.message || err).slice(0, 400)}`)
+        throw err
+      }
       // Si algo falla en la vía separada, caemos al camino clásico de una sola pista
       // en vez de romper la transcripción.
-      console.error('Fallo en la separación por pistas, usando pista única:', err)
+      log.warn(`[transcripción] falló la separación por pistas, se usa la pista única: ${String(err?.message || err).slice(0, 300)}`)
     }
   }
 
   // CAMINO CLÁSICO: una sola pista mezclada. Si el proveedor ya separa hablantes
   // por sí mismo (Deepgram y similares), transcribeAudio devuelve el texto ya
   // etiquetado y no hace falta que un LLM lo adivine.
-  let text = await transcribeAudio(filePath, stt, language || 'auto', chunkDuration)
+  let text = await transcribeAudio(filePath, stt, language || 'auto', chunkDuration).catch((err) => {
+    log.error(`[transcripción] error: ${String(err?.message || err).slice(0, 400)}`)
+    throw err
+  })
 
   if (text.trim().length > 0 && !stt.canDiarize) {
     text = await identifySpeakers(text, llm, candidateName || '', interviewerName || '', idiomaDeLaLlamada(language, text)).catch(() => text)

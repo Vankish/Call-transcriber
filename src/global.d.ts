@@ -112,6 +112,8 @@ type GetConfigResult = {
   dateFormat?: string
   autoSave?: boolean
   autoTranscribe?: boolean
+  autoRecordCalls?: boolean
+  openAtLogin?: boolean
 }
 
 type SaveConfigPayload = {
@@ -131,6 +133,8 @@ type SaveConfigPayload = {
   dateFormat?: string
   autoSave?: boolean
   autoTranscribe?: boolean
+  autoRecordCalls?: boolean
+  openAtLogin?: boolean
 }
 
 type SaveConfigResult = {
@@ -251,6 +255,9 @@ interface Window {
     openReleasesPage: () => Promise<{ ok: boolean }>
     onUpdaterEvent: (cb: (data: UpdaterEvent) => void) => void
     getAppVersion: () => Promise<string>
+    onCallEvent?: (cb: (ev: { type: 'start' | 'end'; app: string; title: string }) => void) => () => void
+    showWindow?: () => Promise<void>
+    notify?: (payload: { title: string; body: string }) => Promise<void>
   }
 }
 

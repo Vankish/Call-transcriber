@@ -156,6 +156,12 @@ const EN = {
   'Sin clave del CRM: el resultado se queda solo en la app': 'No CRM key: the result stays in the app only',
   'El CRM respondió {status}: {msg}': 'The CRM replied {status}: {msg}',
   'El CRM rechazó la llamada: {msg}': 'The CRM rejected the call: {msg}',
+  // Bandeja y grabación automática de llamadas
+  'Abrir Call Transcriber': 'Open Call Transcriber',
+  'Salir': 'Quit',
+  'Call Transcriber sigue abierta': 'Call Transcriber is still running',
+  'Está en la bandeja, junto al reloj, y grabará sola tus llamadas. Para cerrarla del todo: clic derecho en el icono → Salir.': 'It is in the tray, next to the clock, and will record your calls on its own. To close it completely: right-click the icon → Quit.',
+  'Call Transcriber · grabando la llamada': 'Call Transcriber · recording the call',
 }
 
 module.exports = { usarIdiomaDe, getIdioma, tr, kr, detectarIdioma, etiquetasPorDefecto, nombreEnPrompt, EN }

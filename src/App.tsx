@@ -332,6 +332,28 @@ const EMPTY_CANDIDATE_CRM = { company: '', linkedinUrl: '', stage: '' }
 // según de dónde se copie.
 const linkedinKey = (url?: string | null) => (url ?? '').trim().toLowerCase()
   .replace(/^https?:\/\//, '').replace(/^([a-z]{2,3}\.)?(www\.)?linkedin\.com/, 'linkedin.com').replace(/[?#].*$/, '').replace(/\/+$/, '')
+// Llamadas que tienen que llegar al CRM y aún no han llegado: id → intentos.
+const CRM_PENDING_KEY = 'ct-crm-pending'
+const readCrmPending = (): Record<string, number> => { try { return JSON.parse(localStorage.getItem(CRM_PENDING_KEY) || '{}') } catch { return {} } }
+const writeCrmPending = (p: Record<string, number>) => localStorage.setItem(CRM_PENDING_KEY, JSON.stringify(p))
+
+// Transcripciones automáticas que aún no han terminado bien, con cuándo tocan
+// (ms). Si la app se cierra durante la espera o el proveedor dice que esperemos,
+// al abrirla de nuevo se retoman en vez de quedarse sin transcribir.
+const TX_PENDING_KEY = 'ct-tx-pending'
+const readTxPending = (): Record<string, number> => { try { return JSON.parse(localStorage.getItem(TX_PENDING_KEY) || '{}') } catch { return {} } }
+const setTxPending = (id: string, inMs: number | null) => { const p = readTxPending(); if (inMs === null) delete p[id]; else p[id] = Date.now() + inMs; localStorage.setItem(TX_PENDING_KEY, JSON.stringify(p)) }
+// Un minuto entre parar y transcribir: da tiempo a cerrar los archivos y a
+// convertirlos, y así se transcribe una vez el audio definitivo.
+const TX_AUTO_DELAY_MS = 60_000
+// Groq gratis cuenta segundos de audio por hora y dice cuándo volver: "Please
+// try again in 13m3.5s". Sin esa frase, se espera un cuarto de hora.
+const rateLimitWaitMs = (msg: string): number | null => {
+  if (!/\(429\)|rate.?limit/i.test(msg)) return null
+  const m = msg.match(/try again in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?/i)
+  const ms = m && (m[1] || m[2] || m[3]) ? ((+(m[1] ?? 0) * 60 + +(m[2] ?? 0)) * 60 + +(m[3] ?? 0)) * 1000 : 15 * 60_000
+  return Math.min(ms, 60 * 60_000) + 20_000
+}
 const crmDraftOf = (c: Candidate) => ({ company: c.crm?.company ?? '', linkedinUrl: c.crm?.linkedinUrl ?? '', stage: c.crm?.stage ?? '' })
 // Los campos del trato que se rellenan a partir de una llamada (ver electron/crm.cjs).
 const CRM_FIELDS = [
@@ -624,12 +646,24 @@ function App() {
   const [shareError, setShareError] = useState('')
   const [candidateDraft, setCandidateDraft] = useState(EMPTY_CANDIDATE)
   const [candidateCrmDraft, setCandidateCrmDraft] = useState(EMPTY_CANDIDATE_CRM)
+  // Al editar un perfil: carpeta a la que moverlo ('' = la suya) y perfil con el
+  // que fusionarlo. La fusión pide un segundo clic porque borra este perfil.
+  const [candidateMoveDraft, setCandidateMoveDraft] = useState('')
+  const [candidateMergeTarget, setCandidateMergeTarget] = useState('')
+  const [confirmMerge, setConfirmMerge] = useState(false)
   const [showSessionNameModal, setShowSessionNameModal] = useState(false)
   const [sessionNameDraft, setSessionNameDraft] = useState('')
   // Entrevistador elegido en el modal de "Nombrar sesión", y el proyecto del que
   // sacar la lista. Se guarda el id al abrir el modal porque para entonces la
   // grabación ya ha parado y activeRecordingInterview vale null.
   const [sessionInterviewerDraft, setSessionInterviewerDraft] = useState('')
+  // Grabación automática de llamadas (ver electron/call-detector.cjs). Al guardar
+  // una llamada grabada sola se pregunta de quién era: al empezar no se sabe.
+  const [autoRecordCalls, setAutoRecordCalls] = useState(true)
+  const [openAtLogin, setOpenAtLogin] = useState(true)
+  const [sessionAskContact, setSessionAskContact] = useState(false)
+  const [sessionContactDraft, setSessionContactDraft] = useState('')
+  const [sessionNewContact, setSessionNewContact] = useState({ name: '', company: '', linkedin: '' })
   const [sessionModalProjectId, setSessionModalProjectId] = useState<string | null>(null)
   const [discardConfirming, setDiscardConfirming] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
@@ -719,6 +753,10 @@ function App() {
   // llamada aún se puede descartar. Nada arranca hasta que se pulsa Guardar:
   // ni la transcripción ni, detrás de ella, el envío al CRM.
   const awaitingSaveRef = useRef<Set<string>>(new Set())
+  // La llamada que se está grabando sola (si hay) y el último trato abierto desde el
+  // CRM: si se abre un trato y al rato empieza una llamada, se da por hecho que es suya.
+  const autoRecordingIdRef = useRef<string | null>(null)
+  const lastDealOpenRef = useRef<{ candidateId: string; at: number } | null>(null)
   const transcribeAfterSaveRef = useRef<Set<string>>(new Set())
   const [livePreviewStream, setLivePreviewStream] = useState<MediaStream | null>(null)
   const [captureWindowLabel, setCaptureWindowLabel] = useState('')
@@ -1110,6 +1148,8 @@ function App() {
       if (cfg.dateFormat)         setSettingsDateFormatDraft(cfg.dateFormat)
       if (cfg.autoSave !== undefined) { setSettingsAutoSaveDraft(cfg.autoSave); setAutoSave(cfg.autoSave) }
       if (cfg.autoTranscribe !== undefined) setAutoTranscribe(cfg.autoTranscribe)
+      if (cfg.autoRecordCalls !== undefined) setAutoRecordCalls(cfg.autoRecordCalls)
+      if (cfg.openAtLogin !== undefined) setOpenAtLogin(cfg.openAtLogin)
       setConfigLoaded(true)
     })
   }, [])
@@ -1314,17 +1354,20 @@ function App() {
   }
 
   // ── Recording ──────────────────────────────────────────────────────────
-  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false) => {
+  // `auto`: la grabación la lanza el detector de llamadas. El perfil puede ser uno
+  // recién creado que aún no está en el estado, por eso se pasa con su carpeta.
+  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false, auto?: { candidate: Candidate; projectName: string }) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage(t('Selecciona un micrófono antes de grabar.')); return }
-    const ivCandidate = candidates.find(c => c.id === iv.candidateId)
-    const ivProjectName = projects.find(p => p.id === ivCandidate?.projectId)?.name ?? ''
+    const ivCandidate = auto?.candidate ?? candidates.find(c => c.id === iv.candidateId)
+    const ivProjectName = auto ? auto.projectName : projects.find(p => p.id === ivCandidate?.projectId)?.name ?? ''
     // Se guarda la ruta relativa a la carpeta de grabaciones ("Proyecto\archivo.mp3"),
     // no solo el nombre: con una subcarpeta por proyecto el nombre suelto no basta.
     const storedName = (full: string) => recordingsDir && full.toLowerCase().startsWith(recordingsDir.toLowerCase() + '\\')
       ? full.slice(recordingsDir.length + 1)
       : full.split(/[\\/]/).pop() ?? full
-    if (ivCandidate && !ivCandidate.consentGiven) {
+    // Grabando sola no hay a quién preguntar: la llamada ya ha empezado.
+    if (ivCandidate && !ivCandidate.consentGiven && !auto) {
       const proceed = window.confirm(isClientProject(ivCandidate.projectId) ? t('{nombre} no tiene registrado el consentimiento para grabar la llamada.\n\nGrabar sin avisar al contacto puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en la ficha del contacto).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name }) : t('{nombre} no tiene registrado el consentimiento para grabar la entrevista.\n\nGrabar sin el consentimiento informado del candidato puede incumplir el RGPD. Asegúrate de haberlo obtenido (puedes marcarlo en el perfil).\n\n¿Continuar de todas formas?', { nombre: ivCandidate.name || t('Este candidato') }))
       if (!proceed) return
     }
@@ -1557,12 +1600,19 @@ function App() {
         setSessionInterviewerDraft(iv.interviewerName || '')
         setSessionModalProjectId(ivCandidate?.projectId ?? null)
         awaitingSaveRef.current.add(iv.id)
+        // Se apunta ya al parar, no al acabar de guardar: si la app se cierra mientras
+        // convierte el audio (le pasó a una llamada de 29 min), al abrirla se transcribe
+        // el original en vez de quedarse sin hacer.
+        if (autoTranscribe) setTxPending(iv.id, TX_AUTO_DELAY_MS)
         setShowSessionNameModal(true)
       }
       recorder.start(1000)
       updateInterview(iv.id, { status: 'recording', captureSource: hasSystemAudio ? 'mic+system' : 'mic' })
       setRecordingMessage(hasSystemAudio ? t('Grabando micrófono + sistema.') : t('Grabando solo micrófono.'))
-    } catch { setRecordingMessage(t('No se pudo iniciar la grabación.')); cleanupRecording() }
+    } catch {
+      setRecordingMessage(t('No se pudo iniciar la grabación.')); cleanupRecording()
+      if (auto) { autoRecordingIdRef.current = null; setSessionAskContact(false); void window.desktopApp?.notify?.({ title: t('No se pudo grabar la llamada'), body: t('Dale a grabar a mano en Call Transcriber.') }) }
+    }
   }
 
   const handleNewRecording = () => {
@@ -1596,12 +1646,14 @@ function App() {
         .then(({ error }) => { if (error) toast(t('Error al guardar importación en la nube: {msg}', { msg: error.message }), 'error') })
     }
     toast(t('Audio importado: {archivo}', { archivo: fileName }))
-    if (autoTranscribe) transcribeWhenSaved(n.id)
+    // Un audio importado ya está entero en disco: no hace falta esperar.
+    if (autoTranscribe) transcribeWhenSaved(n.id, 300)
   }
 
   const handleConfirmRecordingSetup = () => {
     if (!activeCandidateId || !activeCandidate || !pendingMicId) return
     setShowAudioSetupModal(false)
+    setSessionAskContact(false)
     const n: Interview = { id: uid(), ownerId: session?.user.id ?? '', candidateId: activeCandidateId, createdAt: new Date().toISOString(), sessionName: '', status: 'idle', durationSec: 0, micDeviceId: pendingMicId, outputDeviceId: pendingOutputId, transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext: contextForCandidate(activeCandidateId), interviewerName: '', audioUploaded: false }
     setInterviews(c => [n, ...c])
     if (session) {
@@ -1615,7 +1667,8 @@ function App() {
   const handleDiscardRecording = async () => {
     const iId = activeInterviewIdRef.current
     activeInterviewIdRef.current = null
-    if (iId) { awaitingSaveRef.current.delete(iId); transcribeAfterSaveRef.current.delete(iId) }
+    if (iId) { awaitingSaveRef.current.delete(iId); transcribeAfterSaveRef.current.delete(iId); setTxPending(iId, null) }
+    autoRecordingIdRef.current = null; setSessionAskContact(false)
     setShowSessionNameModal(false)
     setDiscardConfirming(false)
     if (iId) {
@@ -1667,13 +1720,24 @@ function App() {
   // muestre este modal — puede que aún no haya terminado cuando el usuario confirma.
   // Por eso aquí NO se tocan las pistas: hacerlo antes de que persistRecordingToDisk
   // las lea provocaba perder el vídeo si se confirmaba el nombre demasiado rápido.
-  const handleConfirmSessionName = () => {
+  // `force`: la guarda la siguiente llamada que empieza sola. Entonces no se para por
+  // un contacto nuevo a medio escribir: se queda donde estaba.
+  const handleConfirmSessionName = (force = false) => {
     const iId = activeInterviewIdRef.current
     if (!iId) return
+    let target: Candidate | null = null
+    if (sessionAskContact && sessionContactDraft === '__new__') {
+      target = createContactForCall(force)
+      if (!target && !force) return
+    } else if (sessionAskContact && sessionContactDraft) {
+      target = candidates.find(c => c.id === sessionContactDraft) ?? null
+    }
     const defaultName = vocab(sessionModalProject?.kind).defaultSession(fechaCorta())
     const finalName = sessionNameDraft.trim() || defaultName
     setShowSessionNameModal(false); setDiscardConfirming(false)
     updateInterview(iId, { sessionName: finalName, interviewerName: sessionInterviewerDraft })
+    if (target && target.id !== interviews.find(i => i.id === iId)?.candidateId) moveInterviewTo(iId, target)
+    autoRecordingIdRef.current = null; setSessionAskContact(false)
     setSessionModalProjectId(null); setSessionInterviewerDraft('')
     activeInterviewIdRef.current = null
     // Ya guardada: si el audio ya estaba en disco, la transcripción arranca ahora;
@@ -1683,30 +1747,139 @@ function App() {
     toast(t('Grabación guardada'))
   }
 
+  // ── Grabación automática de llamadas ───────────────────────────────────
+  // La carpeta de clientes con ese nombre; si no existe, se crea. Se reconoce sin
+  // distinguir mayúsculas, para no duplicar una que se creó a mano.
+  const findOrCreateClientFolder = (name: string): Project => {
+    const found = projects.find(p => p.kind === 'clientes' && p.name.trim().toLowerCase() === name.trim().toLowerCase())
+    if (found) return found
+    const p: Project = { id: uid(), ownerId: session?.user.id ?? '', name: name.trim(), company: ownCompany(), createdAt: new Date().toISOString(), status: 'active', evaluationCriteria: [], interviewers: [], kind: 'clientes' }
+    setProjects(c => [...c, p])
+    if (session) void supabase.from('projects').insert({ id: p.id, user_id: session.user.id, name: p.name, company: p.company, status: p.status, evaluation_criteria: [], interviewers: [], created_at: p.createdAt, kind: 'clientes' })
+    return p
+  }
+
+  const createCandidateIn = (project: Project, name: string, crm: CrmDeal | null): Candidate => {
+    const now = new Date().toISOString()
+    const c: Candidate = { id: uid(), projectId: project.id, createdAt: now, name, email: crm?.contactEmail ?? '', phone: '', role: '', notes: '', candidateStatus: 'pendiente', consentGiven: false, consentAt: null, crm }
+    setCandidates(curr => [...curr, c])
+    if (session) void supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: '', role: '', notes: '', candidate_status: 'pendiente', consent_given: false, consent_at: null, created_at: now, ...(crm ? { crm } : {}) })
+    return c
+  }
+
+  // Al empezar una llamada sola no se sabe de quién es: cuelga de este perfil hasta
+  // que se elige el contacto al guardarla.
+  const UNASSIGNED_KEY = 'ct-llamadas-sin-asignar'
+  const unassignedCandidateId = () => { try { return (JSON.parse(localStorage.getItem(UNASSIGNED_KEY) || 'null') as { candidateId?: string } | null)?.candidateId ?? null } catch { return null } }
+  const ensureUnassignedCandidate = (): { candidate: Candidate; projectName: string } => {
+    const saved = candidates.find(c => c.id === unassignedCandidateId())
+    const savedProject = saved && projects.find(p => p.id === saved.projectId)
+    if (saved && savedProject) return { candidate: saved, projectName: savedProject.name }
+    const project = findOrCreateClientFolder(t('Llamadas sin asignar'))
+    const candidate = createCandidateIn(project, t('Llamada sin asignar'), null)
+    localStorage.setItem(UNASSIGNED_KEY, JSON.stringify({ candidateId: candidate.id }))
+    return { candidate, projectName: project.name }
+  }
+
+  // El contacto nuevo que se escribe al guardar la llamada: su carpeta es la empresa.
+  const createContactForCall = (quiet = false): Candidate | null => {
+    const name = sessionNewContact.name.trim()
+    if (!name) { if (!quiet) toast(t('Escribe el nombre del contacto'), 'warning'); return null }
+    const company = sessionNewContact.company.trim() || t('Clientes (CRM)')
+    const project = findOrCreateClientFolder(company)
+    return createCandidateIn(project, name, { ...EMPTY_CRM_DEAL, company, linkedinUrl: sessionNewContact.linkedin.trim() })
+  }
+
+  // La llamada pasa a otro perfil. El audio no se mueve: cuelga de la llamada.
+  const moveInterviewTo = (interviewId: string, target: Candidate) => {
+    const summaryContext: SummaryContext = target.crm ? 'reunion' : contextForCandidate(target.id)
+    setInterviews(c => c.map(i => i.id === interviewId ? { ...i, candidateId: target.id, summaryContext } : i))
+    if (session) supabase.from('interviews').update({ candidate_id: target.id, project_id: target.projectId, summary_context: summaryContext }).eq('id', interviewId).then(() => {}, () => {})
+  }
+
+  const handleCallEvent = (ev: { type: 'start' | 'end'; app: string; title: string }) => {
+    const desk = window.desktopApp
+    if (!desk) return
+    if (ev.type === 'start') {
+      if (!autoRecordCalls) return
+      // Ya se está grabando (a mano o sola): no se pisa.
+      if (activeRecordingInterview || mediaRecorderRef.current) return
+      // La llamada anterior sigue esperando a que se guarde: se guarda tal cual.
+      if (showSessionNameModal && activeInterviewIdRef.current) handleConfirmSessionName(true)
+      const mic = defaultMicDeviceId || micDevices[0]?.id || ''
+      if (!mic) { void desk.notify?.({ title: t('No se pudo grabar la llamada'), body: t('No hay ningún micrófono. Revísalo en Configuración → Grabación.') }); return }
+      const last = lastDealOpenRef.current
+      lastDealOpenRef.current = null // un trato abierto vale para una sola llamada
+      const recent = last && new Date().getTime() - last.at < 3 * 3600_000 ? candidates.find(c => c.id === last.candidateId) : undefined
+      const target = recent ? { candidate: recent, projectName: projects.find(p => p.id === recent.projectId)?.name ?? '' } : ensureUnassignedCandidate()
+      const cand = target.candidate
+      const createdAt = new Date().toISOString()
+      const summaryContext: SummaryContext = cand.crm || !recent ? 'reunion' : contextForCandidate(cand.id)
+      const n: Interview = { id: uid(), ownerId: session?.user.id ?? '', candidateId: cand.id, createdAt, sessionName: '', status: 'idle', durationSec: 0, micDeviceId: mic, outputDeviceId: defaultOutputDeviceId || '', transcriptOriginal: '', transcriptEdited: '', transcriptUpdatedAt: null, recordingUrl: null, recordingFilePath: null, videoFilePath: null, systemAudioFilePath: null, captureSource: 'none', transcriptionStatus: 'pending', summaryInstructions: '', summaryText: '', summaryStatus: 'idle', summaryType: 'resumen', summaryContext, interviewerName: '', audioUploaded: false }
+      setInterviews(c => [n, ...c])
+      if (session) {
+        supabase.from('interviews').insert({ id: n.id, user_id: session.user.id, candidate_id: cand.id, project_id: cand.projectId, session_name: '', status: n.status, duration_sec: 0, mic_device_id: n.micDeviceId, output_device_id: n.outputDeviceId, transcript_original: '', transcript_edited: '', transcript_updated_at: null, recording_url: null, recording_file_path: null, capture_source: n.captureSource, transcription_status: n.transcriptionStatus, summary_instructions: '', summary_text: '', summary_status: n.summaryStatus, summary_type: n.summaryType, summary_context: n.summaryContext, interviewer_name: '', created_at: createdAt, updated_at: createdAt })
+          .then(({ error }) => { if (error) console.error('Supabase insert error:', error.message) }, () => {})
+      }
+      autoRecordingIdRef.current = n.id
+      setSessionAskContact(true); setSessionContactDraft(recent ? recent.id : ''); setSessionNewContact({ name: '', company: '', linkedin: '' })
+      void handleStartRecording(n, true, false, target)
+      void desk.notify?.({ title: t('Grabando la llamada de {app}', { app: ev.app }), body: recent ? t('Es la llamada con {nombre}. Se para sola al colgar.', { nombre: recent.name }) : t('Se para sola al colgar. Después eliges de quién era.') })
+    } else {
+      const id = autoRecordingIdRef.current
+      // Si se paró a mano, ya está parada: no hay nada que hacer.
+      if (!id || activeInterviewIdRef.current !== id || !mediaRecorderRef.current) return
+      handleStopRecording()
+      void desk.showWindow?.()
+      void desk.notify?.({ title: t('Llamada terminada'), body: t('Elige de quién era y pulsa Guardar: después se transcribe y va al CRM sola.') })
+    }
+  }
+  // La suscripción se crea una vez; siempre se llama a la versión al día.
+  const callEventRef = useRef(handleCallEvent)
+  useEffect(() => { callEventRef.current = handleCallEvent })
+  useEffect(() => window.desktopApp?.onCallEvent?.(ev => callEventRef.current(ev)), [])
+
   // ── Transcription / Summary ────────────────────────────────────────────
   // La transcripción automática se lanza desde funciones creadas antes de que la
   // entrevista (o su archivo) estuviera en la lista. Llamando a handleTranscribe
   // desde ahí, buscaba en esa lista vieja y fallaba con "No se encuentra la
   // entrevista". Se espera a que React pinte los cambios y se usa la versión al día.
   const handleTranscribeRef = useRef<(interviewId: string) => Promise<void>>(async () => {})
-  const transcribeWhenSaved = (interviewId: string) => {
-    window.setTimeout(() => { void handleTranscribeRef.current(interviewId) }, 300)
+  // Una sola transcripción en marcha o en espera por entrevista: lanzar dos (una
+  // sobre el original y otra sobre el mp3) gastaba el doble de cuota y las dos
+  // acababan fallando por el límite del proveedor.
+  const txTimersRef = useRef<Record<string, number>>({})
+  const txRunningRef = useRef<Set<string>>(new Set())
+  const transcribeWhenSaved = (interviewId: string, delayMs = TX_AUTO_DELAY_MS, aviso = true) => {
+    window.clearTimeout(txTimersRef.current[interviewId])
+    setTxPending(interviewId, delayMs)
+    txTimersRef.current[interviewId] = window.setTimeout(() => {
+      delete txTimersRef.current[interviewId]
+      void handleTranscribeRef.current(interviewId)
+    }, delayMs)
+    if (aviso && delayMs >= 30_000) toast(t('La transcripción empieza en {min} min', { min: Math.round(delayMs / 60_000) }), 'info', t('Antes se termina de guardar el audio en el ordenador'))
   }
 
   const handleTranscribe = async (interviewId: string, language?: string) => {
+    // Pulsar "Transcribir" durante la espera la adelanta; si ya está en marcha, no
+    // se lanza otra.
+    window.clearTimeout(txTimersRef.current[interviewId]); delete txTimersRef.current[interviewId]
+    if (txRunningRef.current.has(interviewId)) { toast(t('Esta llamada ya se está transcribiendo'), 'info'); return }
     const interview = interviews.find(i => i.id === interviewId)
+    // Sin audio o sin motor no hay nada que reintentar al abrir la app.
+    const fail = (...args: Parameters<typeof toast>) => { setTxPending(interviewId, null); toast(...args) }
     // Estas salidas eran mudas: al pulsar "Transcribir" no pasaba nada y no había
     // forma de saber por qué. Cada una dice ahora qué falta.
-    if (!interview) { toast(t('No se encuentra la entrevista'), 'error'); return }
-    if (!interview.recordingFilePath) { toast(t('Esta entrevista no tiene grabación asociada'), 'error'); return }
-    if (!window.desktopApp?.transcribeAudio) { toast(t('La transcripción solo funciona en la app de escritorio'), 'error'); return }
-    if (!sttReady) { toast(t('Configura un motor de transcripción'), 'error', t('Configuración → Motores de IA')); return }
+    if (!interview) { fail(t('No se encuentra la entrevista'), 'error'); return }
+    if (!interview.recordingFilePath) { fail(t('Esta entrevista no tiene grabación asociada'), 'error'); return }
+    if (!window.desktopApp?.transcribeAudio) { fail(t('La transcripción solo funciona en la app de escritorio'), 'error'); return }
+    if (!sttReady) { fail(t('Configura un motor de transcripción'), 'error', t('Configuración → Motores de IA')); return }
     // Si el audio se grabó en el otro equipo, se baja de la nube antes de seguir.
     // `systemPath` es la pista solo-sistema (voz limpia del interlocutor): su
     // presencia activa la separación determinista de hablantes en el backend.
     const audio = await ensureLocalAudio(interview)
     if (!audio) {
-      toast(t('No se encuentra el audio de esta entrevista'), 'error',
+      fail(t('No se encuentra el audio de esta entrevista'), 'error',
         interview.audioUploaded ? t('Falló la descarga desde la nube') : t('Se grabó en otro equipo y no se subió a la nube'))
       return
     }
@@ -1720,9 +1893,11 @@ function App() {
     transcribeRunRef.current[interviewId] = runId
     const isLatest = () => transcribeRunRef.current[interviewId] === runId
     updateInterview(interviewId, { transcriptionStatus: 'transcribing' })
+    txRunningRef.current.add(interviewId)
     try {
       const result = await window.desktopApp.transcribeAudio({ filePath: fullPath, systemFilePath: systemPath ?? undefined, language: language ?? txLang, candidateName, interviewerName })
       if (!isLatest()) return
+      setTxPending(interviewId, null)
       updateInterview(interviewId, { transcriptOriginal: result.text, transcriptEdited: result.text, transcriptionStatus: 'done' })
       if (selectedInterviewId === interviewId) setTranscriptDraft(result.text)
       if (notifTranscription) toast(t('Transcripción completada'))
@@ -1736,9 +1911,23 @@ function App() {
       if (interview && !awaitingSaveRef.current.has(interviewId)) void sendToCrmRef.current?.(interview.candidateId, interviewId, { transcript: result.text })
     } catch (err) {
       if (!isLatest()) return
-      updateInterview(interviewId, { transcriptionStatus: 'error' })
       const msg = err instanceof Error ? limpiarErrorIpc(err.message) : t('Error desconocido')
+      // Límite de uso del proveedor: no es un fallo, es "vuelve dentro de un rato".
+      // Se queda en espera y se reintenta sola; nunca se deja sin transcribir.
+      const waitMs = rateLimitWaitMs(msg)
+      if (waitMs !== null) {
+        updateInterview(interviewId, { transcriptionStatus: 'pending' })
+        txRunningRef.current.delete(interviewId)
+        transcribeWhenSaved(interviewId, waitMs, false)
+        toast(t('{servicio} ha llegado a su límite gratuito', { servicio: sttPreset?.label ?? t('El servicio de transcripción') }), 'info',
+          t('La llamada se transcribe sola en {min} min. No hace falta hacer nada.', { min: Math.ceil(waitMs / 60_000) }))
+        return
+      }
+      setTxPending(interviewId, null)
+      updateInterview(interviewId, { transcriptionStatus: 'error' })
       if (notifErrors) { const [titulo, detalle] = separarErrorApi(msg, t('Error al transcribir')); toast(titulo, 'error', detalle) }
+    } finally {
+      txRunningRef.current.delete(interviewId)
     }
   }
 
@@ -2045,17 +2234,71 @@ function App() {
     toast(t('Perfil {nombre} creado', { nombre: c.name }))
   }
 
+  // Cada vez que se abre (o cierra) la edición de un perfil, mover y fusionar
+  // empiezan de cero.
+  useEffect(() => { setCandidateMoveDraft(''); setCandidateMergeTarget(''); setConfirmMerge(false) }, [editingCandidateId])
+
   const handleUpdateCandidate = () => {
     if (!editingCandidateId || !candidateDraft.name.trim()) return
     const prev = candidates.find(x => x.id === editingCandidateId)
     const consentAt = candidateConsentDraft ? (prev?.consentAt ?? new Date().toISOString()) : null
-    const crm: CrmDeal | null | undefined = prev && isClientProject(prev.projectId)
-      ? { ...EMPTY_CRM_DEAL, ...(prev.crm ?? {}), ...candidateCrmDraft, company: prev.crm?.company || projects.find(p => p.id === prev.projectId)?.name || '', contactEmail: candidateDraft.email.trim() || prev.crm?.contactEmail || '' }
+    // Moverlo de carpeta solo cambia su projectId: las llamadas cuelgan del perfil
+    // y se van con él. En una carpeta de cliente la empresa es la de la carpeta nueva.
+    const projectId = candidateMoveDraft && prev && candidateMoveDraft !== prev.projectId ? candidateMoveDraft : prev?.projectId ?? ''
+    const moved = !!prev && projectId !== prev.projectId
+    const projectName = projects.find(p => p.id === projectId)?.name || ''
+    const crm: CrmDeal | null | undefined = prev && isClientProject(projectId)
+      ? { ...EMPTY_CRM_DEAL, ...(prev.crm ?? {}), ...candidateCrmDraft, company: (moved ? projectName : prev.crm?.company) || projectName, contactEmail: candidateDraft.email.trim() || prev.crm?.contactEmail || '' }
       : prev?.crm
-    setCandidates(c => c.map(x => x.id === editingCandidateId ? { ...x, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt, crm } : x))
-    if (session) supabase.from('candidates').update({ name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt, ...(crm ? { crm } : {}) }).eq('id', editingCandidateId)
-      .then(({ error }) => { if (error) toast(t('Error sincronizando perfil: {msg}', { msg: error.message }), 'error') }, () => {})
-    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false); toast(t('Perfil actualizado'))
+    const id = editingCandidateId
+    setCandidates(c => c.map(x => x.id === id ? { ...x, projectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidateStatus: candidateStatusDraft, consentGiven: candidateConsentDraft, consentAt, crm } : x))
+    if (session) {
+      supabase.from('candidates').update({ project_id: projectId, name: candidateDraft.name.trim(), email: candidateDraft.email.trim(), phone: candidateDraft.phone.trim(), role: candidateDraft.role.trim(), notes: candidateNotesDraft, candidate_status: candidateStatusDraft, consent_given: candidateConsentDraft, consent_at: consentAt, ...(crm ? { crm } : {}) }).eq('id', id)
+        .then(({ error }) => { if (error) toast(t('Error sincronizando perfil: {msg}', { msg: error.message }), 'error') }, () => {})
+      if (moved) supabase.from('interviews').update({ project_id: projectId }).eq('candidate_id', id).then(() => {}, () => {})
+    }
+    if (moved && activeCandidateId === id) setActiveProjectId(projectId)
+    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false)
+    toast(moved ? t('Perfil movido a {carpeta}', { carpeta: projectName }) : t('Perfil actualizado'))
+  }
+
+  // Une dos perfiles de la misma persona: las llamadas del de origen pasan al de
+  // destino y el de origen se borra. El audio no se toca: cuelga de la llamada.
+  // Del destino manda lo que ya tenga; lo vacío se rellena con el origen.
+  const handleMergeCandidate = async (sourceId: string, targetId: string) => {
+    const src = candidates.find(c => c.id === sourceId)
+    const dst = candidates.find(c => c.id === targetId)
+    if (!src || !dst || src.id === dst.id) return
+    const pick = (a: string | undefined | null, b: string | undefined | null) => (a ?? '').trim() ? (a ?? '') : (b ?? '')
+    let crm: CrmDeal | null = null
+    if (dst.crm || src.crm) {
+      const a: CrmDeal = { ...EMPTY_CRM_DEAL, ...(dst.crm ?? {}) }, b: CrmDeal = { ...EMPTY_CRM_DEAL, ...(src.crm ?? {}) }
+      const out: Record<string, unknown> = { ...a }
+      for (const k of Object.keys(a) as (keyof CrmDeal)[]) if (k !== 'lastSentAt') out[k] = pick(a[k] as string, b[k] as string)
+      crm = out as CrmDeal
+      crm.lastSentAt = [a.lastSentAt, b.lastSentAt].filter((x): x is string => !!x).sort().pop() ?? null
+      if (isClientProject(dst.projectId)) crm.company = a.company || projects.find(p => p.id === dst.projectId)?.name || ''
+    }
+    const notes = [dst.notes, src.notes].map(n => (n ?? '').trim()).filter(Boolean).join('\n\n')
+    const merged: Candidate = {
+      ...dst, email: pick(dst.email, src.email), phone: pick(dst.phone, src.phone), role: pick(dst.role, src.role), notes,
+      consentGiven: dst.consentGiven || src.consentGiven, consentAt: dst.consentAt ?? src.consentAt, crm,
+    }
+    const movedCalls = interviews.filter(i => i.candidateId === src.id).length
+    setInterviews(c => c.map(i => i.candidateId === src.id ? { ...i, candidateId: dst.id } : i))
+    setCandidates(c => c.filter(x => x.id !== src.id).map(x => x.id === dst.id ? merged : x))
+    setEditingCandidateId(null); setShowNewCandidate(false); setCandidateDraft(EMPTY_CANDIDATE); setCandidateConsentDraft(false)
+    if (activeCandidateId === src.id) { setActiveProjectId(dst.projectId); setActiveCandidateId(dst.id) }
+    if (session) {
+      const r1 = await supabase.from('interviews').update({ candidate_id: dst.id, project_id: dst.projectId }).eq('candidate_id', src.id)
+      const r2 = await supabase.from('candidates').update({ email: merged.email, phone: merged.phone, role: merged.role, notes: merged.notes, consent_given: merged.consentGiven, consent_at: merged.consentAt, ...(crm ? { crm } : {}) }).eq('id', dst.id)
+      // El origen solo se borra si sus llamadas ya cambiaron de perfil: si no, el
+      // borrado en cascada se las llevaría.
+      if (!r1.error) await supabase.from('candidates').delete().eq('id', src.id)
+      const err = r1.error ?? r2.error
+      if (err) toast(t('Error sincronizando perfil: {msg}', { msg: err.message }), 'error')
+    }
+    toast(t('Perfiles fusionados'), 'success', t('{n} llamadas pasan a {nombre}', { n: movedCalls, nombre: dst.name }))
   }
 
   // ── Compartir carpetas ─────────────────────────────────────────────────
@@ -2174,7 +2417,7 @@ function App() {
       userName: settingsNameDraft, userEmail: settingsEmailDraft, userCompany: settingsCompanyDraft,
       userRole: settingsRoleDraft, audioFormat: settingsAudioFormatDraft, recordingQuality: settingsRecordingQualityDraft,
       chunkDuration: settingsChunkDurationDraft, language: settingsLanguageDraft, dateFormat: settingsDateFormatDraft,
-      autoSave: settingsAutoSaveDraft, autoTranscribe,
+      autoSave: settingsAutoSaveDraft, autoTranscribe, autoRecordCalls, openAtLogin,
     })
     setSttCfg(nextStt); setLlmCfg(nextLlm)
     // Antes que el aviso de abajo, para que "guardada" salga ya en el idioma nuevo.
@@ -3109,6 +3352,7 @@ function App() {
     const existing = candidates.find(c => c.crm?.dealId === deal.dealId)
       ?? (key ? candidates.find(c => isClientProject(c.projectId) && linkedinKey(c.crm?.linkedinUrl) === key) : undefined)
     if (existing) {
+      lastDealOpenRef.current = { candidateId: existing.id, at: Date.now() }
       if (existing.crm?.dealId !== deal.dealId) updateCandidateCrm(existing.id, { dealId: deal.dealId })
       goToCandidate(existing.id, existing.projectId); setActiveTab('crm'); return
     }
@@ -3126,6 +3370,7 @@ function App() {
     const crm: CrmDeal = { ...EMPTY_CRM_DEAL, dealId: deal.dealId, company: deal.company, contactEmail: deal.email, linkedinUrl: deal.linkedin, stage: deal.stage }
     const c: Candidate = { id: uid(), projectId: project.id, createdAt: now, name: deal.name || deal.company || t('Trato sin nombre'), email: deal.email, phone: '', role: '', notes: '', candidateStatus: 'pendiente', consentGiven: false, consentAt: null, crm }
     setCandidates(curr => [...curr, c])
+    lastDealOpenRef.current = { candidateId: c.id, at: Date.now() }
     if (session) void supabase.from('candidates').insert({ id: c.id, user_id: session.user.id, project_id: c.projectId, name: c.name, email: c.email, phone: '', role: c.role, notes: '', candidate_status: 'pendiente', consent_given: false, consent_at: null, created_at: now, crm })
     goToCandidate(c.id, project.id); setActiveTab('crm')
     toast(t('Trato abierto desde el CRM: {nombre}', { nombre: c.name }))
@@ -3145,12 +3390,17 @@ function App() {
   }, [projects, candidates, session])
 
   // `auto`: viene de terminar una transcripción. Entonces solo se envía si el
-  // contacto es de un trato del CRM y todo está listo; si no, se calla.
+  // contacto es de una carpeta de cliente, tiene LinkedIn y el CRM está
+  // conectado; si no, se calla. No hace falta que venga de un trato: el CRM
+  // encuentra el trato abierto del contacto por su LinkedIn.
   const handleSendToCrm = async (candidateId: string, interviewId: string, auto?: { transcript: string }) => {
     const cand = candidates.find(c => c.id === candidateId)
     const iv = interviews.find(i => i.id === interviewId)
     if (!cand || !iv || !window.desktopApp?.analyzeAndSendToCrm) return
-    if (auto && !(isClientProject(cand.projectId) && cand.crm?.dealId && cand.crm.linkedinUrl?.trim() && crmConfig?.apiUrl && crmConfig?.apiKey)) return
+    if (auto && !(isClientProject(cand.projectId) && cand.crm?.linkedinUrl?.trim() && crmConfig?.apiUrl && crmConfig?.apiKey)) return
+    // Queda apuntada hasta que el CRM la acepte: si la app se cierra a medias
+    // (Claude tarda unos segundos), se reintenta al abrirla.
+    if (auto) { const p = readCrmPending(); p[iv.id] = (p[iv.id] ?? 0) + 1; writeCrmPending(p) }
     if (crmBusyCandidateId === cand.id) return
     const transcript = (auto?.transcript ?? (iv.transcriptEdited || iv.transcriptOriginal)).trim()
     if ((!auto && iv.transcriptionStatus !== 'done') || !transcript) { toast(t('Transcribe primero la llamada'), 'warning'); return }
@@ -3158,6 +3408,8 @@ function App() {
     if (!cand.crm?.linkedinUrl?.trim()) { toast(t('Falta el LinkedIn del contacto'), 'warning', t('Añádelo con el lápiz de editar')); return }
     if (auto) toast(t('Enviando la llamada al CRM'), 'info', t('Claude la está leyendo con el contexto de Orbit'))
     const deal: CrmDeal = { ...EMPTY_CRM_DEAL, ...(cand.crm ?? {}) }
+    // Una ficha creada a mano no trae empresa: es el nombre de su carpeta.
+    if (!deal.company.trim()) deal.company = projects.find(p => p.id === cand.projectId)?.name ?? ''
     setCrmBusyCandidateId(cand.id)
     try {
       const r = await window.desktopApp.analyzeAndSendToCrm({
@@ -3169,7 +3421,7 @@ function App() {
       // llamada; el trato de verdad es el del CRM.
       const patch: Partial<CrmDeal> = { nota: r.analysis.nota }
       for (const f of CRM_FIELDS) if (r.analysis[f.id]) patch[f.id] = r.analysis[f.id]
-      if (r.sent) patch.lastSentAt = new Date().toISOString()
+      if (r.sent) { patch.lastSentAt = new Date().toISOString(); const p = readCrmPending(); delete p[iv.id]; writeCrmPending(p) }
       updateCandidateCrm(cand.id, patch)
       if (!iv.summaryText.trim()) updateInterview(iv.id, { summaryText: r.analysis.nota, summaryStatus: 'done', summaryContext: 'reunion' })
       if (r.sent) toast(t('Llamada enviada al CRM'), 'success', t('Revisa el trato en el CRM'))
@@ -3182,6 +3434,43 @@ function App() {
   }
 
   useEffect(() => { sendToCrmRef.current = handleSendToCrm })
+
+  // Al abrir la app, las llamadas que no llegaron al CRM se mandan de nuevo, una
+  // detrás de otra. Tres intentos como mucho: si el CRM la rechaza siempre, no
+  // tiene sentido avisar en cada arranque.
+  const crmRetryDoneRef = useRef(false)
+  useEffect(() => {
+    if (crmRetryDoneRef.current || (!localDataLoaded.current && !session) || !crmConfig?.apiKey) return
+    crmRetryDoneRef.current = true
+    const pending = readCrmPending()
+    const ids = Object.keys(pending)
+    if (ids.length === 0) return
+    const queue: Interview[] = []
+    for (const id of ids) {
+      const iv = interviews.find(i => i.id === id)
+      if (iv && pending[id] < 3 && iv.transcriptionStatus === 'done' && (iv.transcriptEdited || iv.transcriptOriginal).trim()) queue.push(iv)
+      else delete pending[id]
+    }
+    writeCrmPending(pending)
+    void (async () => {
+      for (const iv of queue) await sendToCrmRef.current?.(iv.candidateId, iv.id, { transcript: (iv.transcriptEdited || iv.transcriptOriginal).trim() })
+    })()
+  }, [interviews, crmConfig, session])
+
+  // Al abrir la app se retoman las transcripciones automáticas que quedaron en
+  // espera (app cerrada durante el minuto de margen o esperando al proveedor).
+  const txResumeDoneRef = useRef(false)
+  useEffect(() => {
+    if (txResumeDoneRef.current || (!localDataLoaded.current && !session) || interviews.length === 0) return
+    txResumeDoneRef.current = true
+    const pending = readTxPending()
+    for (const [id, at] of Object.entries(pending)) {
+      const iv = interviews.find(i => i.id === id)
+      if (!iv || !iv.recordingFilePath || iv.transcriptionStatus === 'done') { setTxPending(id, null); continue }
+      transcribeWhenSaved(id, Math.max(5_000, at - new Date().getTime()), false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interviews, session])
 
   const renderCrmTab = () => {
     if (!activeCandidate) return null
@@ -3199,11 +3488,11 @@ function App() {
       <div className="crm-tab">
         <div className="crm-card">
           <h3 className="rec-section-title">{companyName ? `${companyName} · ${cand.name}` : cand.name}</h3>
-          <p className="cfg-field-desc">
+          {(deal.dealId || canMatch) && <p className="cfg-field-desc">
             {deal.dealId
               ? t('Vinculado al trato del CRM ({id}). Lo demás del trato se lleva en el CRM.', { id: deal.dealId })
-              : t('Este contacto no viene de un trato del CRM. Ábrelo desde el botón del trato para vincularlo.')}
-          </p>
+              : t('Vinculado por su LinkedIn: la llamada va al trato abierto de este contacto en el CRM. Lo demás del trato se lleva en el CRM.')}
+          </p>}
           {deal.linkedinUrl.trim() && <p className="cfg-field-desc"><a href={/^https?:/i.test(deal.linkedinUrl) ? deal.linkedinUrl : `https://${deal.linkedinUrl}`} target="_blank" rel="noreferrer">{deal.linkedinUrl}</a></p>}
           {!canMatch && <p className="cfg-field-desc">{t('Falta su LinkedIn: es lo que usa el CRM para saber a qué trato va la llamada. Añádelo con el lápiz de editar.')}</p>}
         </div>
@@ -3227,7 +3516,7 @@ function App() {
           )}
           <p className="cfg-field-desc">
             {crmReady
-              ? t('Al terminar de transcribir, la llamada se manda sola: Claude la lee con el contexto de Orbit y deja en el trato la reunión, el SPIN, el próximo paso y una nota. El botón sirve para volver a mandarla.')
+              ? t('Al terminar de transcribir, la llamada se manda sola: Claude la lee con el contexto de Orbit y deja una nota en el contacto con el resumen, el SPIN y el próximo paso. El botón sirve para volver a mandarla.')
               : t('Falta conectar el CRM: sin la clave la llamada no se envía.')}
             {!crmReady && <> <button type="button" className="link-btn" onClick={() => openSettings('api-keys')}>{t('Conectar el CRM')} <ArrowRightIcon size={12} /></button></>}
           </p>
@@ -4022,6 +4311,14 @@ function App() {
                     <div><span className="toggle-label">{t('Transcripción automática')}</span><span className="notif-sub">{t('Transcribir automáticamente al terminar cada grabación')}</span></div>
                     <button type="button" className={`toggle-btn${autoTranscribe ? ' on' : ''}`} onClick={() => setAutoTranscribe(v => !v)}><span className="toggle-circle" /></button>
                   </div>
+                  <div className="toggle-row" style={{ marginTop: 12 }}>
+                    <div><span className="toggle-label">{t('Grabar solas las llamadas')}</span><span className="notif-sub">{t('Empieza a grabar al entrar en un Google Meet (o en Zoom o Teams) y para al colgar')}</span></div>
+                    <button type="button" className={`toggle-btn${autoRecordCalls ? ' on' : ''}`} onClick={() => setAutoRecordCalls(v => !v)}><span className="toggle-circle" /></button>
+                  </div>
+                  <div className="toggle-row" style={{ marginTop: 12 }}>
+                    <div><span className="toggle-label">{t('Abrir con Windows')}</span><span className="notif-sub">{t('Arranca escondida en la bandeja para no perderse ninguna llamada')}</span></div>
+                    <button type="button" className={`toggle-btn${openAtLogin ? ' on' : ''}`} onClick={() => setOpenAtLogin(v => !v)}><span className="toggle-circle" /></button>
+                  </div>
                 </div>
                 <div className="settings-section">
                   <div className="settings-section-label">{t('ARCHIVOS')}</div>
@@ -4788,6 +5085,34 @@ function App() {
             <h2>{t('Nombrar sesión')}</h2>
             <p>{t('¿Cómo quieres llamar a esta sesión?')}</p>
             <label className="modal-label">{t('Nombre')}<input type="text" className="modal-input" value={sessionNameDraft} onChange={e => setSessionNameDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void handleConfirmSessionName() }} placeholder={vocab(sessionModalProject?.kind).sessionPlaceholder} autoFocus /></label>
+            {/* Grabada sola: al empezar no se sabía de quién era. */}
+            {sessionAskContact && (() => {
+              const sinAsignar = unassignedCandidateId()
+              const contactos = candidates
+                .filter(c => c.id !== sinAsignar && isClientProject(c.projectId))
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(c => ({ value: c.id, label: `${c.name} · ${projects.find(p => p.id === c.projectId)?.name ?? ''}` }))
+              return (
+                <>
+                  <label className="modal-label">{t('¿De quién es esta llamada?')}
+                    <Select
+                      className="modal-input"
+                      value={sessionContactDraft}
+                      onChange={setSessionContactDraft}
+                      options={[{ value: '', label: t('Sin asignar (lo elijo luego)') }, { value: '__new__', label: t('+ Contacto nuevo') }, ...contactos]}
+                    />
+                  </label>
+                  {sessionContactDraft === '__new__' && (
+                    <>
+                      <label className="modal-label">{t('Nombre del contacto')}<input type="text" className="modal-input" value={sessionNewContact.name} onChange={e => setSessionNewContact(d => ({ ...d, name: e.target.value }))} placeholder={t('Ej: Ana García')} /></label>
+                      <label className="modal-label">{t('Empresa')}<input type="text" className="modal-input" value={sessionNewContact.company} onChange={e => setSessionNewContact(d => ({ ...d, company: e.target.value }))} placeholder={t('Será su carpeta')} /></label>
+                      <label className="modal-label">LinkedIn<input type="text" className="modal-input" value={sessionNewContact.linkedin} onChange={e => setSessionNewContact(d => ({ ...d, linkedin: e.target.value }))} placeholder="https://www.linkedin.com/in/…" /></label>
+                    </>
+                  )}
+                  {!sessionContactDraft && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>{t('Se queda en «Llamadas sin asignar» y no va al CRM hasta que la muevas a su contacto.')}</p>}
+                </>
+              )
+            })()}
             {/* Quién ha llevado la llamada, en caliente y recién terminada. Se puede
                 cambiar luego desde la lista de grabaciones. */}
             {sessionModalProject && sessionModalProject.interviewers.length > 0 && (
@@ -4837,8 +5162,15 @@ function App() {
               <div className="modal-field">
                 <span className="modal-field-label">{t('LinkedIn *')}</span>
                 <input type="text" className="modal-input modal-input--figma" value={candidateCrmDraft.linkedinUrl} onChange={e => setCandidateCrmDraft(d => ({ ...d, linkedinUrl: e.target.value }))} placeholder="https://linkedin.com/in/…" />
+                {/* El CRM encuentra al contacto por su perfil personal: con la página
+                    de la empresa no lo encuentra y rechaza la llamada. */}
+                {/linkedin\.com\/(company|school|showcase)\//i.test(candidateCrmDraft.linkedinUrl) && (
+                  <span className="cfg-field-desc" style={{ color: '#B45309' }}>{t('Es la página de una empresa. Pon el perfil de la persona (linkedin.com/in/…) o el CRM no la encontrará.')}</span>
+                )}
               </div>
             )}
+            {/* De un cliente solo hacen falta nombre y LinkedIn: el resto vive en el CRM. */}
+            {!cmCli && (<>
             <div className="modal-row-2">
               <div className="modal-field">
                 <span className="modal-field-label">Email</span>
@@ -4851,12 +5183,13 @@ function App() {
             </div>
             <div className="modal-field">
               <span className="modal-field-label">{t('Cargo')}</span>
-              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={cmCli ? t('Ej: Directora de operaciones') : t('Ej: Desarrollador Frontend')} />
+              <input type="text" className="modal-input modal-input--figma" value={candidateDraft.role} onChange={e => setCandidateDraft(d => ({ ...d, role: e.target.value }))} placeholder={t('Ej: Desarrollador Frontend')} />
             </div>
             <div className="modal-field">
               <span className="modal-field-label">{t('Notas previas (opcional)')}</span>
-              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={cmCli ? t('De dónde viene el lead, qué sabemos de su empresa, puntos a tratar…') : t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
+              <textarea className="modal-input modal-input--figma modal-textarea" value={candidateNotesDraft} onChange={e => setCandidateNotesDraft(e.target.value)} placeholder={t('Puntos a tratar, perfil del CV, observaciones…')} rows={3} />
             </div>
+            </>)}
             {!cmCli && (
             <div className="modal-field">
               <span className="modal-field-label">{t('Estado')}</span>
@@ -4873,6 +5206,44 @@ function App() {
               />
             </div>
             )}
+            {editingCandidateId && (() => {
+              const editing = candidates.find(c => c.id === editingCandidateId)
+              if (!editing) return null
+              const folders = projects.filter(p => esMiProyecto(p) || p.id === editing.projectId)
+              const others = candidates.filter(c => c.id !== editing.id)
+              const folderName = (pid: string) => projects.find(p => p.id === pid)?.name ?? ''
+              return (<>
+                <div className="modal-field">
+                  <span className="modal-field-label">{t('Carpeta')}</span>
+                  <Select
+                    className="modal-input modal-input--figma modal-select"
+                    value={candidateMoveDraft || editing.projectId}
+                    onChange={setCandidateMoveDraft}
+                    options={folders.map(p => ({ value: p.id, label: p.name }))}
+                  />
+                  <span className="cfg-field-desc">{t('Cámbiala para moverlo a otra carpeta con todas sus llamadas.')}</span>
+                </div>
+                {others.length > 0 && (
+                  <div className="modal-field">
+                    <span className="modal-field-label">{t('Fusionar con otro perfil')}</span>
+                    <div className="crm-send-row">
+                      <Select
+                        className="modal-input modal-input--figma modal-select"
+                        value={candidateMergeTarget}
+                        onChange={v => { setCandidateMergeTarget(v); setConfirmMerge(false) }}
+                        placeholder={t('Elige el perfil que se queda')}
+                        options={others.map(c => ({ value: c.id, label: `${c.name} · ${folderName(c.projectId)}` }))}
+                      />
+                      <button type="button" className="secondary-btn pill-btn" disabled={!candidateMergeTarget}
+                        onClick={() => { if (!confirmMerge) { setConfirmMerge(true); return } void handleMergeCandidate(editing.id, candidateMergeTarget) }}>
+                        {confirmMerge ? t('Confirmar fusión') : t('Fusionar')}
+                      </button>
+                    </div>
+                    <span className="cfg-field-desc">{t('Sus llamadas pasan al perfil elegido y este perfil desaparece. No se borra ninguna llamada.')}</span>
+                  </div>
+                )}
+              </>)
+            })()}
             <div className="modal-field">
               <label className="consent-check">
                 <input type="checkbox" checked={candidateConsentDraft} onChange={e => setCandidateConsentDraft(e.target.checked)} />
@@ -4882,7 +5253,7 @@ function App() {
             <div className="modal-footer-divider" />
             <div className="modal-actions modal-actions--figma">
               <button type="button" className="modal-cancel-btn" onClick={() => { setShowNewCandidate(false); setEditingCandidateId(null); setCandidateDraft(EMPTY_CANDIDATE); setCandidateNotesDraft(''); setCandidateStatusDraft('pendiente'); setCandidateConsentDraft(false) }}>{t('Cancelar')}</button>
-              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim()}>{editingCandidateId ? <><UserIcon /> {t('Guardar cambios')}</> : <><UserIcon /> {cmv.addPerson}</>}</button>
+              <button type="button" className="modal-action-btn" onClick={editingCandidateId ? handleUpdateCandidate : handleCreateCandidate} disabled={!candidateDraft.name.trim() || (cmCli && !candidateCrmDraft.linkedinUrl.trim())}>{editingCandidateId ? <><UserIcon /> {t('Guardar cambios')}</> : <><UserIcon /> {cmv.addPerson}</>}</button>
             </div>
           </div>
         </div>

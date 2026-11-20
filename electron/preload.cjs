@@ -53,4 +53,12 @@ contextBridge.exposeInMainWorld('desktopApp', {
   openReleasesPage: () => ipcRenderer.invoke('updates:open-releases'),
   onUpdaterEvent: (cb) => ipcRenderer.on('updater:event', (_e, data) => cb(data)),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  // Grabación automática: el proceso principal avisa de que una llamada empieza o acaba.
+  onCallEvent: (cb) => {
+    const handler = (_e, ev) => cb(ev)
+    ipcRenderer.on('call:event', handler)
+    return () => ipcRenderer.removeListener('call:event', handler)
+  },
+  showWindow: () => ipcRenderer.invoke('window:show'),
+  notify: (payload) => ipcRenderer.invoke('app:notify', payload),
 })
