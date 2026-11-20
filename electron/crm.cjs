@@ -128,9 +128,9 @@ async function analyzeCall(cfg, payload, log) {
 }
 
 // Los registros que la API de entrada ya acepta hoy (syncRecordValidator.ts).
-// La llamada va como actividad de tipo "call": es el único registro que el CRM
-// cuelga del trato abierto del contacto (una note.add se queda en el contacto y
-// una meeting.upsert solo encuentra a la persona por email o por nombre exacto).
+// La llamada va como nota del contacto, más la señal de reunión hecha que mueve
+// su trato. (Una meeting.upsert solo encuentra a la persona por email o por
+// nombre exacto, así que de momento no se usa.)
 // El SPIN todavía no tiene campos propios: va dentro del texto hasta que exista
 // `deal.fill`.
 function buildRecords({ interviewId, candidateName, deal, callAt, durationMin, analysis }) {
@@ -152,12 +152,10 @@ function buildRecords({ interviewId, candidateName, deal, callAt, durationMin, a
   const minutos = durationMin ? ` · ${durationMin} min` : ''
 
   return [
-    {
-      type: 'activity.log',
-      ref: ref('call-activity'),
-      contact,
-      data: { type: 'call', direction: 'sent', subject: `Llamada con ${candidateName || deal.company || 'lead'}${minutos} (Call Transcriber)`, body, occurredAt: callAt },
-    },
+    // Solo como nota: David no quiere las llamadas en "Activity". Hoy el CRM
+    // cuelga la nota del contacto, no del trato, y no crea el contacto si no
+    // existe (note.add solo lo busca por LinkedIn o email).
+    { type: 'note.add', ref: ref('call-note'), contact, body: `Llamada con ${candidateName || deal.company || 'lead'}${minutos} (Call Transcriber)\n\n${body}` },
     { type: 'stage.signal', ref: ref('call-held'), contact, at: callAt, signal: { kind: 'meeting_held' } },
   ]
 }
