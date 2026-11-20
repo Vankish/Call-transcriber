@@ -6,7 +6,8 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'release']),
+  // .claude/worktrees: copias del repo que crean los agentes; no son este codigo.
+  globalIgnores(['dist', 'dist-web', 'release', '.claude', 'convex/_generated']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -17,6 +18,9 @@ export default defineConfig([
     ],
     languageOptions: {
       globals: globals.browser,
+      // Hay mas de un tsconfig (la app y convex/): sin esto eslint no sabe desde
+      // donde resolverlos y falla al leer cualquier archivo.
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
     },
     rules: {
       // Un guion bajo delante = "ya se que no se usa, esta ahi a proposito".
