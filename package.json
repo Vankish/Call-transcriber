@@ -20,6 +20,7 @@
     "package:win:personal": "npm run build && electron-builder --win --publish never",
     "lint": "eslint .",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "test:cloud": "node --test --test-concurrency=1 \"scripts/cloud-tests/*.test.cjs\"",
     "preview": "vite preview"
   },
   "build": {
