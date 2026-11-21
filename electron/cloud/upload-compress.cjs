@@ -161,6 +161,10 @@ function transcodeArgs(input, output, encoder) {
     : ['-c:v', encoder, '-b:v', `${VIDEO_KBPS}k`, '-maxrate', `${VIDEO_MAX_KBPS}k`, '-bufsize', `${VIDEO_MAX_KBPS * 2}k`]
   return [
     '-hide_banner', '-nostdin', '-y',
+    // Decodificar el original y escalarlo gasta más CPU que codificar con la
+    // tarjeta: sin tope, ffmpeg abre un hilo por núcleo para eso y el PC entero
+    // lo nota. Con 2 hilos tarda algo más pero deja el resto libre.
+    '-threads', '2', '-filter_threads', '1',
     '-i', input,
     '-vf', scale,
     // Las grabaciones de pantalla pueden ir a 60 fps; 30 basta para una llamada.
