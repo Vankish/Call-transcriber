@@ -19,7 +19,7 @@ const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpack
 const providers = require('./providers.cjs')
 const i18n = require('./i18n.cjs')
 const crm = require('./crm.cjs')
-const { startCallDetector } = require('./call-detector.cjs')
+const { startCallDetector, findCallSource } = require('./call-detector.cjs')
 let stopCallDetector = () => {}
 const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
@@ -30,6 +30,8 @@ const isDev = process.env.ELECTRON_DEV === '1'
 let mainWindowRef = null
 let pendingCaptureSourceResolve = null
 let nextCaptureWantsVideo = false
+// { title } si la próxima captura la pide la grabación automática: sin selector.
+let nextCaptureAuto = null
 
 // ── Siempre encendida, para grabar las llamadas sola ─────────────────────────
 // La grabación automática solo sirve si la app está abierta cuando empieza la
@@ -285,6 +287,9 @@ if (!gotTheLock) {
 
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
+      // Vale para una sola captura: la siguiente a mano vuelve a enseñar el selector.
+      const auto = nextCaptureAuto
+      nextCaptureAuto = null
       // Modo "solo audio": no hay que elegir ventana/pantalla, solo necesitamos
       // el audio de sistema vía loopback. Se auto-selecciona la pantalla principal
       // sin mostrar ningún selector, igual que antes de que existiera la grabación de vídeo.
@@ -292,6 +297,16 @@ if (!gotTheLock) {
         const screens = await desktopCapturer.getSources({ types: ['screen'] })
         if (!screens[0]) { callback({}); return }
         callback({ video: screens[0], audio: 'loopback' })
+        return
+      }
+
+      // Grabación automática con vídeo: la ventana de la llamada o, si no, la pantalla.
+      // Sin miniaturas: nadie las va a ver y pedirlas solo retrasa el arranque.
+      if (auto) {
+        const all = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false })
+        const chosen = findCallSource(all, auto.title)
+        log.info(`[grabación] vídeo automático: ${chosen ? (chosen.id.startsWith('screen:') ? 'pantalla' : 'ventana de la llamada') : 'sin fuente'}`)
+        callback(chosen ? { video: chosen, audio: 'loopback' } : {})
         return
       }
 
@@ -585,8 +600,9 @@ ipcMain.handle('recording:write-bytes', async (_event, { fileName, bytes }) => {
   }
 })
 
-ipcMain.handle('capture:set-mode', (_event, wantsVideo) => {
+ipcMain.handle('capture:set-mode', (_event, wantsVideo, auto) => {
   nextCaptureWantsVideo = !!wantsVideo
+  nextCaptureAuto = auto ? { title: String(auto.title ?? '') } : null
   return { ok: true }
 })
 

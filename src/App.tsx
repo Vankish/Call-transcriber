@@ -1356,7 +1356,8 @@ function App() {
   // ── Recording ──────────────────────────────────────────────────────────
   // `auto`: la grabación la lanza el detector de llamadas. El perfil puede ser uno
   // recién creado que aún no está en el estado, por eso se pasa con su carpeta.
-  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false, auto?: { candidate: Candidate; projectName: string }) => {
+  // `auto.callTitle`: título de la ventana de la llamada, para grabarla sin selector.
+  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false, auto?: { candidate: Candidate; projectName: string; callTitle?: string }) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage(t('Selecciona un micrófono antes de grabar.')); return }
     const ivCandidate = auto?.candidate ?? candidates.find(c => c.id === iv.candidateId)
@@ -1387,7 +1388,7 @@ function App() {
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
       if (captureSystem) {
-        await window.desktopApp?.setCaptureMode?.(recordVideo)
+        await window.desktopApp?.setCaptureMode?.(recordVideo, auto ? { title: auto.callTitle ?? '' } : undefined)
         try {
           // frameRate baja a propósito: esto es una captura de pantalla de referencia para
           // revisar la llamada después, no vídeo de acción — grabar a la frecuencia nativa
@@ -1409,7 +1410,8 @@ function App() {
         toast(t('No se capturó el audio del interlocutor: solo se grabará tu micrófono'), 'error')
       }
 
-      if (recordVideo && !videoTrack) {
+      // Sola no hay selector que cancelar: si no sale la pantalla, se graba el audio igual.
+      if (recordVideo && !videoTrack && !auto) {
         // El usuario canceló el selector de pantalla (o no eligió nada) en modo
         // "Llamada entera". Sin pantalla no hay vídeo que grabar, así que abortamos
         // del todo en vez de caer en una grabación de solo audio no pedida.
@@ -1823,7 +1825,7 @@ function App() {
       }
       autoRecordingIdRef.current = n.id
       setSessionAskContact(true); setSessionContactDraft(recent ? recent.id : ''); setSessionNewContact({ name: '', company: '', linkedin: '' })
-      void handleStartRecording(n, true, false, target)
+      void handleStartRecording(n, true, defaultRecordVideo, { ...target, callTitle: ev.title })
       void desk.notify?.({ title: t('Grabando la llamada de {app}', { app: ev.app }), body: recent ? t('Es la llamada con {nombre}. Se para sola al colgar.', { nombre: recent.name }) : t('Se para sola al colgar. Después eliges de quién era.') })
     } else {
       const id = autoRecordingIdRef.current

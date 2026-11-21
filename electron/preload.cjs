@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   analyzeAndSendToCrm: (payload) => ipcRenderer.invoke('crm:analyze-and-send', payload),
   onCaptureSources: (cb) => ipcRenderer.on('capture:sources', (_e, sources) => cb(sources)),
   pickCaptureSource: (sourceId) => ipcRenderer.invoke('capture:pick-source', sourceId),
-  setCaptureMode: (wantsVideo) => ipcRenderer.invoke('capture:set-mode', wantsVideo),
+  setCaptureMode: (wantsVideo, auto) => ipcRenderer.invoke('capture:set-mode', wantsVideo, auto),
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (payload) => ipcRenderer.invoke('config:save', payload),
   getLocalData: () => ipcRenderer.invoke('data:get'),
