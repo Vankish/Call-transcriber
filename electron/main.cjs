@@ -20,6 +20,7 @@ const providers = require('./providers.cjs')
 const i18n = require('./i18n.cjs')
 const crm = require('./crm.cjs')
 const { startCallDetector } = require('./call-detector.cjs')
+const { registerUploadIpc } = require('./cloud/upload-ipc.cjs')
 let stopCallDetector = () => {}
 const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
@@ -405,6 +406,18 @@ async function writeData(payload) {
   await fs.rename(tmp, target)
 }
 
+// Subida de audio y vídeo a la nube (cola en segundo plano y migración de las
+// grabaciones antiguas). Ver electron/cloud/upload-ipc.cjs.
+const cloudUploads = registerUploadIpc({
+  ipcMain,
+  app,
+  ffmpegPath,
+  readData,
+  recordingsRoot: () => path.join(app.getPath('documents'), 'CallTranscriber'),
+  getWindow: () => mainWindowRef,
+  log,
+})
+
 function convertToFormat(inputPath, outputPath, format) {
   return new Promise((resolve, reject) => {
     const args = format === 'wav'
@@ -660,6 +673,7 @@ ipcMain.handle('recording:stream-open', async (_event, payload) => {
   const handle = await fs.open(filePath, 'w')
   const streamId = nextStreamId++
   recordingStreams.set(streamId, { handle, filePath, kind: payload.kind, bytes: 0, queue: Promise.resolve() })
+  cloudUploads.setRecordingStreams(true) // mientras se graba no se sube ni se comprime
   if (!metricsTimer) metricsTimer = setInterval(logRecordingMetrics, 10_000)
   return { streamId, filePath }
 })
@@ -679,6 +693,7 @@ ipcMain.handle('recording:stream-close', async (_event, { streamId }) => {
   const stream = recordingStreams.get(streamId)
   if (!stream) return { filePath: null }
   recordingStreams.delete(streamId)
+  if (!recordingStreams.size) cloudUploads.setRecordingStreams(false)
   if (!recordingStreams.size && metricsTimer) { logRecordingMetrics(); clearInterval(metricsTimer); metricsTimer = null }
   await stream.queue
   await stream.handle.close()
@@ -696,6 +711,7 @@ app.on('before-quit', () => {
   isQuitting = true
   stopCallDetector() // y con él el PowerShell que vigila el micro
   for (const stream of recordingStreams.values()) void stream.handle.close().catch(() => {})
+  void cloudUploads.stop().catch(() => {})
 })
 
 ipcMain.handle('config:get', async () => {

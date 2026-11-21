@@ -162,6 +162,8 @@ const EN = {
   'Call Transcriber sigue abierta': 'Call Transcriber is still running',
   'Está en la bandeja, junto al reloj, y grabará sola tus llamadas. Para cerrarla del todo: clic derecho en el icono → Salir.': 'It is in the tray, next to the clock, and will record your calls on its own. To close it completely: right-click the icon → Quit.',
   'Call Transcriber · grabando la llamada': 'Call Transcriber · recording the call',
+  // Subida de grabaciones a la nube
+  'No se encuentra el archivo en este PC': 'The file is not on this PC',
 }
 
 module.exports = { usarIdiomaDe, getIdioma, tr, kr, detectarIdioma, etiquetasPorDefecto, nombreEnPrompt, EN }
