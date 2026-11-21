@@ -39,3 +39,7 @@ notas-privadas/
 
 # Cursor: configuracion del editor, no del proyecto.
 .cursor/
+
+# Estado del despliegue local de Convex (npx convex dev --local / anonimo):
+# datos de prueba de cada equipo, no del proyecto.
+.convex/
