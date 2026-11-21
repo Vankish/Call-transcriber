@@ -1,11 +1,12 @@
 // Comprueba que toda frase que pasa por el traductor tiene su versión en inglés.
 //
 // Sin esto, una frase nueva sin traducir no rompe nada: sale en español en la
-// interfaz inglesa y nadie se da cuenta hasta que la ve un usuario. Mira dos
-// sitios, porque hay dos traductores:
+// interfaz inglesa y nadie se da cuenta hasta que la ve un usuario. Mira tres
+// sitios, porque hay tres traductores:
 //
 //   · src/          t('...') y k('...')  contra EN de src/i18n.ts
 //   · electron/     tr('...') y kr('...') contra EN de electron/i18n.cjs
+//   · web/src/      t('...') y k('...')  contra EN de web/src/i18n.ts (la web)
 //
 // También avisa de las traducciones que ya no usa nadie, para que la tabla no
 // se llene de frases muertas.
@@ -86,6 +87,13 @@ informe('Interfaz (src/i18n.ts)', usadasUi, diccionarioTs(join(raiz, 'src', 'i18
 const usadasMain = clavesUsadas(archivos(join(raiz, 'electron'), ['.cjs']).filter((r) => !r.endsWith('i18n.cjs')), ['tr', 'kr'])
 const { EN: enMain } = require(join(raiz, 'electron', 'i18n.cjs'))
 informe('Proceso principal (electron/i18n.cjs)', usadasMain, new Map(Object.entries(enMain)))
+
+// ── Web de coaches y clientes ────────────────────────────────────────────────
+// Es otra compilacion con su propio diccionario: una frase de la web no tiene
+// por que estar en el de la app, ni al reves.
+const webSrc = join(raiz, 'web', 'src')
+const usadasWeb = clavesUsadas(archivos(webSrc, ['.ts', '.tsx']), ['t', 'k'])
+informe('Web (web/src/i18n.ts)', usadasWeb, diccionarioTs(join(webSrc, 'i18n.ts')))
 
 if (fallos) {
   console.log(`\n${fallos} frase(s) sin traducir.`)

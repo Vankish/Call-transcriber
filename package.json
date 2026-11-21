@@ -20,7 +20,12 @@
     "package:win:personal": "npm run build && electron-builder --win --publish never",
     "lint": "eslint .",
     "i18n:check": "node scripts/check-i18n.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "web:dev": "vite --config vite.web.config.ts",
+    "web:build": "tsc -p tsconfig.web.json && vite build --config vite.web.config.ts",
+    "web:preview": "vite preview --config vite.web.config.ts",
+    "web:video": "node web/scripts/video-prueba.mjs",
+    "web:capturas": "electron web/scripts/capturas.cjs"
   },
   "build": {
     "appId": "com.calltranscriber.desktop",

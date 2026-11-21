@@ -39,3 +39,7 @@ notas-privadas/
 
 # Cursor: configuracion del editor, no del proyecto.
 .cursor/
+
+# Web de coaches y clientes: compilada y video de prueba generado (no se versionan).
+dist-web
+web/public/demo/
