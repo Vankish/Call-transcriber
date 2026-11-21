@@ -140,6 +140,9 @@ async function uploadFile({
   meta,
   sha256,
   onProgress,
+  // Se llama con { mediaId, partsDone } nada más abrir la subida: la cola lo
+  // guarda para poder cancelarla si el archivo cambia antes de terminar.
+  onStarted,
   signal,
   // Puerta que se espera antes de cada parte: la cola la usa para pausar sin
   // cortar una parte a medias (por ejemplo, al empezar una grabación).
@@ -161,6 +164,7 @@ async function uploadFile({
 
   const started = await callConvex(MEDIA_FN.startUpload, 'media:startUpload', { ...meta, bytes, sha256 })
   const { mediaId, alreadyUploaded } = started
+  onStarted?.({ mediaId, partsDone: started.partsDone || [] })
   if (alreadyUploaded) {
     onProgress?.({ phase: 'finishing', bytesDone: bytes, bytesTotal: bytes })
     return { mediaId, alreadyUploaded: true, sha256, bytes }
