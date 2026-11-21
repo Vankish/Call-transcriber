@@ -20,6 +20,8 @@
     "package:win:personal": "npm run build && electron-builder --win --publish never",
     "lint": "eslint .",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "convex:dev": "convex dev",
+    "test:convex": "vitest run --config vitest.config.ts",
     "preview": "vite preview"
   },
   "build": {
