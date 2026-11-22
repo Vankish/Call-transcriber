@@ -22,6 +22,7 @@
     "i18n:check": "node scripts/check-i18n.mjs",
     "convex:dev": "convex dev",
     "test:convex": "vitest run --config vitest.config.ts",
+    "test:cloud": "node --test --test-concurrency=1 \"scripts/cloud-tests/*.test.cjs\"",
     "preview": "vite preview"
   },
   "build": {
