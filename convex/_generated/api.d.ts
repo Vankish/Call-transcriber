@@ -17,6 +17,7 @@ import type * as interviewBundle from "../interviewBundle.js";
 import type * as media from "../media.js";
 import type * as member from "../member.js";
 import type * as normalizeEmail from "../normalizeEmail.js";
+import type * as project from "../project.js";
 import type * as r2 from "../r2.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as requireAccess from "../requireAccess.js";
@@ -44,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   media: typeof media;
   member: typeof member;
   normalizeEmail: typeof normalizeEmail;
+  project: typeof project;
   r2: typeof r2;
   rateLimit: typeof rateLimit;
   requireAccess: typeof requireAccess;
