@@ -201,7 +201,12 @@ export default defineSchema({
       ),
     ),
     updatedAt: v.number(),
-  }).index("by_interview_id", ["interviewId"]),
+  })
+    .index("by_interview_id", ["interviewId"])
+    // Añadido por el frente A: `sync.pull` tiene que encontrar las
+    // transcripciones que cambiaron desde una fecha sin leer todas las del
+    // espacio (cada una pesa decenas de KB).
+    .index("by_workspace_id_and_updated_at", ["workspaceId", "updatedAt"]),
 
   // ── Archivos grandes ────────────────────────────────────────────────────────
 
@@ -284,4 +289,14 @@ export default defineSchema({
     action: v.union(v.literal("view"), v.literal("play_media")),
     at: v.number(),
   }).index("by_interview_id_and_at", ["interviewId", "at"]),
+
+  // Añadido por el frente A: límite de peticiones de `share.open`, que es
+  // pública y sin sesión. Una fila por clave y ventana de tiempo fija; el
+  // componente @convex-dev/rate-limiter haría lo mismo, pero no está instalado
+  // y para un contador por minuto no hace falta.
+  rateLimit: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+  }).index("by_key", ["key"]),
 });
