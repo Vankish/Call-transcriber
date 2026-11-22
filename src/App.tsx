@@ -53,6 +53,8 @@ import {
 } from './icons'
 import { Select } from './Select'
 import { AuthScreen } from './AuthScreen'
+import { CloudPanel } from './lib/cloud/CloudPanel'
+import { useCloudAvailable } from './lib/cloud/useCloudAvailable'
 import { esIdioma, getIdioma, idiomaDelSistema, k, locale, setIdioma, t } from './i18n'
 import type { Idioma } from './i18n'
 
@@ -113,7 +115,7 @@ type AudioDeviceOption = { id: string; name: string }
 type Toast = { id: string; message: string; sub?: string; type: 'success' | 'error' | 'info' | 'warning' }
 type Screen = 'dashboard' | 'projects' | 'project-detail' | 'candidate-detail' | 'candidates' | 'settings' | 'profile' | 'search'
 type ProfileScreenTab = 'perfil' | 'plan' | 'seguridad' | 'notif'
-type SettingsTab = 'api-keys' | 'grabacion' | 'general'
+type SettingsTab = 'api-keys' | 'grabacion' | 'general' | 'nube'
 
 // ── Motores de IA ──────────────────────────────────────────────────────────
 // El catálogo de proveedores vive en electron/providers.cjs y llega por IPC.
@@ -516,6 +518,7 @@ function App() {
   const [crmInterviewId, setCrmInterviewId] = useState<string | null>(null)
   const [profileScreenTab, setProfileScreenTab] = useState<ProfileScreenTab>('perfil')
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
+  const cloudAvailable = useCloudAvailable()
   const [searchQuery, setSearchQuery] = useState('')
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
   const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'active' | 'closed'>('all')
@@ -4179,6 +4182,7 @@ function App() {
             ['api-keys', <KeyIcon />, t('Motores de IA')],
             ['grabacion', <MicIcon />, t('Grabación')],
             ['general', <SettingsIcon />, t('General')],
+            ...(cloudAvailable ? [['nube', <CloudIcon size={16} />, t('Nube')]] : []),
           ] as [SettingsTab, React.ReactNode, string][]).map(([tab, icon, label]) => (
             <button key={tab} type="button" className={`settings-nav-item${settingsTab === tab ? ' is-active' : ''}`} onClick={() => setSettingsTab(tab)}>
               <span className="settings-nav-icon">{icon}</span>
@@ -4333,6 +4337,9 @@ function App() {
                 <div className="settings-save"><button type="button" className="primary-btn pill-btn" onClick={() => void handleSaveSettings()}>{t('Guardar cambios')}</button></div>
               </div>
             </>
+          )}
+          {settingsTab === 'nube' && (
+            <div className="settings-sections"><CloudPanel /></div>
           )}
           {settingsTab === 'general' && (
             <>
