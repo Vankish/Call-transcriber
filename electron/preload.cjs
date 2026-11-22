@@ -61,4 +61,33 @@ contextBridge.exposeInMainWorld('desktopApp', {
   },
   showWindow: () => ipcRenderer.invoke('window:show'),
   notify: (payload) => ipcRenderer.invoke('app:notify', payload),
+  // Subida de audio y vídeo a la nube (frente C). La interfaz la conecta el frente B.
+  cloudUploadStatus: () => ipcRenderer.invoke('cloud:upload-status'),
+  cloudUploadList: () => ipcRenderer.invoke('cloud:upload-list'),
+  cloudUploadEnqueue: (entries) => ipcRenderer.invoke('cloud:upload-enqueue', entries),
+  cloudUploadPause: () => ipcRenderer.invoke('cloud:upload-pause'),
+  cloudUploadResume: () => ipcRenderer.invoke('cloud:upload-resume'),
+  cloudUploadRetry: (payload) => ipcRenderer.invoke('cloud:upload-retry', payload),
+  cloudUploadRemove: (payload) => ipcRenderer.invoke('cloud:upload-remove', payload),
+  cloudUploadSetRecording: (value) => ipcRenderer.invoke('cloud:upload-set-recording', value),
+  onCloudUploadProgress: (cb) => {
+    const handler = (_e, snapshot) => cb(snapshot)
+    ipcRenderer.on('cloud:upload-progress', handler)
+    return () => ipcRenderer.removeListener('cloud:upload-progress', handler)
+  },
+  cloudMigrationPlan: () => ipcRenderer.invoke('cloud:migration-plan'),
+  cloudMigrationRun: (options) => ipcRenderer.invoke('cloud:migration-run', options),
+  // Sesión de la nube y sincronización de datos (frente B). El token no llega
+  // nunca aquí: la ventana solo ve el estado.
+  cloudStatus: () => ipcRenderer.invoke('cloud:status'),
+  cloudSignInPassword: (payload) => ipcRenderer.invoke('cloud:sign-in-password', payload),
+  cloudSignInGoogle: () => ipcRenderer.invoke('cloud:sign-in-google'),
+  cloudCancelGoogle: () => ipcRenderer.invoke('cloud:cancel-google'),
+  cloudSignOut: () => ipcRenderer.invoke('cloud:sign-out'),
+  cloudSyncNow: () => ipcRenderer.invoke('cloud:sync-now'),
+  onCloudStatus: (cb) => {
+    const handler = (_e, status) => cb(status)
+    ipcRenderer.on('cloud:status', handler)
+    return () => ipcRenderer.removeListener('cloud:status', handler)
+  },
 })

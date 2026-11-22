@@ -11,6 +11,7 @@ const {
   ipcMain,
   Menu,
   Notification,
+  safeStorage,
   session,
   shell,
   Tray,
@@ -20,6 +21,9 @@ const providers = require('./providers.cjs')
 const i18n = require('./i18n.cjs')
 const crm = require('./crm.cjs')
 const { startCallDetector } = require('./call-detector.cjs')
+const { registerUploadIpc } = require('./cloud/upload-ipc.cjs')
+const { registerCloudIpc } = require('./cloud/cloud-ipc.cjs')
+const { resolveConvexUrl } = require('./cloud/convex-url.cjs')
 let stopCallDetector = () => {}
 const { tr } = i18n
 const { autoUpdater } = require('electron-updater')
@@ -139,6 +143,8 @@ ipcMain.handle('app:get-version', () => app.getVersion())
 
 function startAuthCallbackServer() {
   const server = http.createServer((req, res) => {
+    // La vuelta de Google al entrar en la nube (Convex Auth): /convex-auth?code=...
+    if (cloud.handleAuthRequest(req, res)) return
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${tr('Autenticando...')}</title>
@@ -405,6 +411,34 @@ async function writeData(payload) {
   await fs.rename(tmp, target)
 }
 
+// Subida de audio y vídeo a la nube (cola en segundo plano y migración de las
+// grabaciones antiguas). Ver electron/cloud/upload-ipc.cjs.
+const cloudUploads = registerUploadIpc({
+  ipcMain,
+  app,
+  ffmpegPath,
+  readData,
+  recordingsRoot: () => path.join(app.getPath('documents'), 'CallTranscriber'),
+  getWindow: () => mainWindowRef,
+  log,
+})
+
+// Sesión de la nube (Convex Auth) y sincronización de los datos. Sin
+// VITE_CONVEX_URL al compilar queda apagada y la app funciona como siempre. Ver
+// electron/cloud/cloud-ipc.cjs y, para la dirección, electron/cloud/convex-url.cjs.
+const cloud = registerCloudIpc({
+  ipcMain,
+  app,
+  safeStorage,
+  shell,
+  convexUrl: resolveConvexUrl({ appRoot: path.join(__dirname, '..'), isDev }),
+  readData,
+  uploads: cloudUploads,
+  getWindow: () => mainWindowRef,
+  showWindow: () => showMainWindow(),
+  log,
+})
+
 function convertToFormat(inputPath, outputPath, format) {
   return new Promise((resolve, reject) => {
     const args = format === 'wav'
@@ -660,6 +694,7 @@ ipcMain.handle('recording:stream-open', async (_event, payload) => {
   const handle = await fs.open(filePath, 'w')
   const streamId = nextStreamId++
   recordingStreams.set(streamId, { handle, filePath, kind: payload.kind, bytes: 0, queue: Promise.resolve() })
+  cloudUploads.setRecordingStreams(true) // mientras se graba no se sube ni se comprime
   if (!metricsTimer) metricsTimer = setInterval(logRecordingMetrics, 10_000)
   return { streamId, filePath }
 })
@@ -679,6 +714,7 @@ ipcMain.handle('recording:stream-close', async (_event, { streamId }) => {
   const stream = recordingStreams.get(streamId)
   if (!stream) return { filePath: null }
   recordingStreams.delete(streamId)
+  if (!recordingStreams.size) cloudUploads.setRecordingStreams(false)
   if (!recordingStreams.size && metricsTimer) { logRecordingMetrics(); clearInterval(metricsTimer); metricsTimer = null }
   await stream.queue
   await stream.handle.close()
@@ -696,6 +732,8 @@ app.on('before-quit', () => {
   isQuitting = true
   stopCallDetector() // y con él el PowerShell que vigila el micro
   for (const stream of recordingStreams.values()) void stream.handle.close().catch(() => {})
+  void cloudUploads.stop().catch(() => {})
+  cloud.stop()
 })
 
 ipcMain.handle('config:get', async () => {
@@ -716,6 +754,7 @@ ipcMain.handle('data:get', async () => readData())
 
 ipcMain.handle('data:save', async (_event, payload) => {
   await writeData(payload)
+  cloud.notifyDataSaved() // en segundo plano y con espera: no retrasa el guardado
   return { ok: true }
 })
 

@@ -211,6 +211,124 @@ interface LocalDataPayload {
   interviews?: unknown[]
 }
 
+// ── Subida de audio y vídeo a la nube (electron/cloud/upload-*) ─────────────
+
+type CloudMediaKind = 'mix' | 'system' | 'video'
+
+/** Lo que manda `cloud:upload-progress` y devuelve `cloudUploadStatus`. */
+type CloudUploadStatus = {
+  /** working = subiendo o preparando; paused = hay cola pero algo la frena; waiting = esperando para reintentar. */
+  state: 'idle' | 'working' | 'paused' | 'waiting'
+  pausedBy: 'user' | 'recording' | 'no-session' | null
+  /** Lote actual (lo pendiente más lo acabado desde que la cola estuvo vacía): "subiendo {index}/{total}". */
+  batch: { total: number; done: number; failed: number; index: number }
+  bytes: { done: number; total: number }
+  /** 0-100 del lote entero, ponderado por tamaño. */
+  percent: number
+  current: {
+    id: string
+    interviewLocalId: string
+    kind: CloudMediaKind
+    fileName: string
+    phase: 'preparing' | 'compressing' | 'hashing' | 'uploading' | 'finishing'
+    /** 0-100 de la fase en curso. */
+    percent: number
+  } | null
+  /** Epoch ms del próximo reintento si no hay nada subiendo. */
+  nextRetryAt: number | null
+}
+
+type CloudUploadItem = {
+  /** `${interviewLocalId}:${kind}`: uno por entrevista y tipo. */
+  id: string
+  interviewLocalId: string
+  kind: CloudMediaKind
+  fileName: string
+  localRelPath: string
+  size: number
+  status: 'pending' | 'working' | 'done' | 'error'
+  attempts: number
+  nextAttemptAt: number | null
+  errorCode: 'missing-file' | 'failed' | null
+  lastError: string | null
+  compressed: boolean
+  uploadedBytes: number | null
+  mediaId: string | null
+  completedAt: number | null
+}
+
+type CloudUploadEntry = { filePath: string; interviewLocalId: string; kind: CloudMediaKind; durationSec?: number }
+
+type CloudMigrationFile = {
+  filePath: string
+  localRelPath: string
+  bytes: number
+  kind: CloudMediaKind
+  interviewLocalId: string
+  durationSec: number | null
+  candidateName: string
+  projectName: string
+  createdAt: string | null
+}
+
+type CloudMigrationPlan = {
+  root: string
+  createdAt: number
+  items: CloudMigrationFile[]
+  /** No se suben: decide el usuario. */
+  orphans: { filePath: string; localRelPath: string; bytes: number; reason: 'no-interview' | 'unrecognized-name' | 'duplicate'; interviewLocalId: string | null }[]
+  /** Enlazados por una entrevista pero fuera de Documentos\CallTranscriber. Solo con includeExternal. */
+  external: CloudMigrationFile[]
+  /** Entrevistas que apuntan a un archivo que no está en este PC. */
+  missing: { interviewLocalId: string; kind: CloudMediaKind; filePath: string }[]
+  totals: {
+    files: number
+    bytes: number
+    byKind: Record<CloudMediaKind, { files: number; bytes: number }>
+    orphans: { files: number; bytes: number }
+    external: { files: number; bytes: number }
+    missing: number
+  }
+}
+
+type CloudEnqueueResult = { added: number; updated: number; skipped: number }
+
+// ── Sesión de la nube y sincronización (electron/cloud/cloud-ipc.cjs) ────────
+
+/** Códigos estables para enseñar el error en el idioma de la interfaz. */
+type CloudErrorCode =
+  | 'not-configured' | 'network' | 'invalid-credentials' | 'account-exists' | 'weak-password'
+  | 'signup-failed' | 'redirect-not-allowed' | 'rate-limited' | 'oauth-timeout' | 'expired' | 'failed'
+
+type CloudSessionStatus = {
+  state: 'signed-out' | 'signing-in' | 'signed-in'
+  /** Por qué se quedó sin sesión la última vez, si fue un error. */
+  error: CloudErrorCode | null
+  email: string | null
+  name: string | null
+  provider: 'password' | 'google' | null
+  workspaceId: string | null
+}
+
+type CloudSyncStatus = {
+  state: 'idle' | 'syncing' | 'error' | 'offline'
+  lastSyncAt: number | null
+  error: string | null
+  errorCode: string | null
+  nextRetryAt: number | null
+  pending: number
+  progress: { done: number; total: number } | null
+}
+
+type CloudStatus = {
+  /** false = compilada sin VITE_CONVEX_URL: no hay nube que enseñar. */
+  configured: boolean
+  session: CloudSessionStatus | null
+  sync: CloudSyncStatus | null
+}
+
+type CloudResult = { ok: boolean; errorCode?: CloudErrorCode | string; error?: string }
+
 interface Window {
   desktopApp?: {
     platform: string
@@ -258,6 +376,24 @@ interface Window {
     onCallEvent?: (cb: (ev: { type: 'start' | 'end'; app: string; title: string }) => void) => () => void
     showWindow?: () => Promise<void>
     notify?: (payload: { title: string; body: string }) => Promise<void>
+    cloudUploadStatus?: () => Promise<CloudUploadStatus>
+    cloudUploadList?: () => Promise<CloudUploadItem[]>
+    cloudUploadEnqueue?: (entries: CloudUploadEntry[]) => Promise<CloudEnqueueResult>
+    cloudUploadPause?: () => Promise<{ ok: boolean }>
+    cloudUploadResume?: () => Promise<{ ok: boolean }>
+    cloudUploadRetry?: (payload?: { id?: string }) => Promise<{ retried: number }>
+    cloudUploadRemove?: (payload: { id: string }) => Promise<{ removed: boolean }>
+    cloudUploadSetRecording?: (value: boolean) => Promise<{ ok: boolean }>
+    onCloudUploadProgress?: (cb: (status: CloudUploadStatus) => void) => () => void
+    cloudMigrationPlan?: () => Promise<CloudMigrationPlan>
+    cloudMigrationRun?: (options?: { includeExternal?: boolean }) => Promise<CloudEnqueueResult>
+    cloudStatus?: () => Promise<CloudStatus>
+    cloudSignInPassword?: (payload: { email: string; password: string; flow: 'signIn' | 'signUp'; name?: string }) => Promise<CloudResult>
+    cloudSignInGoogle?: () => Promise<CloudResult>
+    cloudCancelGoogle?: () => Promise<CloudResult>
+    cloudSignOut?: () => Promise<CloudResult>
+    cloudSyncNow?: () => Promise<CloudResult & { pushed?: number }>
+    onCloudStatus?: (cb: (status: CloudStatus) => void) => () => void
   }
 }
 
