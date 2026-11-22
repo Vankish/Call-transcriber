@@ -1,4 +1,5 @@
 import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
+import { ConvexError } from "convex/values";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import { api } from "./_generated/api";
@@ -71,14 +72,37 @@ describe("entrar con correo y contraseña", () => {
     expect(invitations.map((i) => i.status).sort()).toEqual(["accepted", "accepted", "revoked"]);
   });
 
-  test("una contraseña corta se rechaza", async () => {
+  // La app distingue los fallos por `code` (en producción el mensaje de un
+  // Error normal no llega).
+  const codeOf = async (promise: Promise<unknown>) => {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof ConvexError) return (error.data as { code: string }).code;
+      throw error;
+    }
+    throw new Error("debería haber fallado");
+  };
+  const password = (t: Awaited<ReturnType<typeof setup>>["t"], email: string, secret: string, flow: "signUp" | "signIn") =>
+    t.action(api.auth.signIn, { provider: "password", params: { email, password: secret, flow } });
+
+  test("los fallos de entrada llegan con su code", async () => {
     const h = await setup();
-    await expect(
-      h.t.action(api.auth.signIn, {
-        provider: "password",
-        params: { email: "x@example.com", password: "corta", flow: "signUp" },
-      }),
-    ).rejects.toThrow();
+    expect(await codeOf(password(h.t, "x@example.com", "corta", "signUp"))).toBe("weak_password");
+    await password(h.t, "x@example.com", PASSWORD, "signUp");
+    // Registrarse otra vez con la misma contraseña es entrar (así lo hace Convex
+    // Auth); con otra distinta, el correo ya está cogido.
+    expect(await codeOf(password(h.t, "x@example.com", "otra contraseña", "signUp"))).toBe(
+      "account_exists",
+    );
+    expect(await codeOf(password(h.t, "x@example.com", "otra contraseña", "signIn"))).toBe(
+      "invalid_credentials",
+    );
+    // Un correo sin cuenta da lo mismo que una contraseña mal.
+    expect(await codeOf(password(h.t, "nadie@example.com", PASSWORD, "signIn"))).toBe(
+      "invalid_credentials",
+    );
+    expect(await password(h.t, "X@Example.com", PASSWORD, "signIn")).toBeDefined();
   });
 });
 

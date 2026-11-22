@@ -10,6 +10,7 @@
 
 import type * as admitSignIn from "../admitSignIn.js";
 import type * as auth from "../auth.js";
+import type * as authRedirect from "../authRedirect.js";
 import type * as comment from "../comment.js";
 import type * as errors from "../errors.js";
 import type * as http from "../http.js";
@@ -38,6 +39,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   admitSignIn: typeof admitSignIn;
   auth: typeof auth;
+  authRedirect: typeof authRedirect;
   comment: typeof comment;
   errors: typeof errors;
   http: typeof http;

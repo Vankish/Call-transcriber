@@ -22,7 +22,12 @@ export type ErrorCode =
   | "upload_state"
   | "storage_error"
   | "not_configured"
-  | "rate_limited";
+  | "rate_limited"
+  | "invalid_redirect"
+  | "invalid_credentials"
+  | "account_exists"
+  | "too_many_attempts"
+  | "weak_password";
 
 export const fail = (code: ErrorCode, message: string): ConvexError<{
   code: ErrorCode;
