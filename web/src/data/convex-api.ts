@@ -19,6 +19,8 @@ const api = anyApi
 export const fn = {
   // Sesión y espacio
   memberships: api.workspace.memberships, // consulta
+  // Proyectos
+  projectList: api.project.list, // consulta: { workspaceId? } → carpetas a las que llego
   // Personas (solo owner/admin)
   memberInvite: api.member.invite, // mutación
   memberRevokeInvitation: api.member.revokeInvitation, // mutación

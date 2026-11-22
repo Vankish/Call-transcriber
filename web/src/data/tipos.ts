@@ -26,6 +26,7 @@ export type Sesion =
 export interface Membresia {
   workspaceId: string
   workspaceName: string
+  memberId: string
   role: Rol
   projectIds: string[]
 }

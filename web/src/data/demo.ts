@@ -19,8 +19,8 @@ const ahora = Date.now()
 export const YO = { memberId: 'm-marta', nombre: 'Marta Ríos', email: 'marta@ejemplo.com' }
 
 export const membresias: Membresia[] = [
-  { workspaceId: 'w-rios', workspaceName: 'Estudio Ríos', role: 'owner', projectIds: [] },
-  { workspaceId: 'w-norte', workspaceName: 'Academia Comercial Norte', role: 'coach', projectIds: ['p-ventas'] },
+  { workspaceId: 'w-rios', workspaceName: 'Estudio Ríos', memberId: 'm-yo-rios', role: 'owner', projectIds: [] },
+  { workspaceId: 'w-norte', workspaceName: 'Academia Comercial Norte', memberId: 'm-yo-norte', role: 'coach', projectIds: ['p-ventas'] },
 ]
 
 export const proyectos: Proyecto[] = [

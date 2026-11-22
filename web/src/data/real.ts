@@ -23,9 +23,9 @@ type Doc = any
 const str = (v: unknown, otro = '') => (typeof v === 'string' ? v : otro)
 const num = (v: unknown, otro = 0) => (typeof v === 'number' ? v : otro)
 
-/** SUPUESTO: viewer.myInterviews devuelve cada llamada con su proyecto y su
- *  perfil al lado ({ ...interview, project, candidate, media? }), o anidada en
- *  `interview`. Se aceptan las dos formas. */
+/** viewer.myInterviews devuelve filas planas: { _id, workspaceId, projectId,
+ *  projectName, projectKind, projectCompany, candidateName, sessionName,
+ *  durationSec, createdAt, hasVideo, ... }. Se acepta también la forma anidada. */
 function adaptarFila(d: Doc): LlamadaFila {
   const i = d.interview ?? d
   const p = d.project ?? {}
@@ -48,8 +48,8 @@ function adaptarArchivo(m: Doc): Archivo {
   return { _id: m._id, kind: m.kind, mimeType: str(m.mimeType), durationSec: m.durationSec, uploadStatus: m.uploadStatus }
 }
 
-/** viewer.interview y share.open: "entrevista + perfil + proyecto +
- *  transcripción + lista de archivos" (contrato). SUPUESTO: con esos nombres. */
+/** viewer.interview y share.open devuelven { interview, candidate, project,
+ *  transcript, media } (share.open, además, `expired` y `expiresAt`). */
 function adaptarDetalle(d: Doc): LlamadaDetalle {
   const i = d.interview ?? d
   const p = d.project ?? {}
@@ -71,9 +71,7 @@ function adaptarDetalle(d: Doc): LlamadaDetalle {
   }
 }
 
-/** SUPUESTO: comment.list trae el nombre del autor (`authorName`) y si es mío
- *  (`isMine`). El esquema solo guarda `authorMemberId`, y la web no tiene cómo
- *  saber el nombre ni su propio memberId en ese espacio. Ver el informe. */
+/** comment.list trae el nombre del autor (`authorName`) y si es mío (`isMine`). */
 function adaptarComentario(c: Doc): Comentario {
   return {
     _id: c._id,
@@ -95,8 +93,7 @@ function adaptarEnlace(e: Doc): Enlace {
   }
 }
 
-/** SUPUESTO: member.list → { members, invitations } (el contrato dice
- *  "members e invitaciones pendientes"). Si llega con otros nombres, aquí. */
+/** member.list → { members, invitations } (solo las pendientes). */
 function adaptarPersonas(d: Doc): { members: Miembro[]; invitations: Invitacion[] } {
   const miembros: Doc[] = d.members ?? []
   const invitaciones: Doc[] = (d.invitations ?? []).filter((i: Doc) => !i.status || i.status === 'pending')
@@ -148,22 +145,17 @@ export const datos: Datos = {
     return useMemo(() => (r ? (r as Doc[]).map(adaptarFila) : undefined), [r])
   },
 
-  // DESVÍO: el contrato no tiene "proyectos del espacio" para la web. Se sacan
-  // de las llamadas a las que llego, así que un proyecto sin llamadas no sale.
+  // project.list (añadida por el frente A): las carpetas a las que llego,
+  // también las que aún no tienen llamadas.
   useProyectos(workspaceId) {
-    const r = useQuery(fn.myInterviews, {})
+    const r = useQuery(fn.projectList, workspaceId ? { workspaceId } : {})
     return useMemo(() => {
       if (!r) return undefined
-      const vistos = new Map<string, Proyecto>()
-      for (const d of r as Doc[]) {
-        const f = adaptarFila(d)
-        if (workspaceId && f.workspaceId !== workspaceId) continue
-        if (!vistos.has(f.projectId)) {
-          vistos.set(f.projectId, { _id: f.projectId, workspaceId: f.workspaceId, name: f.projectName, company: str(d.project?.company), kind: f.projectKind })
-        }
-      }
-      return [...vistos.values()]
-    }, [r, workspaceId])
+      return (r as Doc[]).map((p): Proyecto => ({
+        _id: p._id, workspaceId: p.workspaceId, name: str(p.name), company: str(p.company),
+        kind: p.kind === 'clientes' ? 'clientes' : 'entrevistas',
+      }))
+    }, [r])
   },
 
   useLlamada(interviewId) {
