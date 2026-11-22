@@ -55,6 +55,7 @@ import { Select } from './Select'
 import { AuthScreen } from './AuthScreen'
 import { esIdioma, getIdioma, idiomaDelSistema, k, locale, setIdioma, t } from './i18n'
 import type { Idioma } from './i18n'
+import { displayVideoConstraints, pickVideoMimeType, videoBitsPerSecond } from './lib/recording/video'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 // `ownerId` = quién creó la carpeta. Con las carpetas compartidas ya no basta
@@ -1395,7 +1396,7 @@ function App() {
           // del monitor (30/60/144Hz) hace que Chromium tenga que codificar vídeo por software
           // a esa misma cadencia durante TODA la llamada, y eso es lo que se comía la CPU/GPU
           // y acababa notándose en todo el PC en llamadas largas.
-          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: { frameRate: { ideal: 8, max: 12 } } })
+          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: recordVideo ? displayVideoConstraints(defaultVideoQuality) : { frameRate: { ideal: 8, max: 12 } } })
           systemStreamRef.current = sysStream
         } catch (err) {
           console.error('No se pudo capturar audio/vídeo de sistema:', err)
@@ -1453,13 +1454,10 @@ function App() {
       if (recordVideo && videoTrack) {
         // El vídeo lleva la MISMA pista ya mezclada (mic + sistema), para que se oiga todo al reproducirlo.
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
-        const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
         try {
-          // H.264 lo comprime la tarjeta gráfica; VP8 lo hace el procesador. Medido el
-          // 2026-10-28 en el PC de David: la mitad de carga con H.264. Si el equipo no
-          // tiene codificador por hardware, Chromium dice que no y se queda en VP8.
-          const videoMime = MediaRecorder.isTypeSupported('video/webm;codecs=h264') ? 'video/webm;codecs=h264' : 'video/webm'
-          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond, audioBitsPerSecond: qualityBitsPerSecond })
+          // Códec, tamaño y kbps: ver src/lib/recording/video.ts (y lo medido allí).
+          const videoMime = await pickVideoMimeType(defaultVideoQuality)
+          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond: videoBitsPerSecond(defaultVideoQuality), audioBitsPerSecond: qualityBitsPerSecond })
           const videoSink = sinkFor('video', videoRecorder.mimeType)
           videoSinkRef.current = videoSink
           videoRecorder.ondataavailable = e => { if (e.data.size > 0) videoSink.push(e.data) }

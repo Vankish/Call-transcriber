@@ -21,6 +21,7 @@
 // cuentan bytes y fotogramas; sirve para ver si el capturador respeta fps y tamaño). Códecs: vp8, vp9, h264, av1, ninguno
 // (ninguno = solo pintar el canvas, sin grabar, para restar lo que cuesta la escena).
 // Los resultados quedan en %TEMP%\ct-bench-video-<fecha>\ (resultados.json y los .webm).
+// Con --sin-hw se desactiva el codificador por hardware, para ver un PC que no lo tiene.
 // Con --borrar se eliminan los vídeos al acabar y solo queda el JSON.
 
 const path = require('node:path')
@@ -37,6 +38,8 @@ const arg = (name, def) => {
 const MINUTES = Number(arg('minutos', '3'))
 const TESTS = arg('pruebas', 'ninguno-1080-0,vp8-1080-4000,vp8-720-2000,vp9-720-1000,h264-1080-4000,h264-720-1000,av1-720-1000').split(',')
 const DELETE_VIDEOS = process.argv.includes('--borrar')
+// --sin-hw: como un PC sin codificador en la tarjeta gráfica (H.264 cae a OpenH264).
+if (process.argv.includes('--sin-hw')) app.commandLine.appendSwitch('disable-accelerated-video-encode')
 const OUT_DIR = path.join(os.tmpdir(), `ct-bench-video-${new Date().toISOString().replace(/[:.]/g, '-')}`)
 fs.mkdirSync(OUT_DIR, { recursive: true })
 // Nada de la app real: perfil de Chromium aparte, en la carpeta temporal.
