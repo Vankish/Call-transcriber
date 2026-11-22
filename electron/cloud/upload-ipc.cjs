@@ -74,7 +74,9 @@ function registerUploadIpc({ ipcMain, app, ffmpegPath, readData, recordingsRoot,
   ipcMain.handle('cloud:upload-list', async () => (await ensure()).list())
 
   // [{ filePath, interviewLocalId, kind: 'mix'|'system'|'video', durationSec? }]
-  ipcMain.handle('cloud:upload-enqueue', async (_event, entries) => {
+  // La misma comprobación de rutas para la ventana y para la sincronización
+  // (frente B), que encola los archivos de cada entrevista nueva al subirla.
+  async function enqueueChecked(entries) {
     const q = await ensure()
     const root = path.resolve(recordingsRoot())
     const linked = await allowedPaths()
@@ -96,7 +98,8 @@ function registerUploadIpc({ ipcMain, app, ffmpegPath, readData, recordingsRoot,
     }
     const r = await q.enqueue(ok)
     return { ...r, skipped: r.skipped + rejected }
-  })
+  }
+  ipcMain.handle('cloud:upload-enqueue', (_event, entries) => enqueueChecked(entries))
 
   ipcMain.handle('cloud:upload-pause', async () => { await (await ensure()).pause(); return { ok: true } })
   ipcMain.handle('cloud:upload-resume', async () => { await (await ensure()).resume(); return { ok: true } })
@@ -125,6 +128,8 @@ function registerUploadIpc({ ipcMain, app, ffmpegPath, readData, recordingsRoot,
   return {
     /** La capa de sesión (frente B) la llama al entrar y con null al salir. */
     setCallConvex: async (fn) => (await ensure()).setCallConvex(fn),
+    /** Lo usa la sincronización para subir los archivos de las entrevistas nuevas. */
+    enqueue: enqueueChecked,
     /** main.cjs avisa de que hay pistas grabándose. */
     setRecordingStreams: (value) => setRecordingFrom('streams', value),
     /** Al cerrar la app. Lo que esté a medias se reanuda en el próximo arranque. */

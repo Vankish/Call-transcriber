@@ -164,6 +164,10 @@ const EN = {
   'Call Transcriber · grabando la llamada': 'Call Transcriber · recording the call',
   // Subida de grabaciones a la nube
   'No se encuentra el archivo en este PC': 'The file is not on this PC',
+  // Sesión de la nube: la página de vuelta de Google
+  'Este enlace ya no sirve': 'This link no longer works',
+  'Puedes cerrar esta ventana y volver a Call Transcriber.': 'You can close this window and go back to Call Transcriber.',
+  'Vuelve a la app y pulsa otra vez «Entrar con Google».': 'Go back to the app and press “Sign in with Google” again.',
 }
 
 module.exports = { usarIdiomaDe, getIdioma, tr, kr, detectarIdioma, etiquetasPorDefecto, nombreEnPrompt, EN }

@@ -293,6 +293,42 @@ type CloudMigrationPlan = {
 
 type CloudEnqueueResult = { added: number; updated: number; skipped: number }
 
+// ── Sesión de la nube y sincronización (electron/cloud/cloud-ipc.cjs) ────────
+
+/** Códigos estables para enseñar el error en el idioma de la interfaz. */
+type CloudErrorCode =
+  | 'not-configured' | 'network' | 'invalid-credentials' | 'account-exists' | 'weak-password'
+  | 'signup-failed' | 'redirect-not-allowed' | 'rate-limited' | 'oauth-timeout' | 'expired' | 'failed'
+
+type CloudSessionStatus = {
+  state: 'signed-out' | 'signing-in' | 'signed-in'
+  /** Por qué se quedó sin sesión la última vez, si fue un error. */
+  error: CloudErrorCode | null
+  email: string | null
+  name: string | null
+  provider: 'password' | 'google' | null
+  workspaceId: string | null
+}
+
+type CloudSyncStatus = {
+  state: 'idle' | 'syncing' | 'error' | 'offline'
+  lastSyncAt: number | null
+  error: string | null
+  errorCode: string | null
+  nextRetryAt: number | null
+  pending: number
+  progress: { done: number; total: number } | null
+}
+
+type CloudStatus = {
+  /** false = compilada sin VITE_CONVEX_URL: no hay nube que enseñar. */
+  configured: boolean
+  session: CloudSessionStatus | null
+  sync: CloudSyncStatus | null
+}
+
+type CloudResult = { ok: boolean; errorCode?: CloudErrorCode | string; error?: string }
+
 interface Window {
   desktopApp?: {
     platform: string
@@ -351,6 +387,13 @@ interface Window {
     onCloudUploadProgress?: (cb: (status: CloudUploadStatus) => void) => () => void
     cloudMigrationPlan?: () => Promise<CloudMigrationPlan>
     cloudMigrationRun?: (options?: { includeExternal?: boolean }) => Promise<CloudEnqueueResult>
+    cloudStatus?: () => Promise<CloudStatus>
+    cloudSignInPassword?: (payload: { email: string; password: string; flow: 'signIn' | 'signUp'; name?: string }) => Promise<CloudResult>
+    cloudSignInGoogle?: () => Promise<CloudResult>
+    cloudCancelGoogle?: () => Promise<CloudResult>
+    cloudSignOut?: () => Promise<CloudResult>
+    cloudSyncNow?: () => Promise<CloudResult & { pushed?: number }>
+    onCloudStatus?: (cb: (status: CloudStatus) => void) => () => void
   }
 }
 
