@@ -29,6 +29,8 @@ const interviewListItem = v.object({
   workspaceId: v.id("workspace"),
   projectId: v.id("project"),
   projectName: v.string(),
+  projectKind: projectDoc.fields.kind,
+  projectCompany: v.string(),
   candidateName: v.string(),
   sessionName: v.string(),
   interviewerName: v.string(),
@@ -36,6 +38,8 @@ const interviewListItem = v.object({
   transcriptionStatus: interviewDoc.fields.transcriptionStatus,
   summaryContext: interviewDoc.fields.summaryContext,
   createdAt: v.number(),
+  // Para el icono de la lista: si hay vídeo terminado de subir.
+  hasVideo: v.boolean(),
 });
 
 export const myInterviews = query({
@@ -90,11 +94,19 @@ export const myInterviews = query({
         if (interview.deletedAt !== undefined) continue;
         const candidate = await ctx.db.get(interview.candidateId);
         if (candidate === null || candidate.deletedAt !== undefined) continue;
+        const videos = await ctx.db
+          .query("media")
+          .withIndex("by_interview_id_and_kind", (q) =>
+            q.eq("interviewId", interview._id).eq("kind", "video"),
+          )
+          .collect();
         items.push({
           _id: interview._id,
           workspaceId: interview.workspaceId,
           projectId: project._id,
           projectName: project.name,
+          projectKind: project.kind,
+          projectCompany: project.company,
           candidateName: candidate.name,
           sessionName: interview.sessionName,
           interviewerName: interview.interviewerName,
@@ -102,6 +114,7 @@ export const myInterviews = query({
           transcriptionStatus: interview.transcriptionStatus,
           summaryContext: interview.summaryContext,
           createdAt: interview.createdAt,
+          hasVideo: videos.some((m) => m.uploadStatus === "done" && m.deletedAt === undefined),
         });
       }
     }

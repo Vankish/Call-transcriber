@@ -215,7 +215,7 @@ describe("comentarios", () => {
     await coach.as.mutation(api.comment.edit, { commentId, body: "Ojo aquí, minuto 3" });
     await o.as.mutation(api.comment.resolve, { commentId, resolved: true });
     const [c] = await editor.as.query(api.comment.list, { interviewId: o.i1 });
-    expect(c).toMatchObject({ body: "Ojo aquí, minuto 3", authorName: "coach", mine: false });
+    expect(c).toMatchObject({ body: "Ojo aquí, minuto 3", authorName: "coach", isMine: false });
     expect(c.resolvedAt).toBeTypeOf("number");
 
     await coach.as.mutation(api.comment.remove, { commentId });

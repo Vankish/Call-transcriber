@@ -86,6 +86,8 @@ export const memberships = query({
     v.object({
       workspaceId: v.id("workspace"),
       workspaceName: v.string(),
+      // La web lo necesita para saber qué comentarios son suyos en cada espacio.
+      memberId: v.id("member"),
       role: memberRole,
       projectIds: v.array(v.id("project")),
     }),
@@ -104,6 +106,7 @@ export const memberships = query({
       result.push({
         workspaceId: workspace._id,
         workspaceName: workspace.name,
+        memberId: member._id,
         role: member.role,
         projectIds: member.projectIds,
       });

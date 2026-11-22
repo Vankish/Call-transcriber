@@ -32,7 +32,7 @@ const commentView = v.object({
   resolvedAt: v.optional(v.number()),
   createdAt: v.number(),
   editedAt: v.optional(v.number()),
-  mine: v.boolean(),
+  isMine: v.boolean(),
 });
 
 export const list = query({
@@ -65,7 +65,7 @@ export const list = query({
         resolvedAt: c.resolvedAt,
         createdAt: c.createdAt,
         editedAt: c.editedAt,
-        mine: c.authorMemberId === member._id,
+        isMine: c.authorMemberId === member._id,
       });
     }
     return result;
