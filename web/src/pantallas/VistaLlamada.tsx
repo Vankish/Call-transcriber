@@ -1,7 +1,7 @@
 import { useRef, useState, useSyncExternalStore } from 'react'
 import type { Comentario, LlamadaDetalle, Rol } from '../data/tipos'
 import { k, t } from '../i18n'
-import { duracion, fecha } from '../formato'
+import { duracion, fecha, tiempo as tiempoFmt } from '../formato'
 import { navegar } from '../ruta'
 import { Reproductor, type Marca } from './Reproductor'
 import { Transcripcion } from './Transcripcion'
@@ -44,6 +44,8 @@ export function VistaLlamada({ llamada, rol, shareToken, comentarios }: Props) {
   const cliente = Boolean(shareToken)
   const puedeComentar = !cliente && rol !== undefined
   const puedeCompartir = !cliente && (rol === 'owner' || rol === 'admin')
+  // Sin nada que reproducir, «comentar en este momento» siempre diría 0:00.
+  const hayGrabacion = llamada.media.some((m) => m.uploadStatus === 'done')
   const estrecho = useEstrecho()
 
   const mediaRef = useRef<HTMLMediaElement | null>(null)
@@ -126,9 +128,9 @@ export function VistaLlamada({ llamada, rol, shareToken, comentarios }: Props) {
               onMarca={alPincharMarca}
               onTiempo={setTiempo}
             />
-            {puedeComentar && (
+            {puedeComentar && hayGrabacion && (
               <button className="boton boton--secundario boton--ancho llamada__comentar" onClick={abrirComentario}>
-                + {t('Comentar en este momento')}
+                + {t('Comentar en este momento')} <span className="boton__extra">{tiempoFmt(tiempo)}</span>
               </button>
             )}
           </div>

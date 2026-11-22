@@ -55,9 +55,8 @@ export function Comentarios({ interviewId, comentarios, rol, tiempo, borrador, o
         />
       ) : (
         <div className="comentarios__acciones">
-          <button className="boton boton--primario" onClick={() => onBorrador({ atSec: tiempo })}>
-            {t('Comentar en este momento')} <span className="boton__extra">{fmt(tiempo)}</span>
-          </button>
+          {/* El botón de comentar en el momento vive bajo el vídeo, siempre a la
+              vista; aquí queda el comentario general, que no depende del minuto. */}
           <button className="boton boton--secundario" onClick={() => onBorrador({})}>{t('Comentario general')}</button>
         </div>
       )}

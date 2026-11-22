@@ -125,6 +125,7 @@ textarea { resize: vertical; min-height: 72px; line-height: 1.45; }
 .formulario { display: flex; flex-direction: column; gap: 14px; }
 .formulario__fila { display: flex; gap: 12px; flex-wrap: wrap; }
 .formulario__fila > .campo:not(.campo--crece) { min-width: 160px; }
+@media (max-width: 600px) { .formulario__fila { flex-direction: column; } }
 .formulario__pie { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .formulario__pie .campo__ayuda { margin-right: auto; }
 
@@ -219,7 +220,7 @@ textarea { resize: vertical; min-height: 72px; line-height: 1.45; }
 .nav__enlace--activo { background: var(--primary-soft); color: var(--primary); }
 
 @media (max-width: 600px) {
-  .marca__nombre { display: none; }
+  .cabecera .marca__nombre { display: none; }
   .cabecera__dentro { gap: 10px; padding: 0 12px; }
 }
 
@@ -355,7 +356,7 @@ textarea { resize: vertical; min-height: 72px; line-height: 1.45; }
 .tarjeta__sesion { color: var(--text-muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 1em; }
 .tarjeta__pie { margin-top: auto; padding-top: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
 .tarjeta__proyecto { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
-.tarjeta__fecha { margin-left: auto; }
+.tarjeta__fecha { flex-basis: 100%; }
 
 /* ── Llamada ─────────────────────────────────────────────────────────────── */
 
@@ -363,8 +364,9 @@ textarea { resize: vertical; min-height: 72px; line-height: 1.45; }
 .llamada__cabeza { margin-bottom: 14px; }
 .llamada__volver { margin-bottom: 6px; }
 .llamada__titulo { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
-.llamada__meta { display: flex; flex-wrap: wrap; gap: 4px 0; color: var(--text-muted); font-size: 14px; }
-.llamada__meta > span + span::before { content: '·'; margin: 0 8px; color: #CBD5E1; }
+/* Sin puntos separadores: al partirse la línea en el móvil, un punto al
+   principio de renglón queda raro. El hueco ya separa. */
+.llamada__meta { display: flex; flex-wrap: wrap; gap: 2px 16px; color: var(--text-muted); font-size: 14px; }
 .llamada__aviso-cliente {
   margin: 10px 0 0;
   padding: 8px 12px;
@@ -428,7 +430,9 @@ textarea { resize: vertical; min-height: 72px; line-height: 1.45; }
 .reproductor { background: #0B1220; border-radius: 12px; overflow: hidden; outline: none; }
 .reproductor:focus-visible { box-shadow: 0 0 0 3px var(--primary-border); }
 .reproductor:fullscreen { display: flex; flex-direction: column; justify-content: center; border-radius: 0; }
-.reproductor__pantalla { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; background: #000; }
+/* Con tope de alto: en un portátil el vídeo a todo el ancho empujaría los
+   comentarios fuera de la pantalla. Lo que sobra se rellena de negro. */
+.reproductor__pantalla { position: relative; aspect-ratio: 16 / 9; max-height: 58vh; width: 100%; display: grid; place-items: center; background: #000; }
 .reproductor__pantalla video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .reproductor:fullscreen .reproductor__pantalla { flex: 1; aspect-ratio: auto; }
 .reproductor__pantalla--audio { aspect-ratio: auto; height: 140px; background: linear-gradient(135deg, #1E3A8A, var(--primary)); gap: 8px; }
