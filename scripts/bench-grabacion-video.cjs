@@ -38,6 +38,17 @@ const arg = (name, def) => {
 const MINUTES = Number(arg('minutos', '3'))
 const TESTS = arg('pruebas', 'ninguno-1080-0,vp8-1080-4000,vp8-720-2000,vp9-720-1000,h264-1080-4000,h264-720-1000,av1-720-1000').split(',')
 const DELETE_VIDEOS = process.argv.includes('--borrar')
+// --sumidero nada: la ventana tira los trozos en vez de mandarlos por IPC.
+const SINK = arg('sumidero', 'ipc')
+// --gc: fuerza la recogida de basura cada 30 s, para distinguir memoria retenida
+// de verdad de memoria que V8 aún no se ha molestado en liberar.
+const FORCE_GC = process.argv.includes('--gc')
+let mainGc = null
+if (FORCE_GC) {
+  app.commandLine.appendSwitch('js-flags', '--expose-gc')
+  require('node:v8').setFlagsFromString('--expose-gc')
+  mainGc = require('node:vm').runInNewContext('gc')
+}
 // --sin-hw: como un PC sin codificador en la tarjeta gráfica (H.264 cae a OpenH264).
 if (process.argv.includes('--sin-hw')) app.commandLine.appendSwitch('disable-accelerated-video-encode')
 const OUT_DIR = path.join(os.tmpdir(), `ct-bench-video-${new Date().toISOString().replace(/[:.]/g, '-')}`)
@@ -124,7 +135,11 @@ document.getElementById('pip').srcObject = recStream
     rec = new MediaRecorder(recStream, { mimeType: cfg.mime, videoBitsPerSecond: cfg.kbps * 1000, audioBitsPerSecond: 128000 })
     // Mismo camino que openRecordingSink: cola, arrayBuffer y IPC por trozo.
     let q = Promise.resolve()
-    rec.ondataavailable = e => { if (e.data.size > 0) { const d = e.data; q = q.then(async () => ipcRenderer.invoke('bench:append', new Uint8Array(await d.arrayBuffer()))) } }
+    // cfg.sink 'nada': el trozo se lee y se tira en la ventana, para separar lo que
+    // retiene el IPC de lo que retiene MediaRecorder.
+    rec.ondataavailable = e => { if (e.data.size > 0) { const d = e.data; q = q.then(async () => { const b = new Uint8Array(await d.arrayBuffer()); if (cfg.sink === 'nada') return; return ipcRenderer.invoke('bench:append', b) }) } }
+    if (cfg.gc) setInterval(() => window.gc?.(), 30000)
+    setInterval(() => { const m = process.memoryUsage(); ipcRenderer.send('bench:mem', { heapMB: Math.round(m.heapUsed / 1048576), externalMB: Math.round(m.external / 1048576), arrayBuffersMB: Math.round(m.arrayBuffers / 1048576) }) }, 5000)
     rec.onstop = () => { q.then(() => ipcRenderer.send('bench:stopped')) }
     rec.start(1000)
   }
@@ -157,7 +172,7 @@ const sample = (prev) => {
 const runTest = async (spec) => {
   const [codec, h, kbps, mode] = spec.split('-')
   const pantalla = mode === 'pantalla'
-  const cfg = { codec, height: Number(h), kbps: Number(kbps), mime: MIME[codec] ?? null, pantalla }
+  const cfg = { codec, height: Number(h), kbps: Number(kbps), mime: MIME[codec] ?? null, pantalla, sink: SINK, gc: FORCE_GC }
   const filePath = path.join(OUT_DIR, `${spec}.webm`)
   // Con la pantalla real no se guarda nada: solo se cuentan los bytes, para no
   // dejar en disco lo que hubiera en el escritorio.
@@ -166,6 +181,10 @@ const runTest = async (spec) => {
   let lastProbe = null
   ipcMain.removeAllListeners('bench:probe')
   ipcMain.on('bench:probe', (_e, p) => { lastProbe = p })
+  let rendererMem = null
+  ipcMain.removeAllListeners('bench:mem')
+  ipcMain.on('bench:mem', (_e, m) => { rendererMem = m })
+  const gcTimer = FORCE_GC ? setInterval(() => mainGc?.(), 30000) : null
   ipcMain.removeHandler('bench:append')
   ipcMain.handle('bench:append', async (_e, chunk) => { if (handle) await handle.write(Buffer.from(chunk)); bytes += chunk.length; return true })
 
@@ -182,8 +201,8 @@ const runTest = async (spec) => {
     const timer = setInterval(() => {
       const s = sample(prev); prev = s
       const total = Object.values(s.cores).reduce((a, b) => a + b, 0)
-      samples.push({ s: Math.round((s.t - start) / 1000), cores: s.cores, total: +total.toFixed(3), memMB: Object.fromEntries(Object.entries(s.byType).map(([k, e]) => [k, Math.round(e.memMB)])), privMB: Object.fromEntries(Object.entries(s.byType).map(([k, e]) => [k, Math.round(e.privMB)])), writtenMB: +(bytes / 1048576).toFixed(1) })
-      if (Date.now() - start >= MINUTES * 60_000) { clearInterval(timer); resolve() }
+      samples.push({ s: Math.round((s.t - start) / 1000), cores: s.cores, total: +total.toFixed(3), memMB: Object.fromEntries(Object.entries(s.byType).map(([k, e]) => [k, Math.round(e.memMB)])), privMB: Object.fromEntries(Object.entries(s.byType).map(([k, e]) => [k, Math.round(e.privMB)])), writtenMB: +(bytes / 1048576).toFixed(1), jsVentana: rendererMem, jsPrincipal: (m => ({ heapMB: Math.round(m.heapUsed / 1048576), externalMB: Math.round(m.external / 1048576), arrayBuffersMB: Math.round(m.arrayBuffers / 1048576) }))(process.memoryUsage()) })
+      if (Date.now() - start >= MINUTES * 60_000) { clearInterval(timer); if (gcTimer) clearInterval(gcTimer); resolve() }
     }, 5000)
   })
   const stopped = new Promise(r => ipcMain.once('bench:stopped', r))
@@ -214,6 +233,9 @@ const runTest = async (spec) => {
     MB: +(bytes / 1048576).toFixed(1), MBporHora: +((bytes / 1048576) * 3600 / secs).toFixed(0),
     fotogramas: frames, fpsReal: frames ? +(frames / secs).toFixed(2) : null,
     captura: pantalla ? lastProbe : undefined,
+    sumidero: SINK, gc: FORCE_GC,
+    jsVentana: { inicio: samples[1]?.jsVentana, final: samples.at(-1)?.jsVentana },
+    jsPrincipal: { inicio: samples[1]?.jsPrincipal, final: samples.at(-1)?.jsPrincipal },
   }
   if (DELETE_VIDEOS && handle) await fsp.rm(filePath, { force: true })
   console.log(JSON.stringify(summary))
