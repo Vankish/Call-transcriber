@@ -347,7 +347,8 @@ interface Window {
     analyzeAndSendToCrm?: (payload: CrmAnalyzePayload) => Promise<{ analysis: CrmAnalysis; sent: boolean; sendError: string | null }>
     onCaptureSources: (cb: (sources: CaptureSourceOption[]) => void) => void
     pickCaptureSource: (sourceId: string | null) => Promise<{ ok: boolean }>
-    setCaptureMode: (wantsVideo: boolean) => Promise<{ ok: boolean }>
+    // `auto`: la lanza el detector de llamadas; se graba la ventana con ese título (o la pantalla) sin selector.
+    setCaptureMode: (wantsVideo: boolean, auto?: { title: string }) => Promise<{ ok: boolean }>
     getConfig: () => Promise<GetConfigResult>
     saveConfig: (payload: SaveConfigPayload) => Promise<SaveConfigResult>
     getLocalData: () => Promise<LocalDataPayload | null>

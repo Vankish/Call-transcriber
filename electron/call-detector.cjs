@@ -177,4 +177,16 @@ function startCallDetector({ isEnabled, onEvent, log }) {
   }
 }
 
-module.exports = { startCallDetector, detectCall }
+// La ventana que se graba cuando la grabación con vídeo la lanza el detector. Nadie
+// está mirando para elegirla en el selector, así que se busca la ventana de la
+// llamada por su título (el que vio el detector, sin el " - Google Chrome" del final)
+// y, si no aparece, la pantalla principal: una grabación sin la ventana justa vale
+// más que una grabación esperando a un clic que no llega.
+function findCallSource(sources, title) {
+  const windows = sources.filter(s => !s.id.startsWith('screen:'))
+  const wanted = (title || '').trim()
+  const byTitle = wanted && windows.find(s => s.name === wanted || s.name.startsWith(`${wanted} - `))
+  return byTitle || sources.find(s => s.id.startsWith('screen:')) || null
+}
+
+module.exports = { startCallDetector, detectCall, findCallSource }

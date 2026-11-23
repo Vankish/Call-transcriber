@@ -57,6 +57,7 @@ import { CloudPanel } from './lib/cloud/CloudPanel'
 import { useCloudAvailable } from './lib/cloud/useCloudAvailable'
 import { esIdioma, getIdioma, idiomaDelSistema, k, locale, setIdioma, t } from './i18n'
 import type { Idioma } from './i18n'
+import { displayVideoConstraints, pickVideoMimeType, videoBitsPerSecond } from './lib/recording/video'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 // `ownerId` = quién creó la carpeta. Con las carpetas compartidas ya no basta
@@ -1359,7 +1360,8 @@ function App() {
   // ── Recording ──────────────────────────────────────────────────────────
   // `auto`: la grabación la lanza el detector de llamadas. El perfil puede ser uno
   // recién creado que aún no está en el estado, por eso se pasa con su carpeta.
-  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false, auto?: { candidate: Candidate; projectName: string }) => {
+  // `auto.callTitle`: título de la ventana de la llamada, para grabarla sin selector.
+  const handleStartRecording = async (interviewOverride?: Interview, captureSystem = false, recordVideo = false, auto?: { candidate: Candidate; projectName: string; callTitle?: string }) => {
     const iv = interviewOverride ?? selectedInterview
     if (!iv?.micDeviceId) { setRecordingMessage(t('Selecciona un micrófono antes de grabar.')); return }
     const ivCandidate = auto?.candidate ?? candidates.find(c => c.id === iv.candidateId)
@@ -1390,14 +1392,14 @@ function App() {
       micStreamRef.current = micStream
       let sysStream: MediaStream | null = null
       if (captureSystem) {
-        await window.desktopApp?.setCaptureMode?.(recordVideo)
+        await window.desktopApp?.setCaptureMode?.(recordVideo, auto ? { title: auto.callTitle ?? '' } : undefined)
         try {
           // frameRate baja a propósito: esto es una captura de pantalla de referencia para
           // revisar la llamada después, no vídeo de acción — grabar a la frecuencia nativa
           // del monitor (30/60/144Hz) hace que Chromium tenga que codificar vídeo por software
           // a esa misma cadencia durante TODA la llamada, y eso es lo que se comía la CPU/GPU
           // y acababa notándose en todo el PC en llamadas largas.
-          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: { frameRate: { ideal: 8, max: 12 } } })
+          sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: recordVideo ? displayVideoConstraints(defaultVideoQuality) : { frameRate: { ideal: 8, max: 12 } } })
           systemStreamRef.current = sysStream
         } catch (err) {
           console.error('No se pudo capturar audio/vídeo de sistema:', err)
@@ -1412,7 +1414,8 @@ function App() {
         toast(t('No se capturó el audio del interlocutor: solo se grabará tu micrófono'), 'error')
       }
 
-      if (recordVideo && !videoTrack) {
+      // Sola no hay selector que cancelar: si no sale la pantalla, se graba el audio igual.
+      if (recordVideo && !videoTrack && !auto) {
         // El usuario canceló el selector de pantalla (o no eligió nada) en modo
         // "Llamada entera". Sin pantalla no hay vídeo que grabar, así que abortamos
         // del todo en vez de caer en una grabación de solo audio no pedida.
@@ -1454,13 +1457,10 @@ function App() {
       if (recordVideo && videoTrack) {
         // El vídeo lleva la MISMA pista ya mezclada (mic + sistema), para que se oiga todo al reproducirlo.
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
-        const videoBitsPerSecond = settingsVideoQualityDraft === '1080p' ? 4_000_000 : 2_000_000
         try {
-          // H.264 lo comprime la tarjeta gráfica; VP8 lo hace el procesador. Medido el
-          // 2026-10-28 en el PC de David: la mitad de carga con H.264. Si el equipo no
-          // tiene codificador por hardware, Chromium dice que no y se queda en VP8.
-          const videoMime = MediaRecorder.isTypeSupported('video/webm;codecs=h264') ? 'video/webm;codecs=h264' : 'video/webm'
-          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond, audioBitsPerSecond: qualityBitsPerSecond })
+          // Códec, tamaño y kbps: ver src/lib/recording/video.ts (y lo medido allí).
+          const videoMime = pickVideoMimeType()
+          videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond: videoBitsPerSecond(defaultVideoQuality), audioBitsPerSecond: qualityBitsPerSecond })
           const videoSink = sinkFor('video', videoRecorder.mimeType)
           videoSinkRef.current = videoSink
           videoRecorder.ondataavailable = e => { if (e.data.size > 0) videoSink.push(e.data) }
@@ -1826,7 +1826,7 @@ function App() {
       }
       autoRecordingIdRef.current = n.id
       setSessionAskContact(true); setSessionContactDraft(recent ? recent.id : ''); setSessionNewContact({ name: '', company: '', linkedin: '' })
-      void handleStartRecording(n, true, false, target)
+      void handleStartRecording(n, true, defaultRecordVideo, { ...target, callTitle: ev.title })
       void desk.notify?.({ title: t('Grabando la llamada de {app}', { app: ev.app }), body: recent ? t('Es la llamada con {nombre}. Se para sola al colgar.', { nombre: recent.name }) : t('Se para sola al colgar. Después eliges de quién era.') })
     } else {
       const id = autoRecordingIdRef.current
