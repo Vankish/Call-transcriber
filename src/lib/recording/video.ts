@@ -22,24 +22,14 @@ export const displayVideoConstraints = (quality: VideoQuality): MediaTrackConstr
 // Kbps de vídeo. Antes eran 2 Mbps (720p) y 4 Mbps (1080p): hasta 0,9 y 1,8 GB por
 // hora, y el vídeo se sube a la nube y se guarda para siempre. A 8 fps una llamada
 // se ve bien con mucho menos; el codificador gasta menos de esto cuando la imagen
-// apenas cambia, así que es un techo, no lo que ocupa siempre.
+// apenas cambia, así que es un techo, no lo que ocupa siempre. Medido con una
+// escena tipo Meet (RTX 2070): 1080p pasa de 463 a 234 MB/h y 720p ocupa 147 MB/h.
+// Menos kbps también es menos memoria: los trozos que entrega MediaRecorder viven
+// en memoria hasta que la ventana hace limpieza, y crecen al ritmo del vídeo.
 export const videoBitsPerSecond = (quality: VideoQuality) => quality === '1080p' ? 1_800_000 : 900_000
 
-// ¿Hay codificador H.264 en la tarjeta gráfica? MediaRecorder.isTypeSupported dice
-// que sí aunque no lo haya (cae a OpenH264, que es por procesador), así que se
-// pregunta a WebCodecs, que sí distingue el hardware.
-const hasHardwareH264 = async (quality: VideoQuality) => {
-  try {
-    if (typeof VideoEncoder === 'undefined') return false
-    const { width, height } = SIZE[quality]
-    const r = await VideoEncoder.isConfigSupported({ codec: 'avc1.42002a', width, height, bitrate: videoBitsPerSecond(quality), framerate: 8, hardwareAcceleration: 'prefer-hardware' })
-    return !!r.supported
-  } catch { return false }
-}
-
-// H.264 por la tarjeta gráfica cuando la hay; si no, VP8 (los dos por procesador
-// cuestan parecido, y VP8 es el formato propio de webm, sin trucos al reempaquetar).
-export const pickVideoMimeType = async (quality: VideoQuality) =>
-  MediaRecorder.isTypeSupported('video/webm;codecs=h264') && await hasHardwareH264(quality)
-    ? 'video/webm;codecs=h264'
-    : 'video/webm;codecs=vp8'
+// H.264 siempre que Chromium lo acepte. Con tarjeta gráfica lo comprime ella; sin
+// ella cae a OpenH264, que sigue gastando menos procesador que VP8 (medido a 720p:
+// 0,34 núcleos frente a 0,39, mismo tamaño). VP8 solo queda por si no hay H.264.
+export const pickVideoMimeType = () =>
+  MediaRecorder.isTypeSupported('video/webm;codecs=h264') ? 'video/webm;codecs=h264' : 'video/webm;codecs=vp8'

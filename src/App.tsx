@@ -1456,7 +1456,7 @@ function App() {
         const videoWithAudioStream = new MediaStream([videoTrack, ...dest.stream.getAudioTracks()])
         try {
           // Códec, tamaño y kbps: ver src/lib/recording/video.ts (y lo medido allí).
-          const videoMime = await pickVideoMimeType(defaultVideoQuality)
+          const videoMime = pickVideoMimeType()
           videoRecorder = new MediaRecorder(videoWithAudioStream, { mimeType: videoMime, videoBitsPerSecond: videoBitsPerSecond(defaultVideoQuality), audioBitsPerSecond: qualityBitsPerSecond })
           const videoSink = sinkFor('video', videoRecorder.mimeType)
           videoSinkRef.current = videoSink
