@@ -47,6 +47,13 @@ async function main() {
     await session.signOut()
     await assert.rejects(session.signInWithPassword({ email, password: 'mala-mala-mala', flow: 'signIn' }))
     console.log('✓ contraseña mala rechazada:', session.status().error)
+    assert.equal(session.status().error, 'invalid-credentials')
+    // Los fallos de contraseña llegan con `code` (convex/auth.ts) y no por el texto.
+    await assert.rejects(session.signInWithPassword({ email, password: 'otra-clave-cualquiera', flow: 'signUp' }))
+    assert.equal(session.status().error, 'account-exists')
+    await assert.rejects(session.signInWithPassword({ email: `corta-${Date.now()}@ejemplo.test`, password: 'corta', flow: 'signUp' }))
+    assert.equal(session.status().error, 'weak-password')
+    console.log('✓ cuenta repetida y contraseña corta, con su código')
     const again = await session.signInWithPassword({ email, password: 'una-clave-de-prueba', flow: 'signIn' })
     assert.equal(again.workspaceId, st.workspaceId, 'ensureMine devuelve el mismo espacio')
     console.log('✓ entrar de nuevo: mismo espacio')

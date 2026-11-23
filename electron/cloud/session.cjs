@@ -181,7 +181,9 @@ function createCloudSession({
     // El correo y el nombre con los que quedó la cuenta (con Google no se saben
     // hasta aquí). Si la consulta falla, la sesión vale igual.
     try {
-      const list = await callConvex('query', 'member:list', {})
+      // Con el espacio explícito: sin él, el backend lo deduce y, si la cuenta es
+      // además admin de otros espacios, podría pedir que se elija (workspace_required).
+      const list = await callConvex('query', 'member:list', { workspaceId: mine.workspaceId })
       const me = list?.members?.find((m) => m._id === mine.memberId)
       if (me) session = { ...session, email: me.email || session.email || null, name: me.name || session.name || null }
     } catch (err) {
@@ -297,10 +299,24 @@ function createCloudSession({
   }
 }
 
+// Códigos de convex/errors.ts → los estados que traduce CloudPanel.tsx.
+const SIGN_IN_CODES = {
+  invalid_credentials: 'invalid-credentials',
+  account_exists: 'account-exists',
+  weak_password: 'weak-password',
+  too_many_attempts: 'rate-limited',
+  rate_limited: 'rate-limited',
+  invalid_redirect: 'redirect-not-allowed',
+}
+
 /** Un código estable para que la interfaz enseñe el mensaje en su idioma. */
 function classifySignInError(err, flow) {
   if (err?.network) return 'network'
   if (err?.code === 'oauth-timeout') return 'oauth-timeout'
+  // El backend traduce los fallos de Convex Auth a ConvexError con `code`
+  // (convex/auth.ts, passwordError): es lo único que sobrevive en producción,
+  // donde Convex cambia el texto de los demás errores por "Server Error".
+  if (err?.code && SIGN_IN_CODES[err.code]) return SIGN_IN_CODES[err.code]
   const text = String(err?.message || '')
   if (/already exists/i.test(text)) return 'account-exists'
   if (/invalid password|al menos \d+ caracteres/i.test(text)) return 'weak-password'
