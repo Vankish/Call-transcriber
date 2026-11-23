@@ -254,6 +254,22 @@ test('si la entrevista aún no está en Convex, reintenta más tarde', async (t)
   await q.stop()
 })
 
+test('sin R2 configurado en la nube: error claro, sin reintentos solos', async (t) => {
+  const r2 = await startFakeR2(); t.after(r2.close)
+  const convex = createFakeConvex(r2, { storageConfigured: false })
+  const dir = await tmpDir()
+  const f = await randomFile(dir, 'z_iv32.webm', 1 * MB)
+  const { q } = makeQueue(dir, convex)
+  await q.load()
+  q.start()
+  await q.enqueue([{ filePath: f, interviewLocalId: 'iv32', kind: 'mix', localRelPath: 'z_iv32.webm' }])
+  await until(() => q.list()[0].status === 'error')
+  assert.equal(q.list()[0].errorCode, 'storage-not-configured')
+  assert.equal(q.list()[0].attempts, 1)
+  assert.equal(q.status().storageNotConfigured, true)
+  await q.stop()
+})
+
 test('un archivo que ya no existe queda en error sin reintentos', async (t) => {
   const r2 = await startFakeR2(); t.after(r2.close)
   const convex = createFakeConvex(r2)

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ConvexError } from "convex/values";
 
 import { api } from "./_generated/api";
 import { PART_SIZE } from "./media";
@@ -54,6 +55,27 @@ const video = (sha256 = SHA_A, bytes = PART_SIZE * 2 + 10) => ({
   sha256,
   localRelPath: "Acme/Perfil c1/llamada.webm",
   durationSec: 1800,
+});
+
+describe("sin R2 configurado", () => {
+  test("startUpload dice storage_not_configured y no deja nada apuntado", async () => {
+    setR2ForTesting(null);
+    vi.stubEnv("R2_BUCKET", "");
+    try {
+      const h = await setup();
+      const o = await h.owner();
+      const fallo = await o.as.action(api.media.startUpload, video()).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(fallo).toBeInstanceOf(ConvexError);
+      expect((fallo as ConvexError<{ code: string }>).data.code).toBe("storage_not_configured");
+      const files = await o.as.query(api.media.listForInterview, { interviewId: o.i1 });
+      expect(files).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("subida por partes", () => {

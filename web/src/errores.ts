@@ -31,6 +31,7 @@ const POR_CODIGO: Record<string, string> = {
   media_not_ready: k('El vídeo todavía se está subiendo desde el ordenador.'),
   storage_error: k('No se pudo preparar el vídeo. Vuelve a probar en un momento.'),
   not_configured: k('El almacenamiento de vídeo todavía no está configurado.'),
+  storage_not_configured: k('Falta configurar el almacenamiento en la nube'),
   invalid_credentials: k('Correo o contraseña incorrectos.'),
   account_exists: k('Ese correo ya tiene cuenta. Entra con tu contraseña.'),
   weak_password: k('La contraseña tiene que tener al menos 8 caracteres.'),

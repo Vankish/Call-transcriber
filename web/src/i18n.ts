@@ -111,6 +111,7 @@ const EN: Record<string, string> = {
   'La contraseña tiene que tener al menos 8 caracteres.': 'The password must be at least 8 characters long.',
   'Esa dirección de vuelta no está permitida.': 'That return address isn’t allowed.',
   'Espacio': 'Workspace',
+  'Falta configurar el almacenamiento en la nube': 'Cloud storage hasn’t been set up yet',
 
   // ── Entrar ──
   'Entra para ver tus llamadas': 'Sign in to see your calls',

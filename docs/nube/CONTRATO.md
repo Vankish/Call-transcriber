@@ -138,10 +138,15 @@ Subida por partes a R2 (multipart S3), reanudable. Partes de 8 MB.
 - `media.abort({ mediaId })`. Acción.
 - `media.listForInterview({ interviewId })` → archivos sin URL. Consulta.
 
-Si la llamada aún no está sincronizada, `startUpload` responde `not_found`; si R2 falla o no
-está configurado, `storage_error`. La cola del escritorio los trata como pasajeros y
-reintenta más tarde; solo se rinde con `invalid_argument`, `too_large`, `forbidden` y
-`read_only`.
+Si el despliegue no tiene R2 configurado (falta alguna `R2_*`), las funciones de archivos
+responden `storage_not_configured` antes de apuntar nada. La app y la web lo enseñan como
+"Falta configurar el almacenamiento en la nube"; la cola del escritorio deja ese archivo en
+error **sin reintentarlo sola** (no se arregla esperando) y se vuelve a lanzar con
+"Reintentar" cuando el dueño haya configurado R2.
+
+Si la llamada aún no está sincronizada, `startUpload` responde `not_found`; si R2 falla,
+`storage_error`. Esos sí son pasajeros: la cola reintenta más tarde. También se rinde con
+`invalid_argument`, `too_large`, `forbidden` y `read_only`.
 - `media.playbackUrl({ mediaId, shareToken? })` → `{ url, expiresAt }`. Acción. URL GET
   firmada de 1 hora; comprueba acceso (member con lectura, o enlace de cliente válido) y
   apunta en `accessLog`.
@@ -194,7 +199,7 @@ español, solo para cuando la interfaz no conoce el código. La web los traduce 
 Códigos: `unauthenticated`, `not_found`, `forbidden`, `read_only`, `no_workspace`,
 `workspace_required`, `invalid_argument`, `batch_too_large`, `already_member`,
 `owner_locked`, `not_pending`, `too_large`, `upload_state`, `storage_error`,
-`not_configured`, `rate_limited`, `invalid_redirect`, y los de entrar con contraseña:
+`not_configured` (falta `WEB_URL`), `storage_not_configured` (falta R2), `rate_limited`, `invalid_redirect`, y los de entrar con contraseña:
 `invalid_credentials`, `account_exists`, `too_many_attempts`, `weak_password` (mínimo 8
 caracteres).
 

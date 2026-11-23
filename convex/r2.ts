@@ -39,10 +39,16 @@ export type R2Port = {
   signGet: (key: string, expiresInSec: number) => Promise<string>;
 };
 
+// Código propio y no el genérico `not_configured`: la app y la web lo enseñan
+// como "falta configurar el almacenamiento", y la cola de subidas del escritorio
+// deja de insistir (no se arregla solo; hace falta que el dueño ponga R2).
 const required = (name: string): string => {
   const value = process.env[name];
   if (value === undefined || value.trim() === "") {
-    throw fail("not_configured", `Falta configurar ${name} en el despliegue.`);
+    throw fail(
+      "storage_not_configured",
+      `Falta configurar el almacenamiento en la nube (${name} en el despliegue).`,
+    );
   }
   return value.trim();
 };

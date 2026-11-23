@@ -44,7 +44,7 @@ async function startFakeR2() {
 }
 
 /** `callConvex` falso. `knownInterviews` = las que ya "se han sincronizado". */
-function createFakeConvex(r2, { partSize = 1024 * 1024, knownInterviews = null } = {}) {
+function createFakeConvex(r2, { partSize = 1024 * 1024, knownInterviews = null, storageConfigured = true } = {}) {
   const media = new Map()
   const calls = []
   let next = 1
@@ -56,6 +56,9 @@ function createFakeConvex(r2, { partSize = 1024 * 1024, knownInterviews = null }
       }
       // Igual que el Convex de verdad: un ConvexError llega por HTTP 560 con su
       // `code`, y convex-http.cjs lo marca como no repetible por sí mismo.
+      if (!storageConfigured) {
+        throw new CloudError('Falta configurar el almacenamiento en la nube (R2_BUCKET en el despliegue).', { code: 'storage_not_configured', status: 560 })
+      }
       if (knownInterviews && !knownInterviews.has(a.interviewLocalId)) {
         throw new CloudError('Esa llamada todavía no está en la nube: sincronízala primero.', { code: 'not_found', status: 560 })
       }

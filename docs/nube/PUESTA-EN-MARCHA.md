@@ -275,8 +275,11 @@ Con la app instalada y la web publicada:
 4. En la web, **Personas**: invita a otro correo tuyo como coach a un proyecto, entra con
    él en una ventana de incógnito y comprueba que solo ve ese proyecto.
 5. Sube una grabación con vídeo y ábrela en la web: tiene que reproducirse. Si no:
-   - "El almacenamiento de vídeo todavía no está configurado" o "No se pudo empezar la
-     subida": revisa las cuatro variables `R2_…` (sobre todo el `.eu.` del endpoint).
+   - "Falta configurar el almacenamiento en la nube": falta alguna de las cuatro variables
+     `R2_…` en Convex. Ponla y pulsa **Reintentar** en Configuración → Nube (esos archivos
+     no se reintentan solos).
+   - "No se pudo empezar la subida": las variables están, pero R2 no acepta la conexión.
+     Revisa sobre todo el `.eu.` del endpoint y que el token sea del bucket bueno.
    - El vídeo no carga en la web pero la subida terminó: revisa el CORS (paso 2.3).
 6. En una llamada, **Compartir con el cliente**: crea un enlace y ábrelo en incógnito.
 

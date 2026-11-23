@@ -29,13 +29,19 @@
 const path = require('node:path')
 const fsp = require('node:fs/promises')
 
+// Sin R2 configurado en el despliegue no se arregla esperando: hace falta que
+// el dueño lo configure. El archivo queda en error con su propio código (la
+// interfaz dice "Falta configurar el almacenamiento en la nube") y se vuelve a
+// intentar con "Reintentar" cuando esté. Reintentarlo solo sería insistir sin fin.
+const STORAGE_NOT_CONFIGURED = 'storage_not_configured'
+
 // Qué fallos de Convex no tiene sentido repetir. convex-http.cjs marca como no
 // repetible todo error que lance una función (HTTP 560), pero muchos se
 // arreglan solos: la llamada aún no se ha sincronizado (not_found), R2 tuvo un
 // mal momento (storage_error), el dueño aún no ha configurado R2
 // (not_configured)... Esos esperan y se reintentan; solo se rinde con lo que
 // no cambiará por mucho que se repita.
-const FATAL_CODES = new Set(['missing-file', 'invalid_argument', 'too_large', 'forbidden', 'read_only'])
+const FATAL_CODES = new Set([STORAGE_NOT_CONFIGURED, 'missing-file', 'invalid_argument', 'too_large', 'forbidden', 'read_only'])
 const RETRY_CODES = new Set([
   'not_found', 'storage_error', 'not_configured', 'rate_limited', 'upload_state', 'no_workspace', 'unauthenticated',
 ])
@@ -169,6 +175,7 @@ function createUploadQueue({
         index: Math.min(batch.length, done + failed + (current ? 1 : 0)),
       },
       bytes: { done: doneBytes, total: totalBytes },
+      storageNotConfigured: batch.some((it) => it.status === 'error' && it.errorCode === 'storage-not-configured'),
       percent: totalBytes ? Math.min(100, Math.round((doneBytes / totalBytes) * 100)) : (batch.length ? 100 : 0),
       current: current ? {
         id: current.item.id,
@@ -409,7 +416,9 @@ function createUploadQueue({
         item.attempts = (item.attempts || 0) + 1
         item.lastError = String(err?.message || err).slice(0, 500)
         const fatal = isFatalUploadError(err)
-        item.errorCode = err?.code === 'missing-file' ? 'missing-file' : 'failed'
+        item.errorCode = err?.code === 'missing-file' ? 'missing-file'
+          : err?.code === STORAGE_NOT_CONFIGURED ? 'storage-not-configured'
+          : 'failed'
         if (fatal || item.attempts >= MAX_ATTEMPTS) {
           item.status = 'error'
         } else {

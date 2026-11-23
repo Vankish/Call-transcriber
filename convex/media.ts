@@ -116,12 +116,16 @@ export const startUpload = action({
     partSize: number;
     partsDone: { partNumber: number; etag: string }[];
   }> => {
+    // Antes de apuntar nada: sin R2 configurado, `r2()` lanza
+    // storage_not_configured tal cual, en vez de dejar un `media` en error y
+    // disfrazarlo de fallo pasajero (storage_error) en el try de abajo.
+    const port = r2();
     const begun = await ctx.runMutation(internal.media.beginUpload, args);
     if (begun.needsMultipart === null) return begun.result;
     const { r2Key, mimeType } = begun.needsMultipart;
     let uploadId: string;
     try {
-      uploadId = await r2().createMultipart(r2Key, mimeType);
+      uploadId = await port.createMultipart(r2Key, mimeType);
     } catch (error) {
       await ctx.runMutation(internal.media.markError, {
         mediaId: begun.result.mediaId,
@@ -443,8 +447,9 @@ export const complete = action({
         `Faltan partes por subir (${missing.length}). Sigue la subida antes de cerrarla.`,
       );
     }
+    const port = r2(); // fuera del try: "sin configurar" no es un fallo pasajero
     try {
-      await r2().completeMultipart(state.r2Key, state.uploadId, state.partsDone);
+      await port.completeMultipart(state.r2Key, state.uploadId, state.partsDone);
     } catch (error) {
       // No se marca error: las partes siguen en R2 y cerrar se puede reintentar.
       console.error("R2 CompleteMultipartUpload", String(error));

@@ -223,6 +223,8 @@ type CloudUploadStatus = {
   /** Lote actual (lo pendiente más lo acabado desde que la cola estuvo vacía): "subiendo {index}/{total}". */
   batch: { total: number; done: number; failed: number; index: number }
   bytes: { done: number; total: number }
+  /** Algún archivo falló porque la nube no tiene R2 configurado: no se reintenta solo. */
+  storageNotConfigured: boolean
   /** 0-100 del lote entero, ponderado por tamaño. */
   percent: number
   current: {
@@ -249,7 +251,7 @@ type CloudUploadItem = {
   status: 'pending' | 'working' | 'done' | 'error'
   attempts: number
   nextAttemptAt: number | null
-  errorCode: 'missing-file' | 'failed' | null
+  errorCode: 'missing-file' | 'storage-not-configured' | 'failed' | null
   lastError: string | null
   compressed: boolean
   uploadedBytes: number | null

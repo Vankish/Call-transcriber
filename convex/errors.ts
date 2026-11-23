@@ -22,6 +22,7 @@ export type ErrorCode =
   | "upload_state"
   | "storage_error"
   | "not_configured"
+  | "storage_not_configured"
   | "rate_limited"
   | "invalid_redirect"
   | "invalid_credentials"

@@ -868,6 +868,7 @@ const EN: Record<string, string> = {
   'Esperando para reintentar': 'Waiting to retry',
   'Subiendo {index}/{total}': 'Uploading {index}/{total}',
   'Reintentar ({n})': 'Retry ({n})',
+  'Falta configurar el almacenamiento en la nube': 'Cloud storage hasn’t been set up yet',
   'Se subirían {n} archivos ({tam}).': '{n} files would be uploaded ({tam}).',
   'Audio: {n} archivos ({tam})': 'Audio: {n} files ({tam})',
   'Vídeo: {n} archivos ({tam}). Se comprimen antes de subir.': 'Video: {n} files ({tam}). They are compressed before uploading.',

@@ -270,6 +270,7 @@ function UploadProgress({ upload }: { upload: CloudUploadStatus | null }) {
         <span className="cloud-muted">{t(PHASES[current.phase] ?? PHASES.uploading)}: {current.fileName} ({current.percent} %)</span>
       )}
       {upload.bytes.total > 0 && <span className="cloud-muted">{formatBytes(upload.bytes.done)} / {formatBytes(upload.bytes.total)}</span>}
+      {upload.storageNotConfigured && <p className="warning-note">{t('Falta configurar el almacenamiento en la nube')}</p>}
     </div>
   )
 }
