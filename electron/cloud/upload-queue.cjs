@@ -28,6 +28,23 @@
 
 const path = require('node:path')
 const fsp = require('node:fs/promises')
+
+// Qué fallos de Convex no tiene sentido repetir. convex-http.cjs marca como no
+// repetible todo error que lance una función (HTTP 560), pero muchos se
+// arreglan solos: la llamada aún no se ha sincronizado (not_found), R2 tuvo un
+// mal momento (storage_error), el dueño aún no ha configurado R2
+// (not_configured)... Esos esperan y se reintentan; solo se rinde con lo que
+// no cambiará por mucho que se repita.
+const FATAL_CODES = new Set(['missing-file', 'invalid_argument', 'too_large', 'forbidden', 'read_only'])
+const RETRY_CODES = new Set([
+  'not_found', 'storage_error', 'not_configured', 'rate_limited', 'upload_state', 'no_workspace', 'unauthenticated',
+])
+function isFatalUploadError(err) {
+  const code = err?.code
+  if (code && FATAL_CODES.has(code)) return true
+  if (code && RETRY_CODES.has(code)) return false
+  return err?.retryable === false
+}
 const { uploadFile, sha256File, MEDIA_FN, abortError } = require('./upload-file.cjs')
 const compress = require('./upload-compress.cjs')
 const { tr } = require('../i18n.cjs')
@@ -391,7 +408,7 @@ function createUploadQueue({
       } else {
         item.attempts = (item.attempts || 0) + 1
         item.lastError = String(err?.message || err).slice(0, 500)
-        const fatal = err?.code === 'missing-file' || err?.retryable === false
+        const fatal = isFatalUploadError(err)
         item.errorCode = err?.code === 'missing-file' ? 'missing-file' : 'failed'
         if (fatal || item.attempts >= MAX_ATTEMPTS) {
           item.status = 'error'

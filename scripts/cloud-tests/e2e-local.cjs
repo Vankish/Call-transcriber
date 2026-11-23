@@ -107,6 +107,36 @@ async function main() {
     assert.ok(i0 && i0.deletedAt, 'la llamada borrada en local queda borrada arriba')
     console.log('✓ borrado propagado')
 
+    // Subida sin R2 (aquí no hay cuenta): Convex responde con un error de
+    // almacenamiento y la cola tiene que esperar y reintentar, no rendirse.
+    // Una llamada que aún no está arriba (i999) tampoco es un fallo definitivo.
+    const { createUploadQueue } = require('../../electron/cloud/upload-queue.cjs')
+    const audio = path.join(dir, 'grabacion-inventada.webm')
+    await fsp.writeFile(audio, Buffer.alloc(64 * 1024, 7))
+    const queue = createUploadQueue({
+      storeFile: path.join(dir, 'cloud-upload-queue.json'),
+      tmpDir: path.join(dir, 'cloud-upload-tmp'),
+      ffmpegPath: null,
+      callConvex: session.callConvex,
+      itemRetryBaseMs: 60_000,
+      encoder: false,
+    })
+    await queue.load()
+    queue.start()
+    await queue.enqueue([
+      { filePath: audio, interviewLocalId: 'i5', kind: 'mix', localRelPath: 'Ventas Q4/grabacion-inventada.webm' },
+      { filePath: audio, interviewLocalId: 'i999', kind: 'mix', localRelPath: 'Ventas Q4/otra.webm' },
+    ])
+    const t0 = Date.now()
+    while (queue.list().some((it) => !it.attempts) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 100))
+    for (const it of queue.list()) {
+      assert.equal(it.status, 'pending', `${it.interviewLocalId}: ${it.lastError}`)
+      assert.ok(it.nextAttemptAt > Date.now())
+    }
+    await queue.stop()
+    console.log('✓ subida sin R2 y llamada sin sincronizar: la cola espera y reintenta')
+    for (const it of queue.list()) console.log('   ', it.interviewLocalId, '→', it.lastError)
+
     // Refresco de verdad: otra instancia lee la sesión guardada con un reloj dos
     // horas adelantado, así que da el JWT por caducado y pide otro con el refreshToken.
     const later = createCloudSession({ http, storeFile: path.join(dir, 'cloud-session.bin'), safeStorage: fakeSafeStorage, now: () => Date.now() + 2 * 3600_000 })

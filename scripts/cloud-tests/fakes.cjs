@@ -5,6 +5,7 @@
 const http = require('node:http')
 const crypto = require('node:crypto')
 const { MEDIA_FN } = require('../../electron/cloud/upload-file.cjs')
+const { CloudError } = require('../../electron/cloud/convex-http.cjs')
 
 async function startFakeR2() {
   const parts = new Map() // `${mediaId}/${n}` → Buffer
@@ -53,7 +54,11 @@ function createFakeConvex(r2, { partSize = 1024 * 1024, knownInterviews = null }
       for (const k of ['interviewLocalId', 'kind', 'mimeType', 'bytes', 'sha256', 'localRelPath']) {
         if (a[k] === undefined || a[k] === null || a[k] === '') throw new Error(`falta ${k}`)
       }
-      if (knownInterviews && !knownInterviews.has(a.interviewLocalId)) throw new Error('entrevista no encontrada')
+      // Igual que el Convex de verdad: un ConvexError llega por HTTP 560 con su
+      // `code`, y convex-http.cjs lo marca como no repetible por sí mismo.
+      if (knownInterviews && !knownInterviews.has(a.interviewLocalId)) {
+        throw new CloudError('Esa llamada todavía no está en la nube: sincronízala primero.', { code: 'not_found', status: 560 })
+      }
       const done = [...media.values()].find((m) => m.sha256 === a.sha256 && m.uploadStatus === 'done')
       if (done) return { mediaId: done.id, alreadyUploaded: true, partSize: done.partSize, partsDone: done.partsDone }
       const open = [...media.values()].find((m) => m.sha256 === a.sha256 && m.uploadStatus === 'uploading'
