@@ -43,3 +43,7 @@ notas-privadas/
 # Estado del despliegue local de Convex (npx convex dev --local / anonimo):
 # datos de prueba de cada equipo, no del proyecto.
 .convex/
+
+# Web de coaches y clientes: compilada y video de prueba generado (no se versionan).
+dist-web
+web/public/demo/
