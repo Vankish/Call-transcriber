@@ -6,9 +6,10 @@
 // `adaptar*` de este archivo y lleva un comentario SUPUESTO. Si el backend
 // devuelve otra cosa, se cambia aquí y ninguna pantalla se entera.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAction, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { useAuthActions } from '@convex-dev/auth/react'
+import type { Id, TableNames } from '../../../convex/_generated/dataModel'
 import { fn } from './convex-api'
 import { ProveedorConvex } from './ProveedorConvex'
 import type {
@@ -16,9 +17,16 @@ import type {
   Membresia, Miembro, Proyecto, Segmento,
 } from './tipos'
 
-// Lo que llega de Convex no está tipado hasta que exista convex/_generated.
+// Lo que llega de Convex ya viene tipado (convex/_generated), pero los adaptar*
+// aceptan también formas antiguas o anidadas: se leen como `any` a propósito y
+// cada uno convierte a los tipos de la web (tipos.ts).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any
+
+// Las pantallas manejan los ids como texto; Convex los quiere con su tabla. El
+// servidor valida cada id con v.id(...), así que esto solo informa al compilador.
+const id = <T extends TableNames>(texto: string) => texto as Id<T>
+const idOpc = <T extends TableNames>(texto: string | undefined) => (texto === undefined ? undefined : id<T>(texto))
 
 const str = (v: unknown, otro = '') => (typeof v === 'string' ? v : otro)
 const num = (v: unknown, otro = 0) => (typeof v === 'number' ? v : otro)
@@ -141,14 +149,14 @@ export const datos: Datos = {
   },
 
   useMisLlamadas(projectId) {
-    const r = useQuery(fn.myInterviews, projectId ? { projectId } : {})
+    const r = useQuery(fn.myInterviews, projectId ? { projectId: id<'project'>(projectId) } : {})
     return useMemo(() => (r ? (r as Doc[]).map(adaptarFila) : undefined), [r])
   },
 
   // project.list (añadida por el frente A): las carpetas a las que llego,
   // también las que aún no tienen llamadas.
   useProyectos(workspaceId) {
-    const r = useQuery(fn.projectList, workspaceId ? { workspaceId } : {})
+    const r = useQuery(fn.projectList, workspaceId ? { workspaceId: id<'workspace'>(workspaceId) } : {})
     return useMemo(() => {
       if (!r) return undefined
       return (r as Doc[]).map((p): Proyecto => ({
@@ -159,7 +167,19 @@ export const datos: Datos = {
   },
 
   useLlamada(interviewId) {
-    const r = useQuery(fn.interview, { interviewId })
+    const r = useQuery(fn.interview, { interviewId: id<'interview'>(interviewId) })
+    // viewer.interview es consulta (se refresca sola) y no puede escribir: la
+    // visita se apunta aparte, una vez por llamada abierta y solo cuando ya se
+    // sabe que se tiene acceso (si no, markViewed fallaría igual que la consulta).
+    const marcar = useMutation(fn.markViewed)
+    const marcada = useRef<string | null>(null)
+    const cargada = r !== undefined
+    useEffect(() => {
+      if (!cargada || marcada.current === interviewId) return
+      marcada.current = interviewId
+      // Que no se pueda apuntar la visita no impide ver la llamada.
+      marcar({ interviewId: id<'interview'>(interviewId) }).catch(() => {})
+    }, [cargada, interviewId, marcar])
     return useMemo(() => (r ? adaptarDetalle(r) : undefined), [r])
   },
 
@@ -184,13 +204,13 @@ export const datos: Datos = {
   usePedirUrl() {
     const firmar = useAction(fn.playbackUrl)
     return async (mediaId, shareToken) => {
-      const r = await firmar(shareToken ? { mediaId, shareToken } : { mediaId })
+      const r = await firmar(shareToken ? { mediaId: id<'media'>(mediaId), shareToken } : { mediaId: id<'media'>(mediaId) })
       return { url: str(r.url), expiresAt: num(r.expiresAt) }
     }
   },
 
   useComentarios(interviewId) {
-    const r = useQuery(fn.commentList, { interviewId })
+    const r = useQuery(fn.commentList, { interviewId: id<'interview'>(interviewId) })
     return useMemo(() => (r ? (r as Doc[]).map(adaptarComentario) : undefined), [r])
   },
 
@@ -200,15 +220,15 @@ export const datos: Datos = {
     const remove = useMutation(fn.commentRemove)
     const resolve = useMutation(fn.commentResolve)
     return {
-      async add(a) { await add(a) },
-      async edit(a) { await edit(a) },
-      async remove(a) { await remove(a) },
-      async resolve(a) { await resolve(a) },
+      async add(a) { await add({ ...a, interviewId: id<'interview'>(a.interviewId), parentId: idOpc<'comment'>(a.parentId) }) },
+      async edit(a) { await edit({ ...a, commentId: id<'comment'>(a.commentId) }) },
+      async remove(a) { await remove({ commentId: id<'comment'>(a.commentId) }) },
+      async resolve(a) { await resolve({ ...a, commentId: id<'comment'>(a.commentId) }) },
     }
   },
 
   useEnlaces(interviewId) {
-    const r = useQuery(fn.shareList, { interviewId })
+    const r = useQuery(fn.shareList, { interviewId: id<'interview'>(interviewId) })
     return useMemo(() => (r ? (r as Doc[]).map(adaptarEnlace) : undefined), [r])
   },
 
@@ -218,16 +238,18 @@ export const datos: Datos = {
     const revoke = useMutation(fn.shareRevoke)
     return {
       async create(a) {
-        const r = await create(a)
+        const r = await create({ ...a, interviewId: id<'interview'>(a.interviewId) })
         return { shareLinkId: r.shareLinkId, url: str(r.url), expiresAt: num(r.expiresAt) }
       },
-      async renew(a) { await renew(a) },
-      async revoke(a) { await revoke(a) },
+      async renew(a) { await renew({ shareLinkId: id<'shareLink'>(a.shareLinkId) }) },
+      async revoke(a) { await revoke({ shareLinkId: id<'shareLink'>(a.shareLinkId) }) },
     }
   },
 
-  usePersonas() {
-    const r = useQuery(fn.memberList, {})
+  usePersonas(workspaceId) {
+    // Siempre con el espacio elegido: sin él, a un admin de varios espacios el
+    // backend responde workspace_required. Sin espacio aún, se espera.
+    const r = useQuery(fn.memberList, workspaceId ? { workspaceId: id<'workspace'>(workspaceId) } : 'skip')
     return useMemo(() => (r ? adaptarPersonas(r) : undefined), [r])
   },
 
@@ -236,9 +258,18 @@ export const datos: Datos = {
     const revokeInvitation = useMutation(fn.memberRevokeInvitation)
     const update = useMutation(fn.memberUpdate)
     return {
-      async invite(a) { await invite(a) },
-      async revokeInvitation(a) { await revokeInvitation(a) },
-      async update(a) { await update(a) },
+      async invite({ workspaceId, ...a }) {
+        await invite({ ...a, projectIds: a.projectIds.map(id<'project'>), workspaceId: idOpc<'workspace'>(workspaceId) })
+      },
+      async revokeInvitation(a) { await revokeInvitation({ invitationId: id<'invitation'>(a.invitationId) }) },
+      async update(a) {
+        await update({
+          ...a,
+          memberId: id<'member'>(a.memberId),
+          role: a.role === 'owner' ? undefined : a.role,
+          projectIds: a.projectIds?.map(id<'project'>),
+        })
+      },
     }
   },
 }

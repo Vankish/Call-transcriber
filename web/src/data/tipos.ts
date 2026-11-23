@@ -15,6 +15,8 @@
 import type { ComponentType, ReactNode } from 'react'
 
 export type Rol = 'owner' | 'admin' | 'editor' | 'coach'
+/** El papel de dueño no se reparte: hay uno por espacio y es quien lo creó. */
+export type RolInvitable = Exclude<Rol, 'owner'>
 export type TipoProyecto = 'entrevistas' | 'clientes'
 export type TipoArchivo = 'mix' | 'system' | 'video'
 
@@ -178,9 +180,10 @@ export interface Datos {
     revoke(a: { shareLinkId: string }): Promise<void>
   }
 
-  usePersonas(): Personas | undefined
+  /** Del espacio elegido. Sin espacio (aún cargando las membresías), undefined. */
+  usePersonas(workspaceId: string | undefined): Personas | undefined
   useAccionesPersonas(): {
-    invite(a: { email: string; role: Rol; projectIds: string[] }): Promise<void>
+    invite(a: { email: string; role: RolInvitable; projectIds: string[]; workspaceId?: string }): Promise<void>
     revokeInvitation(a: { invitationId: string }): Promise<void>
     update(a: { memberId: string; role?: Rol; projectIds?: string[]; status?: 'active' | 'disabled' }): Promise<void>
   }

@@ -69,13 +69,13 @@ function rolEn(workspaceId: string): Rol | undefined {
 }
 
 function exigirSesion() {
-  if (!estado.dentro) throw new ConvexError({ code: 'UNAUTHENTICATED' })
+  if (!estado.dentro) throw new ConvexError({ code: 'unauthenticated' })
 }
 
 function exigirAdmin() {
   exigirSesion()
   const rol = rolEn('w-rios')
-  if (rol !== 'owner' && rol !== 'admin') throw new ConvexError({ code: 'FORBIDDEN' })
+  if (rol !== 'owner' && rol !== 'admin') throw new ConvexError({ code: 'forbidden' })
 }
 
 function token() {
@@ -103,7 +103,7 @@ function cambiarComentario(commentId: string, f: (c: Comentario) => Comentario |
       return nuevo ? [nuevo] : []
     }),
   ]))
-  if (!visto) throw new ConvexError({ code: 'NOT_FOUND' })
+  if (!visto) throw new ConvexError({ code: 'not_found' })
   poner({ comentarios })
 }
 
@@ -113,7 +113,7 @@ function cambiarEnlace(id: string, f: (e: Enlace & { token: string }) => Enlace 
     i,
     lista.map((e) => (e._id === id ? ((visto = true), f(e)) : e)),
   ]))
-  if (!visto) throw new ConvexError({ code: 'NOT_FOUND' })
+  if (!visto) throw new ConvexError({ code: 'not_found' })
   poner({ enlaces })
 }
 
@@ -154,7 +154,7 @@ export const datos: Datos = {
     const e = useEstado()
     return useMemo(() => {
       if (!e.listo) return undefined
-      if (!e.dentro) throw new ConvexError({ code: 'UNAUTHENTICATED' })
+      if (!e.dentro) throw new ConvexError({ code: 'unauthenticated' })
       const filas: LlamadaFila[] = demo.llamadas
         .filter((l) => !projectId || l.project._id === projectId)
         .map((l) => ({
@@ -184,9 +184,9 @@ export const datos: Datos = {
   useLlamada(interviewId) {
     const e = useEstado()
     if (!e.listo) return undefined
-    if (!e.dentro) throw new ConvexError({ code: 'UNAUTHENTICATED' })
+    if (!e.dentro) throw new ConvexError({ code: 'unauthenticated' })
     const l = demo.llamadas.find((x) => x._id === interviewId)
-    if (!l) throw new ConvexError({ code: 'NOT_FOUND' })
+    if (!l) throw new ConvexError({ code: 'not_found' })
     return l
   },
 
@@ -234,14 +234,14 @@ export const datos: Datos = {
       async edit({ commentId, body }) {
         await espera()
         cambiarComentario(commentId, (c) => {
-          if (!c.esMio) throw new ConvexError({ code: 'FORBIDDEN' })
+          if (!c.esMio) throw new ConvexError({ code: 'forbidden' })
           return { ...c, body, editedAt: Date.now() }
         })
       },
       async remove({ commentId }) {
         await espera()
         cambiarComentario(commentId, (c) => {
-          if (!c.esMio) throw new ConvexError({ code: 'FORBIDDEN' })
+          if (!c.esMio) throw new ConvexError({ code: 'forbidden' })
           return null
         })
       },
@@ -298,8 +298,8 @@ export const datos: Datos = {
         await espera()
         exigirAdmin()
         const normal = email.trim().toLowerCase()
-        if (estado.miembros.some((m) => m.email === normal)) throw new ConvexError({ code: 'ALREADY_MEMBER' })
-        if (estado.invitaciones.some((i) => i.email === normal)) throw new ConvexError({ code: 'ALREADY_INVITED' })
+        if (estado.miembros.some((m) => m.email === normal)) throw new ConvexError({ code: 'already_member' })
+        if (estado.invitaciones.some((i) => i.email === normal)) throw new ConvexError({ code: 'already_invited' })
         poner({ invitaciones: [{ _id: nuevoId('v'), email: normal, role, projectIds, createdAt: Date.now() }, ...estado.invitaciones] })
       },
       async revokeInvitation({ invitationId }) {
@@ -311,8 +311,8 @@ export const datos: Datos = {
         await espera()
         exigirAdmin()
         const m = estado.miembros.find((x) => x._id === memberId)
-        if (!m) throw new ConvexError({ code: 'NOT_FOUND' })
-        if (m.role === 'owner') throw new ConvexError({ code: 'FORBIDDEN' })
+        if (!m) throw new ConvexError({ code: 'not_found' })
+        if (m.role === 'owner') throw new ConvexError({ code: 'forbidden' })
         const limpios = Object.fromEntries(Object.entries(cambios).filter(([, val]) => val !== undefined))
         poner({ miembros: estado.miembros.map((x) => (x._id === memberId ? { ...x, ...limpios } : x)) })
       },

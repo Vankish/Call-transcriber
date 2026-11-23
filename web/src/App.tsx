@@ -50,7 +50,7 @@ export function App() {
       <Cabecera />
       <Limite
         clave={dir}
-        fallo={(e) => <CajaError error={e} titulo={codigoDe(e) === 'NOT_FOUND' ? t('No encontramos esta llamada') : undefined} volver />}
+        fallo={(e) => <CajaError error={e} titulo={codigoDe(e) === 'not_found' ? t('No encontramos esta llamada') : undefined} volver />}
       >
         {pagina}
       </Limite>

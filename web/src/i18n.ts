@@ -101,6 +101,16 @@ const EN: Record<string, string> = {
   'Correo o contraseña incorrectos.': 'Wrong email or password.',
   'No hay conexión. Revisa internet y vuelve a probar.': 'No connection. Check your internet and try again.',
   'Algo ha fallado. Vuelve a probar en un momento.': 'Something went wrong. Try again in a moment.',
+  'Todavía no tienes un espacio propio. Se crea al iniciar sesión desde la app de escritorio.': 'You don’t have your own workspace yet. It’s created when you sign in from the desktop app.',
+  'Estás en varios espacios: elige en cuál quieres hacerlo.': 'You’re in several workspaces: choose which one to use.',
+  'Al dueño del espacio no se le puede cambiar el papel ni desactivar.': 'The workspace owner’s role can’t be changed and they can’t be deactivated.',
+  'Esa invitación ya no está pendiente.': 'That invitation is no longer pending.',
+  'No se pudo preparar el vídeo. Vuelve a probar en un momento.': 'The video couldn’t be prepared. Try again in a moment.',
+  'El almacenamiento de vídeo todavía no está configurado.': 'Video storage isn’t set up yet.',
+  'Ese correo ya tiene cuenta. Entra con tu contraseña.': 'That email already has an account. Sign in with your password.',
+  'La contraseña tiene que tener al menos 8 caracteres.': 'The password must be at least 8 characters long.',
+  'Esa dirección de vuelta no está permitida.': 'That return address isn’t allowed.',
+  'Espacio': 'Workspace',
 
   // ── Entrar ──
   'Entra para ver tus llamadas': 'Sign in to see your calls',

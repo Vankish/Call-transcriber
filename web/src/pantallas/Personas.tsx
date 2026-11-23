@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useDatos } from '../data/contexto'
-import type { Invitacion, Miembro, Proyecto, Rol } from '../data/tipos'
+import type { Invitacion, Miembro, Proyecto, Rol, RolInvitable } from '../data/tipos'
 import { k, t } from '../i18n'
 import { relativo } from '../formato'
 import { useAhora } from '../reloj'
@@ -12,7 +12,7 @@ const PAPELES: Record<Rol, { nombre: string; que: string }> = {
   editor: { nombre: k('Compañero'), que: k('Ve, comenta y edita en sus proyectos.') },
   coach: { nombre: k('Coach'), que: k('Ve el vídeo y comenta en sus proyectos. No edita nada.') },
 }
-const INVITABLES: Rol[] = ['coach', 'editor', 'admin']
+const INVITABLES: RolInvitable[] = ['coach', 'editor', 'admin']
 
 /** Dueño y admin llegan a todo: elegir proyectos solo tiene sentido para el resto. */
 const usaProyectos = (r: Rol) => r === 'coach' || r === 'editor'
@@ -20,8 +20,14 @@ const usaProyectos = (r: Rol) => r === 'coach' || r === 'editor'
 export function Personas() {
   const datos = useDatos()
   const membresias = datos.useMembresias()
-  // member.list() no recibe espacio: es el del dueño (o del admin) que mira.
-  const espacio = membresias?.find((m) => m.role === 'owner' || m.role === 'admin')
+  // Los espacios que se pueden gestionar desde aquí: el propio primero. Un admin
+  // de varios espacios elige cuál; el elegido va en todas las llamadas de
+  // member.*, porque sin él el backend no sabe de cuál se habla.
+  const gestionables = (membresias ?? [])
+    .filter((m) => m.role === 'owner' || m.role === 'admin')
+    .sort((a, b) => Number(b.role === 'owner') - Number(a.role === 'owner'))
+  const [elegido, setElegido] = useState<string | null>(null)
+  const espacio = gestionables.find((m) => m.workspaceId === elegido) ?? gestionables[0]
   const proyectos = datos.useProyectos(espacio?.workspaceId)
 
   if (membresias && !espacio) {
@@ -37,19 +43,28 @@ export function Personas() {
       <div className="pagina__cabeza">
         <div>
           <h1 className="pagina__titulo">{t('Personas')}</h1>
-          <p className="pagina__sub">{espacio?.workspaceName}</p>
+          {gestionables.length > 1 ? null : <p className="pagina__sub">{espacio?.workspaceName}</p>}
         </div>
+        {gestionables.length > 1 && (
+          <label className="filtro">
+            <span className="filtro__etiqueta">{t('Espacio')}</span>
+            <select value={espacio?.workspaceId ?? ''} onChange={(e) => setElegido(e.target.value)}>
+              {gestionables.map((m) => <option key={m.workspaceId} value={m.workspaceId}>{m.workspaceName}</option>)}
+            </select>
+          </label>
+        )}
       </div>
-      <Invitar proyectos={proyectos ?? []} />
-      <ListaPersonas proyectos={proyectos ?? []} />
+      {/* key: al cambiar de espacio, el formulario y la lista empiezan de cero. */}
+      <Invitar key={`i-${espacio?.workspaceId}`} workspaceId={espacio?.workspaceId} proyectos={proyectos ?? []} />
+      <ListaPersonas key={`l-${espacio?.workspaceId}`} workspaceId={espacio?.workspaceId} proyectos={proyectos ?? []} />
     </main>
   )
 }
 
-function Invitar({ proyectos }: { proyectos: Proyecto[] }) {
+function Invitar({ workspaceId, proyectos }: { workspaceId: string | undefined; proyectos: Proyecto[] }) {
   const { invite } = useDatos().useAccionesPersonas()
   const [email, setEmail] = useState('')
-  const [rol, setRol] = useState<Rol>('coach')
+  const [rol, setRol] = useState<RolInvitable>('coach')
   const [elegidos, setElegidos] = useState<string[]>([])
   const [enviando, setEnviando] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -61,7 +76,7 @@ function Invitar({ proyectos }: { proyectos: Proyecto[] }) {
     setError(null)
     setHecho('')
     try {
-      await invite({ email: email.trim(), role: rol, projectIds: usaProyectos(rol) ? elegidos : [] })
+      await invite({ email: email.trim(), role: rol, projectIds: usaProyectos(rol) ? elegidos : [], workspaceId })
       setHecho(email.trim())
       setEmail('')
       setElegidos([])
@@ -88,7 +103,7 @@ function Invitar({ proyectos }: { proyectos: Proyecto[] }) {
           </label>
           <label className="campo">
             <span className="campo__etiqueta">{t('Papel')}</span>
-            <select value={rol} onChange={(e) => setRol(e.target.value as Rol)}>
+            <select value={rol} onChange={(e) => setRol(e.target.value as RolInvitable)}>
               {INVITABLES.map((r) => <option key={r} value={r}>{t(PAPELES[r].nombre)}</option>)}
             </select>
           </label>
@@ -130,8 +145,8 @@ function SelectorProyectos({ proyectos, elegidos, onCambio }: { proyectos: Proye
   )
 }
 
-function ListaPersonas({ proyectos }: { proyectos: Proyecto[] }) {
-  const personas = useDatos().usePersonas()
+function ListaPersonas({ workspaceId, proyectos }: { workspaceId: string | undefined; proyectos: Proyecto[] }) {
+  const personas = useDatos().usePersonas(workspaceId)
   if (!personas) return <Esqueleto filas={4} />
   const activos = personas.members.filter((m) => m.status === 'active')
   const desactivados = personas.members.filter((m) => m.status === 'disabled')
